@@ -1,0 +1,5 @@
+/dist/
+/build/
+*.img
+*.qcow2
+vmlinuz*
