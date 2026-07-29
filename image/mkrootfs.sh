@@ -48,15 +48,18 @@ trap 'rm -rf "$root"' EXIT
 
 mkdir -p "$root"/{sbin,usr/local/bin,etc/k0s,proc,sys,dev,run,tmp,var/lib/k0s,newroot}
 
-# kubelet shells out to mount(8)/umount(8) for projected volumes -- without them
-# every pod fails with 'mount failed: exec: "mount": executable file not found
-# in $PATH', so no CNI pod starts and the node never goes Ready. k0s stages its
-# own iptables, so only these two are needed here.
+# Userspace bits k0s/kubelet genuinely need, each added in response to an
+# observed boot failure:
+#   mount, umount  kubelet shells out to mount(8) for projected volumes; without
+#                  it every pod fails 'mount failed: exec: "mount": executable
+#                  file not found in $PATH' and no CNI pod ever starts.
+#   ca-certificates-bundle  image pulls fail TLS verification without a trust
+#                  store: 'x509: certificate signed by unknown authority'.
+# k0s stages its own iptables, so those are not needed here.
 #
-# Deliberately the narrow "mount"/"umount" subpackages, not the "util-linux"
-# meta package: the latter pulls in busybox and /bin/sh, and this image is
-# specified to contain no shell.
-apk_pkgs=${APK_PKGS:-mount umount}
+# Deliberately the narrow subpackages, not the "util-linux" meta package: that
+# one pulls in busybox and /bin/sh, and this image is specified to have no shell.
+apk_pkgs=${APK_PKGS:-mount umount ca-certificates-bundle}
 if [ -n "$apk_pkgs" ] && command -v apk >/dev/null 2>&1; then
   # --keys-dir and --repositories-file are required because --initdb creates an
   # empty root with no signing keys or repository list of its own.

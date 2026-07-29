@@ -60,9 +60,14 @@ command -v "$qemu" >/dev/null || { echo "$qemu not installed" >&2; exit 1; }
 
 # Static networking, not ip=dhcp: the kernel's IP autoconfiguration runs before
 # /init and so cannot see the virtio NIC, whose driver k0smos loads as a module.
-# These are QEMU user-mode networking's fixed addresses (guest .15, gw .2,
-# DNS .3), so they are correct for every run of this script.
-net_args=${NET_ARGS:-k0smos.ip=10.0.2.15/24 k0smos.gw=10.0.2.2 k0smos.dns=10.0.2.3}
+# The address and gateway are QEMU user-mode networking's fixed values (guest
+# .15, gw .2), so they are correct for every run of this script.
+#
+# DNS deliberately does NOT use slirp's built-in resolver at 10.0.2.3: on a
+# macOS host it accepts queries and never answers them (verified -- every
+# lookup ended in "read udp 10.0.2.15->10.0.2.3:53: i/o timeout" and no image
+# could be pulled). A public resolver is NATed out normally and works.
+net_args=${NET_ARGS:-k0smos.ip=10.0.2.15/24 k0smos.gw=10.0.2.2 k0smos.dns=1.1.1.1}
 append="console=$console panic=10 $net_args"
 
 # Boot is always via the initramfs (k0smos is /init there): a stock kernel has
