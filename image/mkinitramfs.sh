@@ -41,6 +41,18 @@ printf 'root:x:0:0:root:/root:/sbin/nologin\nnobody:x:65534:65534:nobody:/:/sbin
 printf 'root:x:0:\nnobody:x:65534:\n' > "$root/etc/group"
 cp "$here/k0s.yaml" "$root/etc/k0s/k0s.yaml"
 
+# Kernel modules, so k0smos can load virtio_net/ext4/overlay etc. at boot.
+# MODULES_DIR should be a /lib/modules tree matching the kernel being booted;
+# fetch-kernel.sh leaves one in dist/kernel/<arch>/lib/modules.
+moddir=${MODULES_DIR:-$repo/dist/kernel/$(uname -m | sed 's/arm64/aarch64/')/lib/modules}
+if [ -d "$moddir" ]; then
+  mkdir -p "$root/lib/modules"
+  cp -R "$moddir/." "$root/lib/modules/"
+  echo "included kernel modules from $moddir"
+else
+  echo "warn: no modules dir at $moddir — guest will have no virtio NIC" >&2
+fi
+
 # Optional: bake in a real k0s binary. Without it, boot with
 # k0smos.exec=... to supervise something else.
 if [ -n "${K0S_BIN:-}" ]; then

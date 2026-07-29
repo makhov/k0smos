@@ -11,6 +11,7 @@ import (
 
 	"github.com/amakhov/k0smos/internal/cgroup"
 	"github.com/amakhov/k0smos/internal/config"
+	"github.com/amakhov/k0smos/internal/module"
 	"github.com/amakhov/k0smos/internal/mount"
 	knet "github.com/amakhov/k0smos/internal/net"
 	"github.com/amakhov/k0smos/internal/reaper"
@@ -45,6 +46,29 @@ func run(ctx context.Context) error {
 	return boot(ctx, sys.New())
 }
 
+// loadModules loads the configured kernel modules from the running kernel's
+// /lib/modules directory.
+func loadModules(s *sys.Sys, cfg config.Config) error {
+	names := cfg.Modules
+	if names == nil {
+		names = module.Default
+	}
+	if len(names) == 0 {
+		logf("module loading disabled")
+		return nil
+	}
+	release, err := s.Release()
+	if err != nil {
+		return fmt.Errorf("uname: %w", err)
+	}
+	base := "/lib/modules/" + release
+	if err := module.Load(s, base, names); err != nil {
+		return err
+	}
+	logf("kernel modules loaded from %s", base)
+	return nil
+}
+
 // boot performs OS init, starts the reaper and the supervised k0s child, then
 // blocks until a termination signal arrives and shuts the machine down.
 func boot(ctx context.Context, s *sys.Sys) error {
@@ -53,6 +77,18 @@ func boot(ctx context.Context, s *sys.Sys) error {
 		return fmt.Errorf("mounts: %w", err)
 	}
 	logf("pseudo-filesystems mounted")
+
+	// Only readable now that /proc is mounted.
+	cfg := config.Parse(readCmdline(cmdlinePath))
+
+	// Modules come before cgroup and net: a stock distro kernel ships virtio,
+	// ext4 and overlayfs as modules, so without this there is no NIC and no
+	// container storage. Failures are not fatal — the kernel may have the
+	// functionality built in, in which case there is nothing to load.
+	if err := loadModules(s, cfg); err != nil {
+		logf("warn: modules: %v", err)
+	}
+
 	if err := cgroup.Setup(s); err != nil {
 		return fmt.Errorf("cgroup: %w", err)
 	}
@@ -62,8 +98,22 @@ func boot(ctx context.Context, s *sys.Sys) error {
 	}
 	logf("loopback up")
 
-	// Only readable now that /proc is mounted.
-	cfg := config.Parse(readCmdline(cmdlinePath))
+	// Not fatal: a node with only loopback still boots, it just cannot pull
+	// images. Better a degraded node with a console message than a panic.
+	if cfg.IP != "" {
+		if err := knet.Configure(s, cfg.Iface, cfg.IP, cfg.Gateway); err != nil {
+			logf("warn: configure %s: %v", cfg.Iface, err)
+		} else {
+			logf("%s configured %s gw %s", cfg.Iface, cfg.IP, cfg.Gateway)
+		}
+	}
+	if cfg.DNS != "" {
+		resolv := fmt.Appendf(nil, "nameserver %s\n", cfg.DNS)
+		if err := s.WriteFile("/etc/resolv.conf", resolv, 0644); err != nil {
+			logf("warn: write resolv.conf: %v", err)
+		}
+	}
+
 	if err := s.Sethostname(cfg.Hostname); err != nil {
 		logf("warn: sethostname %q: %v", cfg.Hostname, err)
 	} else {
