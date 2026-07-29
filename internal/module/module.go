@@ -19,16 +19,32 @@ type Loader interface {
 	InitModule(image []byte, params string) error
 }
 
-// Default is the module set a k0s node needs on a stock kernel: virtio for
-// disk and network, ext4 and overlayfs for storage, and the netfilter pieces
-// kube-proxy and CNI rely on. Modules absent from the kernel are skipped, so
-// this list is safe on a monolithic kernel too.
+// Default is the module set a k0s node needs on a stock kernel. Modules absent
+// from the kernel are skipped, so this list is safe on a monolithic kernel too.
 var Default = []string{
+	// Disk and network devices, and the filesystems k0s stores data on.
 	"virtio_net", "virtio_blk", "virtio_pci",
 	"ext4", "overlay",
-	"br_netfilter", "ip_tables", "iptable_nat", "iptable_filter",
-	"nf_conntrack", "nf_nat", "xt_conntrack", "xt_MASQUERADE",
-	"veth", "bridge",
+
+	// nftables. k0s selects iptables-nft mode, and without these kube-proxy
+	// dies with `iptables: Failed to initialize nft: Protocol not supported`,
+	// which crashloops kube-proxy, starves kube-router of the API, and leaves
+	// the node NotReady. nft_compat is what makes the iptables-nft shim work.
+	"nfnetlink", "nf_tables", "nft_compat", "nft_chain_nat",
+
+	// Legacy iptables path, in case k0s picks it instead.
+	"ip_tables", "iptable_nat", "iptable_filter",
+
+	// Connection tracking and the xtables matches kube-proxy emits.
+	"nf_conntrack", "nf_conntrack_netlink", "nf_nat",
+	"xt_conntrack", "xt_MASQUERADE", "xt_comment", "xt_mark",
+	"xt_multiport", "xt_addrtype", "xt_statistic", "xt_nat",
+
+	// ipsets, used by kube-router for its firewall rules.
+	"ip_set", "ip_set_hash_ip", "ip_set_hash_net", "xt_set",
+
+	// Pod networking: veth pairs into a bridge, with netfilter on the bridge.
+	"veth", "bridge", "br_netfilter", "ipip",
 }
 
 // Load loads each named module along with its dependencies, dependencies first.
