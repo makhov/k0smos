@@ -27,6 +27,10 @@ printf 'k0smos\n' > "$root/etc/hostname"
 printf '127.0.0.1 localhost\n' > "$root/etc/hosts"
 printf 'nameserver 1.1.1.1\n' > "$root/etc/resolv.conf"
 printf 'NAME=k0smos\nID=k0smos\n' > "$root/etc/os-release"
+# k0s looks up UIDs for its components and warns "open /etc/passwd: no such
+# file or directory" (then runs everything as root) without these.
+printf 'root:x:0:0:root:/root:/sbin/nologin\nnobody:x:65534:65534:nobody:/:/sbin/nologin\n' > "$root/etc/passwd"
+printf 'root:x:0:\nnobody:x:65534:\n' > "$root/etc/group"
 
 # size: k0s embeds containerd/runc/etc, so pad generously for image pulls too
 size_mb=$(( $(du -sm "$root" | cut -f1) + 2048 ))
