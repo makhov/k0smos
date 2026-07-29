@@ -26,14 +26,30 @@ type Config struct {
 	Root       string
 	RootFSType string
 	RootFlags  string
+
+	// Path is the PATH exported to child processes. PID1 inherits no
+	// environment from anyone, so without this k0s and kubelet cannot find the
+	// iptables binaries k0s stages into /var/lib/k0s/bin, and kubelet reports
+	// "No iptables support on this system".
+	Path string
 }
 
 // defaultExec is the workload k0smos exists to run.
 var defaultExec = []string{"/usr/local/bin/k0s", "controller", "--single"}
 
+// defaultPath includes /var/lib/k0s/bin because that is where k0s stages the
+// binaries it embeds (containerd, runc, kubelet, iptables) at runtime.
+const defaultPath = "/var/lib/k0s/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
+
 // Parse extracts k0smos.* parameters from a kernel cmdline string.
 func Parse(cmdline string) Config {
-	c := Config{Hostname: "k0smos", Exec: defaultExec, Iface: "eth0", RootFSType: "ext4"}
+	c := Config{
+		Hostname:   "k0smos",
+		Exec:       defaultExec,
+		Iface:      "eth0",
+		RootFSType: "ext4",
+		Path:       defaultPath,
+	}
 	for _, tok := range strings.Fields(cmdline) {
 		k, v, ok := strings.Cut(tok, "=")
 		if !ok || !strings.HasPrefix(k, "k0smos.") {
@@ -49,6 +65,10 @@ func Parse(cmdline string) Config {
 			// spaces. Lets a boot be smoke-tested without the real k0s binary.
 			if parts := strings.Split(v, ","); parts[0] != "" {
 				c.Exec = parts
+			}
+		case "path":
+			if v != "" {
+				c.Path = v
 			}
 		case "root":
 			c.Root = v

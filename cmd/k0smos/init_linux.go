@@ -170,6 +170,12 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	go pump(chld, trigger)
 	go reaper.Run(runCtx, s, trigger)
 
+	// PID1 starts with no environment at all, so children inherit an empty
+	// PATH and cannot exec the binaries k0s stages at runtime.
+	if err := os.Setenv("PATH", cfg.Path); err != nil {
+		logf("warn: set PATH: %v", err)
+	}
+
 	logf("supervising %v", cfg.Exec)
 	childDone := make(chan struct{})
 	go func() {

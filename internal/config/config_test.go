@@ -2,6 +2,7 @@ package config
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -34,6 +35,21 @@ func TestParseExecOverride(t *testing.T) {
 	want := []string{"/bin/true", "--flag", "arg"}
 	if !slices.Equal(c.Exec, want) {
 		t.Errorf("exec = %v, want %v", c.Exec, want)
+	}
+}
+
+// PID1 inherits no environment, so a usable PATH must be synthesised — and it
+// has to include where k0s stages its embedded binaries.
+func TestParseDefaultPathIncludesK0sStagingDir(t *testing.T) {
+	c := Parse("console=ttyAMA0")
+	if !strings.Contains(c.Path, "/var/lib/k0s/bin") {
+		t.Errorf("path = %q, want it to include /var/lib/k0s/bin", c.Path)
+	}
+}
+
+func TestParsePathOverride(t *testing.T) {
+	if c := Parse("k0smos.path=/opt/bin"); c.Path != "/opt/bin" {
+		t.Errorf("path = %q, want /opt/bin", c.Path)
 	}
 }
 
