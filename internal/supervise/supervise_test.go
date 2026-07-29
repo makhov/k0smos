@@ -35,6 +35,35 @@ func TestRunRestartsUntilContextCancelled(t *testing.T) {
 	}
 }
 
+func TestRunReportsEachChildExit(t *testing.T) {
+	boom := errors.New("child died")
+	var seen []error
+	calls := 0
+	ctx, cancel := context.WithCancel(context.Background())
+	opts := Options{
+		start: func(context.Context) error {
+			calls++
+			if calls == 3 {
+				cancel()
+			}
+			return boom
+		},
+		sleep:  func(time.Duration) {},
+		OnExit: func(err error) { seen = append(seen, err) },
+	}
+	if err := Run(ctx, opts); err != nil {
+		t.Fatalf("Run returned %v, want nil on cancel", err)
+	}
+	if len(seen) != calls {
+		t.Fatalf("OnExit called %d times, want %d", len(seen), calls)
+	}
+	for i, err := range seen {
+		if !errors.Is(err, boom) {
+			t.Errorf("seen[%d] = %v, want %v", i, err, boom)
+		}
+	}
+}
+
 func TestRunBackoffIsCapped(t *testing.T) {
 	var slept []time.Duration
 	var calls int

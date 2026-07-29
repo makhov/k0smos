@@ -37,10 +37,15 @@ var Default = []Spec{
 }
 
 // Ensure mounts every Default spec not already present.
+//
+// A mount table we cannot read is treated as an empty one rather than an
+// error: on a cold boot Mounts() reads /proc/self/mountinfo, which does not
+// exist until /proc is mounted, so the first call necessarily fails. /proc is
+// first in Default, so the table becomes readable right after.
 func Ensure(m Mounter) error {
 	existing, err := m.Mounts()
 	if err != nil {
-		return fmt.Errorf("read mounts: %w", err)
+		existing = nil
 	}
 	have := map[string]bool{}
 	for _, mp := range existing {

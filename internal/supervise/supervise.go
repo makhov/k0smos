@@ -15,6 +15,9 @@ type Options struct {
 	Command    string
 	Args       []string
 	MaxBackoff time.Duration
+	// OnExit, if set, is called with the child's exit error every time it dies.
+	// Without it a crash-looping child is invisible on the console.
+	OnExit func(error)
 
 	start func(ctx context.Context) error
 	sleep func(time.Duration)
@@ -43,10 +46,13 @@ func Run(ctx context.Context, opts Options) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		// The exit error is deliberately ignored: as PID1 the zombie reaper may
-		// wait4(-1) the child first, in which case Wait reports ECHILD rather
-		// than a real status. Either way the child is gone and must restart.
-		_ = opts.start(ctx)
+		// Note: as PID1 the zombie reaper may wait4(-1) the child first, in
+		// which case this error is ECHILD rather than a real exit status.
+		// Either way the child is gone and must be restarted.
+		err := opts.start(ctx)
+		if opts.OnExit != nil {
+			opts.OnExit(err)
+		}
 		if ctx.Err() != nil {
 			return nil
 		}
