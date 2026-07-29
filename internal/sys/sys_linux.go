@@ -36,6 +36,15 @@ func (s *Sys) Mounts() ([]MountPoint, error) {
 	return parseMountInfo(data)
 }
 
+// MountTargets returns just the mount targets, for shutdown unmounting.
+func (s *Sys) MountTargets() ([]string, error) {
+	mps, err := s.Mounts()
+	if err != nil {
+		return nil, err
+	}
+	return targetsOf(mps), nil
+}
+
 func (s *Sys) Sethostname(name string) error { return unix.Sethostname([]byte(name)) }
 
 func (s *Sys) Sync() { unix.Sync() }
