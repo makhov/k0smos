@@ -59,7 +59,12 @@ kernel=${KERNEL:-dist/kernel/$apkarch/vmlinuz}
 [ -f "$kernel" ] || { echo "kernel $kernel not found — run 'make kernel'" >&2; exit 1; }
 command -v "$qemu" >/dev/null || { echo "$qemu not installed" >&2; exit 1; }
 
-append="console=$console panic=10"
+# Static networking, not ip=dhcp: the kernel's IP autoconfiguration runs before
+# /init and so cannot see the virtio NIC, whose driver k0smos loads as a module.
+# These are QEMU user-mode networking's fixed addresses (guest .15, gw .2,
+# DNS .3), so they are correct for every run of this script.
+net_args=${NET_ARGS:-k0smos.ip=10.0.2.15/24 k0smos.gw=10.0.2.2 k0smos.dns=10.0.2.3}
+append="console=$console panic=10 $net_args"
 boot=()
 if [ -n "$img" ]; then
   [ -f "$img" ] || { echo "image $img not found — run 'make image'" >&2; exit 1; }

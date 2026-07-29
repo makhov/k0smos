@@ -23,6 +23,10 @@ apk fetch --no-cache -q linux-virt
 mkdir -p x && tar -xzf linux-virt-*.apk -C x 2>/dev/null || true
 cp x/boot/vmlinuz-virt /out/vmlinuz
 cp x/boot/config-* /out/config
+# The matching module tree — k0smos loads virtio_net/ext4/overlay from it.
+rm -rf /out/lib
+mkdir -p /out/lib
+cp -R x/lib/modules /out/lib/
 '
 echo "wrote $out/vmlinuz"
 # Recorded so the initramfs-vs-disk decision stays checkable, not folklore.

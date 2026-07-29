@@ -3,6 +3,7 @@
 package sys
 
 import (
+	"bytes"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -26,6 +27,23 @@ func (s *Sys) Mkdir(path string, perm os.FileMode) error {
 
 func (s *Sys) WriteFile(path string, data []byte, perm os.FileMode) error {
 	return os.WriteFile(path, data, perm)
+}
+
+func (s *Sys) ReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
+
+// InitModule loads a decompressed kernel module image via init_module(2).
+func (s *Sys) InitModule(image []byte, params string) error {
+	return unix.InitModule(image, params)
+}
+
+// Release is the running kernel's release string, e.g. "6.6.142-0-virt". It
+// names the /lib/modules subdirectory holding that kernel's modules.
+func (s *Sys) Release() (string, error) {
+	var u unix.Utsname
+	if err := unix.Uname(&u); err != nil {
+		return "", err
+	}
+	return string(bytes.TrimRight(u.Release[:], "\x00")), nil
 }
 
 func (s *Sys) Mounts() ([]MountPoint, error) {
