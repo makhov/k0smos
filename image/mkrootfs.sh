@@ -47,6 +47,24 @@ root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 
 mkdir -p "$root"/{sbin,usr/local/bin,etc/k0s,proc,sys,dev,run,tmp,var/lib/k0s,newroot}
+
+# kubelet shells out to mount(8)/umount(8) for projected volumes -- without them
+# every pod fails with 'mount failed: exec: "mount": executable file not found
+# in $PATH', so no CNI pod starts and the node never goes Ready. k0s stages its
+# own iptables, so only these two are needed here.
+#
+# Deliberately the narrow "mount"/"umount" subpackages, not the "util-linux"
+# meta package: the latter pulls in busybox and /bin/sh, and this image is
+# specified to contain no shell.
+apk_pkgs=${APK_PKGS:-mount umount}
+if [ -n "$apk_pkgs" ] && command -v apk >/dev/null 2>&1; then
+  # --keys-dir and --repositories-file are required because --initdb creates an
+  # empty root with no signing keys or repository list of its own.
+  apk add -q --no-cache --root "$root" --initdb \
+    --keys-dir /etc/apk/keys --repositories-file /etc/apk/repositories \
+    $apk_pkgs
+  echo "installed userspace helpers: $apk_pkgs"
+fi
 # /sbin/k0smos must match initPath in cmd/k0smos/init_linux.go — that is the
 # path the pre-switch k0smos re-executes after switching root.
 install -m 0755 "$K0SMOS_BIN" "$root/sbin/k0smos"
