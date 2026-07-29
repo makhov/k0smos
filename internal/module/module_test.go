@@ -65,6 +65,41 @@ func newFake(t *testing.T) *fakeLoader {
 	}}
 }
 
+// modules.softdep records dependencies that modules.dep does not. Missing them
+// makes init_module fail with ENOENT ("unknown symbol") — this is exactly how
+// libcrc32c fails without crc32c on a real Alpine kernel.
+func TestLoadHonoursSoftDependencies(t *testing.T) {
+	f := newFake(t)
+	f.files["/lib/modules/test/modules.softdep"] = []byte(
+		"# comment\nsoftdep ext4 pre: crc32c\n")
+	f.files["/lib/modules/test/modules.alias"] = []byte("alias crc32c crc32c_generic\n")
+	f.files["/lib/modules/test/modules.dep"] = []byte(
+		depFile + "kernel/crypto/crc32c_generic.ko.gz:\n")
+	f.files["/lib/modules/test/kernel/crypto/crc32c_generic.ko.gz"] = gz(t, "crc32c_generic")
+
+	if err := Load(f, "/lib/modules/test", []string{"ext4"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"crc32c_generic", "ext4"}
+	if !slices.Equal(f.loaded, want) {
+		t.Errorf("loaded = %v, want %v", f.loaded, want)
+	}
+}
+
+// An init must not let one bad module block the rest: without this, a failure
+// early in the list silently costs you ext4, overlayfs and netfilter.
+func TestLoadContinuesAfterAFailureAndReportsAll(t *testing.T) {
+	f := newFake(t)
+	f.errs = map[string]error{"virtio_blk": syscall.ENOENT}
+	err := Load(f, "/lib/modules/test", []string{"virtio_blk", "ext4"})
+	if err == nil {
+		t.Fatal("Load = nil, want the failure reported")
+	}
+	if !slices.Contains(f.loaded, "ext4") {
+		t.Errorf("loaded = %v, want ext4 loaded despite virtio_blk failing", f.loaded)
+	}
+}
+
 func TestLoadResolvesDependenciesFirst(t *testing.T) {
 	f := newFake(t)
 	if err := Load(f, "/lib/modules/test", []string{"virtio_net"}); err != nil {
