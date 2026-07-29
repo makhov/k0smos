@@ -19,6 +19,13 @@ type Config struct {
 	IP      string // CIDR, e.g. 10.0.2.15/24
 	Gateway string
 	DNS     string
+
+	// Root, if set, is a block device holding the real root filesystem to
+	// switch_root into (e.g. /dev/vda). Empty means stay on the initramfs,
+	// which is fine for an init-only smoke test but not for running kubelet.
+	Root       string
+	RootFSType string
+	RootFlags  string
 }
 
 // defaultExec is the workload k0smos exists to run.
@@ -26,7 +33,7 @@ var defaultExec = []string{"/usr/local/bin/k0s", "controller", "--single"}
 
 // Parse extracts k0smos.* parameters from a kernel cmdline string.
 func Parse(cmdline string) Config {
-	c := Config{Hostname: "k0smos", Exec: defaultExec, Iface: "eth0"}
+	c := Config{Hostname: "k0smos", Exec: defaultExec, Iface: "eth0", RootFSType: "ext4"}
 	for _, tok := range strings.Fields(cmdline) {
 		k, v, ok := strings.Cut(tok, "=")
 		if !ok || !strings.HasPrefix(k, "k0smos.") {
@@ -43,6 +50,14 @@ func Parse(cmdline string) Config {
 			if parts := strings.Split(v, ","); parts[0] != "" {
 				c.Exec = parts
 			}
+		case "root":
+			c.Root = v
+		case "rootfstype":
+			if v != "" {
+				c.RootFSType = v
+			}
+		case "rootflags":
+			c.RootFlags = v
 		case "iface":
 			if v != "" {
 				c.Iface = v

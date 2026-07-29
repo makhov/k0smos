@@ -3,7 +3,7 @@ BIN := dist/k0smos
 # a host build on macOS would just produce the "linux only" stub.
 GO_BUILD := GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags '-extldflags "-static"'
 
-.PHONY: build test vet kernel k0s initramfs boot smoke image accept clean-dist
+.PHONY: build test vet kernel k0s initramfs disk boot smoke accept clean-dist
 build:
 	$(GO_BUILD) -o $(BIN) ./cmd/k0smos
 
@@ -28,23 +28,25 @@ k0s:
 initramfs:
 	./image/mkinitramfs.sh
 
-# Full local boot: k0smos as PID1 supervising k0s. Interactive console.
-boot: kernel k0s
-	K0S_BIN=dist/k0s-$$(go env GOARCH) ./image/mkinitramfs.sh
-	MEM=8192 CPUS=4 ./image/run-qemu.sh
+# The real ext4 root that k0smos switch_roots onto. kubelet cannot run on the
+# initramfs (cadvisor finds no filesystem info for a ramfs root).
+disk: kernel k0s
+	K0S_BIN=dist/k0s-$$(go env GOARCH) ./image/mkrootfs.sh dist/k0smos.img
+
+# Full local boot: initramfs -> load modules -> switch_root onto the ext4 disk
+# -> k0s. Interactive console.
+boot: kernel disk
+	./image/mkinitramfs.sh
+	IMG=dist/k0smos.img MEM=8192 CPUS=4 ./image/run-qemu.sh
 
 # Fast init-only check: no k0s, supervises /init (which exits 1 via the PID1
 # gate) purely to prove the mount/cgroup/net/supervise/shutdown path works.
 smoke: kernel initramfs
 	EXEC=/init MEM=1024 ./image/run-qemu.sh
 
-# --- persistent-disk path (needs a kernel with virtio_blk + ext4 BUILT IN) ---
-
-image: build
-	./image/mkrootfs.sh dist/k0smos.img
-
-accept: image
-	./image/acceptance.sh dist/k0smos.img
+accept: disk
+	./image/mkinitramfs.sh
+	./image/acceptance.sh
 
 clean-dist:
 	rm -rf dist

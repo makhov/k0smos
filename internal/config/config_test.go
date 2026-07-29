@@ -37,6 +37,23 @@ func TestParseExecOverride(t *testing.T) {
 	}
 }
 
+func TestParseRootKnobs(t *testing.T) {
+	c := Parse("k0smos.root=/dev/vda k0smos.rootfstype=xfs k0smos.rootflags=noatime")
+	if c.Root != "/dev/vda" || c.RootFSType != "xfs" || c.RootFlags != "noatime" {
+		t.Errorf("root=%q fstype=%q flags=%q", c.Root, c.RootFSType, c.RootFlags)
+	}
+}
+
+func TestParseRootDefaultsToInitramfsAndExt4(t *testing.T) {
+	c := Parse("console=ttyAMA0")
+	if c.Root != "" {
+		t.Errorf("root = %q, want empty (stay on initramfs)", c.Root)
+	}
+	if c.RootFSType != "ext4" {
+		t.Errorf("rootfstype = %q, want ext4", c.RootFSType)
+	}
+}
+
 func TestParseNetworkingKnobs(t *testing.T) {
 	c := Parse("k0smos.ip=10.0.2.15/24 k0smos.gw=10.0.2.2 k0smos.dns=10.0.2.3 k0smos.iface=enp0s1")
 	if c.IP != "10.0.2.15/24" || c.Gateway != "10.0.2.2" || c.DNS != "10.0.2.3" {

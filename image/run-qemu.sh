@@ -2,10 +2,9 @@
 # Boot k0smos under QEMU with direct kernel boot.
 #
 # Two modes:
-#   INITRAMFS=dist/k0smos-initramfs.gz  — rootfs in RAM, works on a stock
-#       distro kernel (virtio_blk/ext4 as modules is fine). Default.
-#   IMG=dist/k0smos.img                 — persistent ext4 root on /dev/vda,
-#       requires a kernel with virtio_blk + ext4 built in.
+#   default             — boot the initramfs and stay there (init smoke test).
+#   IMG=dist/k0smos.img — boot the initramfs, then switch_root onto this ext4
+#       disk. Required for kubelet, which cannot run on a ramfs root.
 #
 # Env:
 #   KERNEL   kernel image (default dist/kernel/<apkarch>/vmlinuz)
@@ -65,15 +64,19 @@ command -v "$qemu" >/dev/null || { echo "$qemu not installed" >&2; exit 1; }
 # DNS .3), so they are correct for every run of this script.
 net_args=${NET_ARGS:-k0smos.ip=10.0.2.15/24 k0smos.gw=10.0.2.2 k0smos.dns=10.0.2.3}
 append="console=$console panic=10 $net_args"
-boot=()
+
+# Boot is always via the initramfs (k0smos is /init there): a stock kernel has
+# virtio_blk and ext4 as modules, so it cannot mount a disk root by itself.
+[ -f "$initramfs" ] || { echo "initramfs $initramfs not found — run 'make initramfs'" >&2; exit 1; }
+boot=(-initrd "$initramfs")
+
+# With a disk attached, k0smos loads the storage modules and switch_roots onto
+# it. Without one it stays on the initramfs — fine for an init smoke test, but
+# kubelet cannot run on a ramfs root.
 if [ -n "$img" ]; then
-  [ -f "$img" ] || { echo "image $img not found — run 'make image'" >&2; exit 1; }
-  append="root=/dev/vda rw init=/sbin/k0smos $append"
-  boot=(-drive file="$img",if=virtio,format=raw)
-else
-  [ -f "$initramfs" ] || { echo "initramfs $initramfs not found — run 'make initramfs'" >&2; exit 1; }
-  # k0smos is /init in the archive, which the kernel runs by default.
-  boot=(-initrd "$initramfs")
+  [ -f "$img" ] || { echo "disk $img not found — run 'make disk'" >&2; exit 1; }
+  boot+=(-drive file="$img",if=virtio,format=raw)
+  append="$append k0smos.root=/dev/vda k0smos.rootfstype=ext4"
 fi
 [ -n "${EXEC:-}" ] && append="$append k0smos.exec=$EXEC"
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"time"
 
 	"github.com/amakhov/k0smos/internal/cgroup"
@@ -17,6 +18,7 @@ import (
 	"github.com/amakhov/k0smos/internal/reaper"
 	"github.com/amakhov/k0smos/internal/shutdown"
 	"github.com/amakhov/k0smos/internal/supervise"
+	"github.com/amakhov/k0smos/internal/switchroot"
 	"github.com/amakhov/k0smos/internal/sys"
 
 	"golang.org/x/sys/unix"
@@ -24,6 +26,14 @@ import (
 
 const (
 	cmdlinePath = "/proc/cmdline"
+
+	// newRootDir is where the real root filesystem is mounted before the switch.
+	newRootDir = "/newroot"
+	// initPath is k0smos's own location on the real root, re-executed after the
+	// switch. It must match where mkrootfs.sh installs the binary.
+	initPath = "/sbin/k0smos"
+	// switchedFlag marks the post-switch invocation, so it does not switch again.
+	switchedFlag = "--switched-root"
 
 	// childGrace is how long the k0s child gets to exit after ctx cancellation
 	// before we start detaching filesystems under it.
@@ -43,7 +53,22 @@ type shutdownAdapter struct{ *sys.Sys }
 func (a shutdownAdapter) Mounts() ([]string, error) { return a.Sys.MountTargets() }
 
 func run(ctx context.Context) error {
-	return boot(ctx, sys.New())
+	return boot(ctx, sys.New(), slices.Contains(os.Args, switchedFlag))
+}
+
+// pivot mounts the real root filesystem and switches into it, re-executing
+// k0smos there as PID1. It does not return on success.
+func pivot(s *sys.Sys, cfg config.Config) error {
+	if err := s.Mkdir(newRootDir, 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", newRootDir, err)
+	}
+	if err := s.Mount(cfg.Root, newRootDir, cfg.RootFSType, 0, cfg.RootFlags); err != nil {
+		return fmt.Errorf("mount %s (%s): %w", cfg.Root, cfg.RootFSType, err)
+	}
+	logf("mounted %s at %s, switching root", cfg.Root, newRootDir)
+	// The marker tells the next k0smos it is already on the real root, so it
+	// proceeds with the rest of init instead of trying to switch again.
+	return switchroot.Do(s, newRootDir, initPath, []string{initPath, switchedFlag})
 }
 
 // loadModules loads the configured kernel modules from the running kernel's
@@ -71,8 +96,11 @@ func loadModules(s *sys.Sys, cfg config.Config) error {
 
 // boot performs OS init, starts the reaper and the supervised k0s child, then
 // blocks until a termination signal arrives and shuts the machine down.
-func boot(ctx context.Context, s *sys.Sys) error {
-	logf("starting as PID1")
+//
+// switched reports whether this is the post-switch_root invocation, which must
+// not attempt the switch a second time.
+func boot(ctx context.Context, s *sys.Sys, switched bool) error {
+	logf("starting as PID1 (switched-root=%t)", switched)
 	if err := mount.Ensure(s); err != nil {
 		return fmt.Errorf("mounts: %w", err)
 	}
@@ -87,6 +115,16 @@ func boot(ctx context.Context, s *sys.Sys) error {
 	// functionality built in, in which case there is nothing to load.
 	if err := loadModules(s, cfg); err != nil {
 		logf("warn: modules: %v", err)
+	}
+
+	// Leave the initramfs for the real root, if one was given. kubelet cannot
+	// run on a ramfs root — cadvisor finds no filesystem info for it. Modules
+	// had to be loaded first: the kernel needs virtio_blk and ext4 before the
+	// root device is even visible. On success this execs and does not return.
+	if cfg.Root != "" && !switched {
+		if err := pivot(s, cfg); err != nil {
+			return fmt.Errorf("switch root: %w", err)
+		}
 	}
 
 	if err := cgroup.Setup(s); err != nil {
