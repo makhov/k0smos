@@ -31,6 +31,14 @@ func (s *Sys) WriteFile(path string, data []byte, perm os.FileMode) error {
 
 func (s *Sys) ReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
 
+func (s *Sys) Chdir(dir string) error  { return unix.Chdir(dir) }
+func (s *Sys) Chroot(dir string) error { return unix.Chroot(dir) }
+
+// Exec replaces this process image. On success it does not return.
+func (s *Sys) Exec(argv0 string, argv, env []string) error {
+	return unix.Exec(argv0, argv, env)
+}
+
 // InitModule loads a decompressed kernel module image via init_module(2).
 func (s *Sys) InitModule(image []byte, params string) error {
 	return unix.InitModule(image, params)

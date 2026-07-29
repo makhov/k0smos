@@ -5,7 +5,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 img=${1:-dist/k0smos.img}
 log=${LOG:-dist/console.log}
-timeout_s=${TIMEOUT:-600}
+timeout_s=${TIMEOUT:-900}
 
 # NOTE: tighten this against a real dist/console.log before trusting a pass.
 # The exact string depends on the k0s version's log output.
@@ -16,7 +16,7 @@ mkdir -p "$(dirname "$log")"
 
 # QEMU writes serial straight to the log — no pipeline, so $! is QEMU itself
 # and the kill below actually reaches it.
-SERIAL="$log" "$here/run-qemu.sh" "$img" &
+SERIAL="$log" IMG="$img" MEM=${MEM:-8192} CPUS=${CPUS:-4} "$here/run-qemu.sh" &
 qpid=$!
 cleanup() {
   kill "$qpid" 2>/dev/null || true

@@ -25,8 +25,8 @@ func gz(t *testing.T, payload string) []byte {
 
 type fakeLoader struct {
 	files  map[string][]byte
-	loaded []string          // payloads, in load order
-	errs   map[string]error  // payload -> error to return
+	loaded []string         // payloads, in load order
+	errs   map[string]error // payload -> error to return
 }
 
 func (f *fakeLoader) ReadFile(path string) ([]byte, error) {
@@ -56,12 +56,12 @@ const depFile = "kernel/drivers/block/virtio_blk.ko.gz:\n" +
 func newFake(t *testing.T) *fakeLoader {
 	t.Helper()
 	return &fakeLoader{files: map[string][]byte{
-		"/lib/modules/test/modules.dep":                            []byte(depFile),
-		"/lib/modules/test/kernel/drivers/block/virtio_blk.ko.gz":  gz(t, "virtio_blk"),
-		"/lib/modules/test/kernel/drivers/net/virtio_net.ko.gz":    gz(t, "virtio_net"),
-		"/lib/modules/test/kernel/drivers/net/net_failover.ko.gz":  gz(t, "net_failover"),
-		"/lib/modules/test/kernel/net/core/failover.ko.gz":         gz(t, "failover"),
-		"/lib/modules/test/kernel/fs/ext4/ext4.ko.gz":              gz(t, "ext4"),
+		"/lib/modules/test/modules.dep":                           []byte(depFile),
+		"/lib/modules/test/kernel/drivers/block/virtio_blk.ko.gz": gz(t, "virtio_blk"),
+		"/lib/modules/test/kernel/drivers/net/virtio_net.ko.gz":   gz(t, "virtio_net"),
+		"/lib/modules/test/kernel/drivers/net/net_failover.ko.gz": gz(t, "net_failover"),
+		"/lib/modules/test/kernel/net/core/failover.ko.gz":        gz(t, "failover"),
+		"/lib/modules/test/kernel/fs/ext4/ext4.ko.gz":             gz(t, "ext4"),
 	}}
 }
 
@@ -170,8 +170,8 @@ func TestLoadWithNoModulesDepIsNoOp(t *testing.T) {
 // Uncompressed .ko must work too — not every distro gzips modules.
 func TestLoadHandlesUncompressedModules(t *testing.T) {
 	f := &fakeLoader{files: map[string][]byte{
-		"/lib/modules/test/modules.dep":                 []byte("kernel/fs/ext4/ext4.ko:\n"),
-		"/lib/modules/test/kernel/fs/ext4/ext4.ko":      []byte("ext4-raw"),
+		"/lib/modules/test/modules.dep":            []byte("kernel/fs/ext4/ext4.ko:\n"),
+		"/lib/modules/test/kernel/fs/ext4/ext4.ko": []byte("ext4-raw"),
 	}}
 	if err := Load(f, "/lib/modules/test", []string{"ext4"}); err != nil {
 		t.Fatal(err)
