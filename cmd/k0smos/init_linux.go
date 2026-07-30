@@ -17,6 +17,7 @@ import (
 	"github.com/amakhov/k0smos/internal/cgroup"
 	"github.com/amakhov/k0smos/internal/config"
 	"github.com/amakhov/k0smos/internal/control"
+	"github.com/amakhov/k0smos/internal/dhcp"
 	"github.com/amakhov/k0smos/internal/module"
 	"github.com/amakhov/k0smos/internal/mount"
 	knet "github.com/amakhov/k0smos/internal/net"
@@ -115,6 +116,63 @@ func watchControlPort(ctx context.Context) <-chan control.Command {
 	return control.WatchReopen(ctx, func() (io.ReadCloser, error) {
 		return os.Open(dev)
 	}, controlRetry)
+}
+
+// configureDHCP brings the interface up, acquires a lease, applies it, and keeps
+// renewing in the background. It returns the lease's first DNS server, if any.
+//
+// The link must be up before DHCP runs: with the interface down the kernel has
+// nothing to send through, whereas static configuration can set an address
+// first and bring the link up afterwards.
+func configureDHCP(ctx context.Context, s *sys.Sys, cfg config.Config) (string, error) {
+	if err := s.LinkUp(cfg.Iface); err != nil {
+		return "", fmt.Errorf("link up: %w", err)
+	}
+	mac, err := s.InterfaceMAC(cfg.Iface)
+	if err != nil {
+		return "", fmt.Errorf("read MAC: %w", err)
+	}
+	conn, err := s.DHCPConn(cfg.Iface)
+	if err != nil {
+		return "", fmt.Errorf("open socket: %w", err)
+	}
+
+	client := &dhcp.Client{Conn: conn, MAC: mac, Hostname: cfg.Hostname}
+	lease, err := client.Acquire(ctx)
+	if err != nil {
+		conn.Close()
+		return "", err
+	}
+
+	apply := func(l dhcp.Lease) error {
+		gw := ""
+		if l.Router != nil {
+			gw = l.Router.String()
+		}
+		if err := knet.Configure(s, cfg.Iface, l.CIDR(), gw); err != nil {
+			return err
+		}
+		logf("%s configured %s gw %s (lease %s)", cfg.Iface, l.CIDR(), gw, l.LeaseTime)
+		return nil
+	}
+	if err := apply(lease); err != nil {
+		conn.Close()
+		return "", err
+	}
+
+	go func() {
+		defer conn.Close()
+		// Renew returns only when the context ends or the lease is
+		// unrecoverable; either way the node keeps running with what it has.
+		if err := client.Renew(ctx, lease, apply); err != nil && ctx.Err() == nil {
+			logf("warn: dhcp renewal stopped: %v", err)
+		}
+	}()
+
+	if len(lease.DNS) > 0 {
+		return lease.DNS[0].String(), nil
+	}
+	return "", nil
 }
 
 // watchPowerButton returns a channel that fires when the hardware power button
@@ -250,17 +308,33 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	}
 	logf("loopback up")
 
+	// Created here rather than just before the child starts, because the DHCP
+	// renewal goroutine below needs to be cancelled on shutdown too.
+	runCtx, stopChild := context.WithCancel(ctx)
+	defer stopChild()
+
 	// Not fatal: a node with only loopback still boots, it just cannot pull
 	// images. Better a degraded node with a console message than a panic.
-	if cfg.IP != "" {
+	dns := cfg.DNS
+	switch {
+	case cfg.IP == "dhcp":
+		leaseDNS, err := configureDHCP(runCtx, s, cfg)
+		if err != nil {
+			logf("warn: dhcp on %s: %v", cfg.Iface, err)
+		} else if dns == "" {
+			// An explicit k0smos.dns= wins: the lease's resolver is not always
+			// usable (QEMU's slirp hands out one that never answers).
+			dns = leaseDNS
+		}
+	case cfg.IP != "":
 		if err := knet.Configure(s, cfg.Iface, cfg.IP, cfg.Gateway); err != nil {
 			logf("warn: configure %s: %v", cfg.Iface, err)
 		} else {
 			logf("%s configured %s gw %s", cfg.Iface, cfg.IP, cfg.Gateway)
 		}
 	}
-	if cfg.DNS != "" {
-		resolv := fmt.Appendf(nil, "nameserver %s\n", cfg.DNS)
+	if dns != "" {
+		resolv := fmt.Appendf(nil, "nameserver %s\n", dns)
 		if err := s.WriteFile("/etc/resolv.conf", resolv, 0644); err != nil {
 			logf("warn: write resolv.conf: %v", err)
 		}
@@ -271,10 +345,6 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	} else {
 		logf("hostname set to %q", cfg.Hostname)
 	}
-
-	// Shut the workload down before shutdown.Do touches the filesystems.
-	runCtx, stopChild := context.WithCancel(ctx)
-	defer stopChild()
 
 	// Reaper: SIGCHLD -> coalescing trigger -> drain wait4.
 	chld := make(chan os.Signal, 1)
