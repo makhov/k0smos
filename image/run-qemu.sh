@@ -85,6 +85,23 @@ if [ -n "$img" ]; then
 fi
 [ -n "${EXEC:-}" ] && append="$append k0smos.exec=$EXEC"
 
+# Control port for clean shutdown. This guest has no usable power button --
+# direct kernel boot means no UEFI hence no ACPI, and this kernel builds no
+# gpio-keys driver -- so without this the only way to stop it is to kill QEMU,
+# which corrupts the ext4 root. Write "poweroff" or "reboot" to the socket:
+#   printf 'poweroff\n' | nc -U dist/control.sock
+control=${CONTROL:-dist/control.sock}
+control_args=()
+if [ -n "$control" ]; then
+  mkdir -p "$(dirname "$control")"
+  rm -f "$control"
+  control_args=(
+    -chardev "socket,path=$control,server=on,wait=off,id=k0smosctl"
+    -device virtio-serial-pci
+    -device "virtserialport,chardev=k0smosctl,name=k0smos.control"
+  )
+fi
+
 display=(-nographic -serial mon:stdio)
 if [ "$serial" != "stdio" ]; then
   mkdir -p "$(dirname "$serial")"
@@ -97,5 +114,6 @@ exec "$qemu" \
   -m "$mem" -smp "$cpus" \
   -kernel "$kernel" -append "$append" \
   "${boot[@]}" \
+  "${control_args[@]}" \
   -netdev user,id=n0,hostfwd=tcp::6443-:6443 -device virtio-net-pci,netdev=n0 \
   "${display[@]}"

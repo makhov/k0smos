@@ -20,6 +20,11 @@ const (
 	// mntDetach is MNT_DETACH: lazy unmount, so a busy filesystem still gets
 	// detached once its last user goes away instead of failing outright.
 	mntDetach = 0x2
+
+	// msRemount|msRdonly is MS_REMOUNT|MS_RDONLY, used on "/" because the root
+	// filesystem cannot be unmounted.
+	msRemount = 0x20
+	msRdonly  = 0x1
 )
 
 // Shutdowner is the subset of *sys.Sys that shutdown needs. Mounts returns
@@ -28,6 +33,7 @@ type Shutdowner interface {
 	Mounts() ([]string, error)
 	Sync()
 	Unmount(target string, flags int) error
+	Mount(source, target, fstype string, flags uintptr, data string) error
 	Reboot(cmd int) error
 }
 
@@ -44,6 +50,13 @@ func Do(s Shutdowner, cmd int) error {
 		_ = s.Unmount(target, mntDetach) // best-effort
 	}
 	s.Sync()
+
+	// "/" cannot be unmounted, so remount it read-only instead. This is what
+	// checkpoints the journal and clears the "needs recovery" state; syncing
+	// alone leaves the image failing e2fsck even though its superblock reads
+	// "clean". Best-effort: a busy root must not prevent the machine stopping.
+	_ = s.Mount("", "/", "", msRemount|msRdonly, "")
+
 	return s.Reboot(cmd)
 }
 
