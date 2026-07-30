@@ -7,9 +7,9 @@ img=${1:-dist/k0smos.img}
 log=${LOG:-dist/console.log}
 timeout_s=${TIMEOUT:-900}
 
-# NOTE: tighten this against a real dist/console.log before trusting a pass.
-# The exact string depends on the k0s version's log output.
-marker=${MARKER:-'Kube-api server is ready|node .* Ready|kubelet is ready'}
+# Taken from a real console log of a node reaching Ready (k0s v1.36.3), not
+# guessed: kubelet logs the first, kube-controller-manager the second.
+marker=${MARKER:-'just became ready|Exiting master disruption mode'}
 
 mkdir -p "$(dirname "$log")"
 : > "$log"
