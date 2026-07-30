@@ -110,12 +110,23 @@ if [ "$serial" != "stdio" ]; then
   display=(-display none -serial "file:$serial")
 fi
 
+# Optional QEMU monitor on a unix socket, so a test can drive the machine:
+#   echo system_powerdown | nc -U dist/monitor.sock   # ACPI power button
+# Useful on x86, where ACPI exists even with direct kernel boot, to exercise the
+# power-button path that arm64 virt (no UEFI, no ACPI) cannot raise.
+monitor_args=()
+if [ -n "${MONITOR:-}" ]; then
+  mkdir -p "$(dirname "$MONITOR")"
+  rm -f "$MONITOR"
+  monitor_args=(-monitor "unix:$MONITOR,server=on,wait=off")
+fi
+
 set -x
 exec "$qemu" \
   "${machine[@]}" "${accel[@]}" \
   -m "$mem" -smp "$cpus" \
   -kernel "$kernel" -append "$append" \
   "${boot[@]}" \
-  "${control_args[@]}" \
+  "${control_args[@]}" "${monitor_args[@]}" \
   -netdev user,id=n0,hostfwd=tcp::6443-:6443 -device virtio-net-pci,netdev=n0 \
   "${display[@]}"
