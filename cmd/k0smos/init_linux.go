@@ -5,13 +5,17 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/amakhov/k0smos/internal/cgroup"
 	"github.com/amakhov/k0smos/internal/config"
+	"github.com/amakhov/k0smos/internal/control"
 	"github.com/amakhov/k0smos/internal/module"
 	"github.com/amakhov/k0smos/internal/mount"
 	knet "github.com/amakhov/k0smos/internal/net"
@@ -35,6 +39,14 @@ const (
 	// switchedFlag marks the post-switch invocation, so it does not switch again.
 	switchedFlag = "--switched-root"
 
+	// virtioPortsDir is where the kernel names virtio-serial ports, and
+	// controlPortName is the port k0smos takes shutdown commands from. The host
+	// side is set up by image/run-qemu.sh.
+	virtioPortsDir  = "/sys/class/virtio-ports"
+	controlPortName = "k0smos.control"
+	// controlRetry is how long to wait before reopening an idle control port.
+	controlRetry = time.Second
+
 	// childGrace is how long the k0s child gets to exit after ctx cancellation
 	// before we start detaching filesystems under it.
 	childGrace = 5 * time.Second
@@ -54,6 +66,47 @@ func (a shutdownAdapter) Mounts() ([]string, error) { return a.Sys.MountTargets(
 
 func run(ctx context.Context) error {
 	return boot(ctx, sys.New(), slices.Contains(os.Args, switchedFlag))
+}
+
+// findControlPort locates the virtio-serial port named controlPortName and
+// returns its device path, or "" if the host did not attach one.
+//
+// virtio-serial ports are identified by name through sysfs: the directory
+// /sys/class/virtio-ports/vportNpM holds a "name" file, and the device is
+// /dev/<that directory's basename>.
+func findControlPort(name string) string {
+	entries, err := os.ReadDir(virtioPortsDir)
+	if err != nil {
+		return "" // no virtio-serial bus at all
+	}
+	for _, e := range entries {
+		got, err := os.ReadFile(filepath.Join(virtioPortsDir, e.Name(), "name"))
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(got)) == name {
+			return "/dev/" + e.Name()
+		}
+	}
+	return ""
+}
+
+// watchControlPort returns a channel of host shutdown requests, or nil when no
+// control port is present.
+//
+// The port is reopened on EOF: with no host client attached it reads EOF
+// immediately, so watching it once would stop listening before anyone could
+// send anything.
+func watchControlPort(ctx context.Context) <-chan control.Command {
+	dev := findControlPort(controlPortName)
+	if dev == "" {
+		logf("no control port; shutdown only via SIGTERM/SIGINT")
+		return nil
+	}
+	logf("listening for shutdown commands on %s", dev)
+	return control.WatchReopen(ctx, func() (io.ReadCloser, error) {
+		return os.Open(dev)
+	}, controlRetry)
 }
 
 // pivot mounts the real root filesystem and switches into it, re-executing
@@ -176,6 +229,10 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		logf("warn: set PATH: %v", err)
 	}
 
+	// Started before the child so a host shutdown request is never missed while
+	// k0s is coming up, which can take minutes.
+	hostCmds := watchControlPort(runCtx)
+
 	logf("supervising %v", cfg.Exec)
 	childDone := make(chan struct{})
 	go func() {
@@ -189,14 +246,34 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	}()
 
 	// Wait for a shutdown request. SIGINT is what the kernel delivers to PID1
-	// on ctrl-alt-del; SIGTERM is the conventional request.
+	// on ctrl-alt-del; SIGTERM is the conventional request; the control port is
+	// how the host asks, since this guest has no working power button.
 	term := make(chan os.Signal, 1)
 	signal.Notify(term, unix.SIGTERM, unix.SIGINT)
-	select {
-	case sig := <-term:
-		logf("got %v, shutting down", sig)
-	case <-ctx.Done():
-		logf("context cancelled, shutting down")
+	how := shutdown.PowerOff
+wait:
+	for {
+		select {
+		case sig := <-term:
+			logf("got %v, shutting down", sig)
+			break wait
+		case cmd, ok := <-hostCmds:
+			// A closed channel yields the zero Command, which must not be
+			// mistaken for a request: that alone once powered the machine off
+			// seconds into boot with nothing connected to the port.
+			if !ok {
+				hostCmds = nil // nil channel blocks, disabling this case
+				continue
+			}
+			logf("host requested %v", cmd)
+			if cmd == control.Reboot {
+				how = shutdown.Reboot
+			}
+			break wait
+		case <-ctx.Done():
+			logf("context cancelled, shutting down")
+			break wait
+		}
 	}
 
 	stopChild()
@@ -207,5 +284,5 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	}
 
 	logf("syncing and unmounting")
-	return shutdown.Do(shutdownAdapter{s}, shutdown.PowerOff)
+	return shutdown.Do(shutdownAdapter{s}, how)
 }

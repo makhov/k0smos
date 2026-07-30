@@ -16,9 +16,20 @@ mkdir -p "$(dirname "$log")"
 
 # QEMU writes serial straight to the log — no pipeline, so $! is QEMU itself
 # and the kill below actually reaches it.
-SERIAL="$log" IMG="$img" MEM=${MEM:-8192} CPUS=${CPUS:-4} "$here/run-qemu.sh" &
+sock=${CONTROL:-dist/control.sock}
+SERIAL="$log" IMG="$img" CONTROL="$sock" MEM=${MEM:-8192} CPUS=${CPUS:-4} "$here/run-qemu.sh" &
 qpid=$!
+
+# Always try a clean shutdown first: killing QEMU corrupts the ext4 root, which
+# also destroys the pod logs needed to diagnose a failure.
 cleanup() {
+  if [ -S "$sock" ] && kill -0 "$qpid" 2>/dev/null; then
+    CMD=poweroff "$here/poweroff.sh" "$sock" >/dev/null 2>&1 || true
+    for _ in $(seq 1 30); do
+      kill -0 "$qpid" 2>/dev/null || break
+      sleep 1
+    done
+  fi
   kill "$qpid" 2>/dev/null || true
   wait "$qpid" 2>/dev/null || true
 }

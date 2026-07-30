@@ -1,12 +1,16 @@
 package shutdown
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 type fakeShutdowner struct {
 	mounts     []string
 	order      []string
 	unmounted  []string
 	rebootWith int
+	remountErr error
 }
 
 func (f *fakeShutdowner) Mounts() ([]string, error) {
@@ -25,6 +29,52 @@ func (f *fakeShutdowner) Reboot(cmd int) error {
 	f.order = append(f.order, "reboot")
 	f.rebootWith = cmd
 	return nil
+}
+func (f *fakeShutdowner) Mount(_, target, _ string, flags uintptr, _ string) error {
+	if flags&msRemount != 0 && flags&msRdonly != 0 {
+		f.order = append(f.order, "remount-ro:"+target)
+		return f.remountErr
+	}
+	f.order = append(f.order, "mount:"+target)
+	return nil
+}
+
+// "/" cannot be unmounted, so the only way to leave the root filesystem
+// consistent is to remount it read-only, which checkpoints the ext4 journal.
+// Without this the image fails e2fsck after a poweroff even though the
+// superblock reports "clean".
+func TestDoRemountsRootReadOnlyBeforeReboot(t *testing.T) {
+	f := &fakeShutdowner{}
+	if err := Do(f, PowerOff); err != nil {
+		t.Fatal(err)
+	}
+	ro, reboot := -1, -1
+	for i, op := range f.order {
+		switch op {
+		case "remount-ro:/":
+			ro = i
+		case "reboot":
+			reboot = i
+		}
+	}
+	if ro == -1 {
+		t.Fatalf("root was never remounted read-only: %v", f.order)
+	}
+	if ro > reboot {
+		t.Errorf("remount-ro at %d came after reboot at %d: %v", ro, reboot, f.order)
+	}
+}
+
+// A root that refuses to go read-only must not block the poweroff: a machine
+// stuck forever is worse than one that needs a journal replay.
+func TestDoRebootsEvenIfRemountFails(t *testing.T) {
+	f := &fakeShutdowner{remountErr: errors.New("EBUSY")}
+	if err := Do(f, PowerOff); err != nil {
+		t.Fatalf("Do = %v, want nil", err)
+	}
+	if f.order[len(f.order)-1] != "reboot" {
+		t.Errorf("last op = %q, want reboot", f.order[len(f.order)-1])
+	}
 }
 
 func TestDoSyncsUnmountsThenReboots(t *testing.T) {

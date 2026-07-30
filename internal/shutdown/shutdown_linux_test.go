@@ -21,4 +21,10 @@ func TestConstantsMatchUnix(t *testing.T) {
 	if mntDetach != unix.MNT_DETACH {
 		t.Errorf("mntDetach = %#x, want %#x", mntDetach, unix.MNT_DETACH)
 	}
+	if msRemount != unix.MS_REMOUNT {
+		t.Errorf("msRemount = %#x, want %#x", msRemount, unix.MS_REMOUNT)
+	}
+	if msRdonly != unix.MS_RDONLY {
+		t.Errorf("msRdonly = %#x, want %#x", msRdonly, unix.MS_RDONLY)
+	}
 }
