@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Reboot commands and unmount flags, declared locally so this package builds
@@ -25,7 +26,13 @@ const (
 	// filesystem cannot be unmounted.
 	msRemount = 0x20
 	msRdonly  = 0x1
+
+	sigTerm = 0xf // SIGTERM
+	sigKill = 0x9 // SIGKILL
 )
+
+// termGrace is how long everything gets to exit after SIGTERM before SIGKILL.
+var termGrace = 5 * time.Second
 
 // Shutdowner is the subset of *sys.Sys that shutdown needs. Mounts returns
 // mount targets as strings so this package imports nothing from internal/sys.
@@ -34,6 +41,8 @@ type Shutdowner interface {
 	Sync()
 	Unmount(target string, flags int) error
 	Mount(source, target, fstype string, flags uintptr, data string) error
+	// KillAll signals every process except this one, i.e. kill(-1, sig).
+	KillAll(sig int) error
 	Reboot(cmd int) error
 }
 
@@ -41,6 +50,14 @@ type Shutdowner interface {
 // "/" skipped), then issues reboot(2) with cmd. reboot(2) does not return on
 // success in production; Do returns only so fakes can assert the sequence.
 func Do(s Shutdowner, cmd int) error {
+	// Everything must be gone before the filesystems are touched: a process
+	// holding the root makes the read-only remount fail with EBUSY, which
+	// leaves a journal for the next boot to replay. SIGTERM first so daemons
+	// like containerd can flush, then SIGKILL for whatever ignored it.
+	_ = s.KillAll(sigTerm)
+	time.Sleep(termGrace)
+	_ = s.KillAll(sigKill)
+
 	s.Sync()
 	targets, err := s.Mounts()
 	if err != nil {

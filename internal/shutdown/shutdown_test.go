@@ -2,8 +2,17 @@ package shutdown
 
 import (
 	"errors"
+	"os"
+	"strings"
 	"testing"
+	"time"
 )
+
+// The real grace period is seconds; tests only care about ordering.
+func TestMain(m *testing.M) {
+	termGrace = time.Millisecond
+	os.Exit(m.Run())
+}
 
 type fakeShutdowner struct {
 	mounts     []string
@@ -37,6 +46,49 @@ func (f *fakeShutdowner) Mount(_, target, _ string, flags uintptr, _ string) err
 	}
 	f.order = append(f.order, "mount:"+target)
 	return nil
+}
+
+func (f *fakeShutdowner) KillAll(sig int) error {
+	switch sig {
+	case sigTerm:
+		f.order = append(f.order, "killall:TERM")
+	case sigKill:
+		f.order = append(f.order, "killall:KILL")
+	default:
+		f.order = append(f.order, "killall:?")
+	}
+	return nil
+}
+
+// Processes still holding the root filesystem make the read-only remount fail
+// with EBUSY, which leaves a journal to replay. Everything must be killed
+// first -- SIGTERM to let them flush, then SIGKILL for whatever ignored it.
+func TestDoKillsEverythingBeforeUnmounting(t *testing.T) {
+	f := &fakeShutdowner{}
+	if err := Do(f, PowerOff); err != nil {
+		t.Fatal(err)
+	}
+	idx := func(op string) int {
+		for i, got := range f.order {
+			if got == op {
+				return i
+			}
+		}
+		return -1
+	}
+	term, kill := idx("killall:TERM"), idx("killall:KILL")
+	if term == -1 || kill == -1 {
+		t.Fatalf("missing killall steps: %v", f.order)
+	}
+	if term > kill {
+		t.Errorf("SIGKILL before SIGTERM: %v", f.order)
+	}
+	if ro := idx("remount-ro:/"); kill > ro {
+		t.Errorf("killall:KILL at %d came after remount at %d: %v", kill, ro, f.order)
+	}
+	if un := idx("unmount:/var/lib/k0s"); kill > un {
+		t.Errorf("killall:KILL at %d came after unmount at %d: %v", kill, un, f.order)
+	}
 }
 
 // "/" cannot be unmounted, so the only way to leave the root filesystem
@@ -82,8 +134,19 @@ func TestDoSyncsUnmountsThenReboots(t *testing.T) {
 	if err := Do(f, PowerOff); err != nil {
 		t.Fatal(err)
 	}
-	if f.order[0] != "sync" {
-		t.Errorf("first op %q, want sync", f.order[0])
+	// Disks must be flushed before anything is detached. The kill steps come
+	// first now, so check sync's position relative to the unmounts.
+	syncAt, unmountAt := -1, -1
+	for i, op := range f.order {
+		if op == "sync" && syncAt == -1 {
+			syncAt = i
+		}
+		if strings.HasPrefix(op, "unmount:") && unmountAt == -1 {
+			unmountAt = i
+		}
+	}
+	if syncAt == -1 || unmountAt == -1 || syncAt > unmountAt {
+		t.Errorf("sync at %d must precede unmounts at %d: %v", syncAt, unmountAt, f.order)
 	}
 	if f.order[len(f.order)-1] != "reboot" {
 		t.Errorf("last op %q, want reboot", f.order[len(f.order)-1])
