@@ -3,7 +3,7 @@ BIN := dist/k0smos
 # a host build on macOS would just produce the "linux only" stub.
 GO_BUILD := GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags '-extldflags "-static"'
 
-.PHONY: build test vet kernel k0s initramfs disk boot smoke accept clean-dist
+.PHONY: build test vet kernel k0s initramfs disk boot smoke oci accept clean-dist
 build:
 	$(GO_BUILD) -o $(BIN) ./cmd/k0smos
 
@@ -43,6 +43,14 @@ boot: kernel disk
 # gate) purely to prove the mount/cgroup/net/supervise/shutdown path works.
 smoke: kernel initramfs
 	EXEC=/init MEM=1024 ./image/run-qemu.sh
+
+# OCI artifacts for KubeVirt: a kernelBoot image (kernel + initramfs) and a
+# containerDisk (the ext4 root). PUSH=1 to push, REGISTRY/TAG to retag.
+# For a KubeVirt host, build amd64:
+#   ARCH=x86_64 make oci
+oci: kernel disk
+	./image/mkinitramfs.sh
+	./image/mkoci.sh
 
 accept: disk
 	./image/mkinitramfs.sh
