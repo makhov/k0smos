@@ -58,11 +58,14 @@ mkdir -p "$root"/{sbin,usr/local/bin,etc/k0s,proc,sys,dev,run,tmp,var/lib/k0s,ne
 #                  file not found in $PATH' and no CNI pod ever starts.
 #   ca-certificates-bundle  image pulls fail TLS verification without a trust
 #                  store: 'x509: certificate signed by unknown authority'.
+#   e2fsprogs      mkfs.ext4, to format a blank data volume on first boot. Talos
+#                  bundles mkfs for the same reason: it formats its own
+#                  EPHEMERAL partition rather than requiring a pre-made one.
 # k0s stages its own iptables, so those are not needed here.
 #
 # Deliberately the narrow subpackages, not the "util-linux" meta package: that
 # one pulls in busybox and /bin/sh, and this image is specified to have no shell.
-apk_pkgs=${APK_PKGS:-mount umount ca-certificates-bundle}
+apk_pkgs=${APK_PKGS:-mount umount ca-certificates-bundle e2fsprogs}
 if [ -n "$apk_pkgs" ] && command -v apk >/dev/null 2>&1; then
   # --keys-dir and --repositories-file are required because --initdb creates an
   # empty root with no signing keys or repository list of its own.

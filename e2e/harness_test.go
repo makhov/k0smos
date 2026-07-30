@@ -114,6 +114,8 @@ type bootOpts struct {
 	Exec string
 	// Net replaces the default networking cmdline fragment.
 	Net string
+	// Data is a mutable data volume; created blank if absent.
+	Data string
 	// Mem and CPUs size the guest.
 	Mem, CPUs string
 	// Extra is appended to the kernel cmdline via NET_ARGS.
@@ -157,6 +159,7 @@ func boot(t *testing.T, o bootOpts) *vm {
 		"INITRAMFS": o.Initramfs,
 		"CIDATA":    o.Cidata,
 		"EXEC":      o.Exec,
+		"DATA":      o.Data,
 		"NET_ARGS":  o.Net,
 		"ROOT":      o.Root,
 	} {
@@ -353,18 +356,83 @@ func gzipBase64(t *testing.T, content string) string {
 	return base64.StdEncoding.EncodeToString(buf.Bytes())
 }
 
+// makeConfigDrive builds an OpenStack-style config-drive: label "config-2" and
+// the openstack/latest/ layout.
+//
+// This is what Cluster API actually produces on KubeVirt — CAPK attaches
+// bootstrap data as CloudInitConfigDrive, not NoCloud — so it is the path that
+// matters most, despite NoCloud being easier to hand-write.
+func makeConfigDrive(t *testing.T, userData, metaDataJSON string) string {
+	t.Helper()
+	root := repoRoot(t)
+	src := t.TempDir()
+	sub := filepath.Join(src, "openstack", "latest")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "user_data"), []byte(userData), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if metaDataJSON == "" {
+		metaDataJSON = `{"uuid":"e2e-cd"}`
+	}
+	if err := os.WriteFile(filepath.Join(sub, "meta_data.json"), []byte(metaDataJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	outDir := filepath.Join(root, "dist", "e2e")
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	iso := filepath.Join(outDir, sanitise(t.Name())+"-cd.iso")
+	t.Cleanup(func() { os.Remove(iso) })
+
+	cmd := exec.Command("docker", "run", "--rm",
+		"-v", src+":/in", "-v", outDir+":/out",
+		"alpine:3.20", "sh", "-c",
+		"apk add -q --no-cache xorriso >/dev/null && xorriso -as mkisofs -V config-2 -J -r -o /out/"+
+			filepath.Base(iso)+" /in 2>/dev/null")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build config-drive iso: %v\n%s", err, out)
+	}
+	return iso
+}
+
 func sanitise(s string) string {
 	return strings.NewReplacer("/", "_", " ", "_").Replace(s)
 }
 
 // --- disk assertions ---
 
+// blankVolume returns a path for a data volume that does not exist yet, so
+// run-qemu.sh creates it blank. It is deliberately not removed between the two
+// boots of the reuse test.
+func blankVolume(t *testing.T, name string) string {
+	t.Helper()
+	p := filepath.Join(repoRoot(t), "dist", "e2e", sanitise(t.Name())+"-"+name+".img")
+	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(p)
+	t.Cleanup(func() { os.Remove(p) })
+	return p
+}
+
 // cloneDisk copies the root image so a test can assert on guest writes without
 // disturbing other tests. The image is sparse, so this is cheaper than its
 // apparent size suggests.
 func cloneDisk(t *testing.T, src string) string {
+	return cloneDiskAs(t, src, "")
+}
+
+// cloneDisk2 is a second, independent clone for a test that boots twice.
+func cloneDisk2(t *testing.T, src string) string {
+	return cloneDiskAs(t, src, "-2")
+}
+
+func cloneDiskAs(t *testing.T, src, suffix string) string {
 	t.Helper()
-	dst := filepath.Join(repoRoot(t), "dist", "e2e", sanitise(t.Name())+".img")
+	dst := filepath.Join(repoRoot(t), "dist", "e2e", sanitise(t.Name())+suffix+".img")
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 		t.Fatal(err)
 	}

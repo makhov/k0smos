@@ -33,6 +33,13 @@ type prober struct {
 	parse  func([]byte) (uuid, label string, ok bool)
 }
 
+// Info describes the filesystem found on a device.
+type Info struct {
+	FSType string
+	UUID   string
+	Label  string
+}
+
 // probers is tried in order for each block device. ext4 first because it is the
 // common case for the root filesystem.
 var probers = []prober{

@@ -86,6 +86,19 @@ if [ -n "${CIDATA:-}" ]; then
   boot+=(-drive file="$CIDATA",if=virtio,format=raw,readonly=on)
 fi
 
+# A mutable data volume, mounted by k0smos at /var/lib/k0s. Following Talos, the
+# root stays interchangeable and everything that changes lives here, so the same
+# image is disposable or persistent depending on what you attach. DATA_SIZE
+# creates the file if it does not exist; k0smos formats it on first boot.
+if [ -n "${DATA:-}" ]; then
+  if [ ! -f "$DATA" ]; then
+    mkdir -p "$(dirname "$DATA")"
+    truncate -s "${DATA_SIZE:-4G}" "$DATA"
+    echo "created blank data volume $DATA (${DATA_SIZE:-4G})"
+  fi
+  boot+=(-drive file="$DATA",if=virtio,format=raw)
+fi
+
 if [ -n "$img" ]; then
   [ -f "$img" ] || { echo "disk $img not found — run 'make disk'" >&2; exit 1; }
   boot+=(-drive file="$img",if=virtio,format=raw)

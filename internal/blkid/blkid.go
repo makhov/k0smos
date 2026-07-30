@@ -93,6 +93,39 @@ func ResolveWait(p Prober, spec string, attempts int, sleep func()) (string, err
 	return "", err
 }
 
+// Identify reports the filesystem on a device, or ok=false when there is none.
+//
+// A false result is what marks a device as blank and therefore safe to format:
+// callers must never format something this reports a filesystem for.
+func Identify(p Prober, dev string) (Info, bool) {
+	for _, pr := range probers {
+		buf := make([]byte, pr.length)
+		if err := p.ReadAt(dev, buf, pr.offset); err != nil {
+			continue
+		}
+		if uuid, label, ok := pr.parse(buf); ok {
+			return Info{FSType: pr.name, UUID: uuid, Label: label}, true
+		}
+	}
+	return Info{}, false
+}
+
+// Blank lists the devices with no recognised filesystem. Partitions are included
+// because a caller may legitimately target one.
+func Blank(p Prober) ([]string, error) {
+	devs, err := p.BlockDevices()
+	if err != nil {
+		return nil, fmt.Errorf("list block devices: %w", err)
+	}
+	var out []string
+	for _, dev := range devs {
+		if _, ok := Identify(p, dev); !ok {
+			out = append(out, dev)
+		}
+	}
+	return out, nil
+}
+
 // identify tries each known filesystem on dev, returning the first match. A
 // device that cannot be read is not an error: an empty drive or one too small
 // for a given probe simply is not the thing being looked for.

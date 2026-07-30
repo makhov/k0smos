@@ -4,7 +4,9 @@ package sys
 
 import (
 	"bytes"
+	"fmt"
 	"os"
+	"os/exec"
 
 	"golang.org/x/sys/unix"
 )
@@ -63,6 +65,20 @@ func (s *Sys) ReadAt(dev string, p []byte, off int64) error {
 	defer f.Close()
 	_, err = f.ReadAt(p, off)
 	return err
+}
+
+// Mkfs creates a filesystem on a device.
+//
+// This runs a bundled binary, which k0smos otherwise avoids — but like the etcd
+// leave it is k0smos's own decision with a fixed command, not something taken
+// from user-data. The caller must have established that the device is blank:
+// mkfs on a populated volume destroys it.
+func (s *Sys) Mkfs(dev, fstype, label string) error {
+	out, err := exec.Command("mkfs."+fstype, "-q", "-L", label, dev).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mkfs.%s %s: %w: %s", fstype, dev, err, bytes.TrimSpace(out))
+	}
+	return nil
 }
 
 func (s *Sys) Chdir(dir string) error  { return unix.Chdir(dir) }

@@ -91,6 +91,10 @@ All are optional; k0smos boots with defaults if none are given.
 | `k0smos.root=` | *(none)* | Root filesystem to switch onto: `/dev/vda`, `UUID=…` or `LABEL=…`. Unset means stay on the initramfs — fine for a smoke test, but kubelet cannot run there. |
 | `k0smos.rootfstype=` | `ext4` | Filesystem type for the above. |
 | `k0smos.rootflags=` | *(none)* | Mount data string, e.g. `noatime`. |
+| `k0smos.data=` | *(none)* | Mutable data volume: `auto`, a device path, or `LABEL=`/`UUID=`. Unset disables it. See below. |
+| `k0smos.datalabel=` | `k0smos-data` | Label applied when formatting, and searched for by `auto`. |
+| `k0smos.datafstype=` | `ext4` | Filesystem created and mounted. |
+| `k0smos.datadir=` | `/var/lib/k0s` | Where it is mounted. |
 | `k0smos.ip=` | *(none)* | `dhcp`, or a static CIDR like `10.0.0.20/24`. Unset leaves loopback only. |
 | `k0smos.gw=` | *(none)* | Default gateway (static addressing only). |
 | `k0smos.dns=` | *(none)* | Resolver written to `/etc/resolv.conf`. **Overrides the DHCP lease** when both are present. |
@@ -109,6 +113,42 @@ The built-in module set covers virtio, ext4, overlayfs, the netfilter and nft
 pieces kube-proxy needs, ipsets, veth/bridge, and the ACPI power button.
 Modules absent from the running kernel are skipped, so the same list is safe on
 a monolithic kernel.
+
+## The data volume
+
+Following Talos, which keeps an immutable root and puts everything mutable on a
+separate `EPHEMERAL` partition mounted at `/var`, k0smos can mount a data volume
+at `/var/lib/k0s` — etcd, containerd, kubelet and pulled images all live there.
+
+```
+k0smos.root=LABEL=k0smos k0smos.data=auto
+```
+
+This is what lets a machine be **disposable without being diskless**:
+
+- attach an ephemeral per-VM disk (KubeVirt `emptyDisk`) and it dies with the
+  machine — Talos `EPHEMERAL` semantics;
+- attach a PVC/DataVolume and it survives restarts.
+
+Same image either way; the choice is in the VM spec, not in k0smos.
+
+Going fully diskless instead does not work: kubelet cannot run on a ramfs root
+(cadvisor reports `cannot find filesystem info for device "rootfs"`), and tmpfs
+would pin every byte of otherwise-evictable cold data in RAM.
+
+**How `auto` picks a device, and why it is safe:**
+
+1. A volume already labelled `k0smos-data` is mounted as-is — the steady state
+   after the first boot.
+2. Otherwise it looks for a device with **no recognised filesystem**. The root
+   and the cloud-init drive both have one, so neither can ever be selected.
+3. Exactly one blank device is formatted and mounted. Zero means nothing is
+   attached, which is not an error — k0s then uses the root filesystem.
+   **More than one is refused**, not guessed at.
+
+k0smos never formats a device that already has a filesystem. Reformatting a
+populated volume would destroy a cluster's etcd, so there is an e2e test that
+boots twice against the same volume to prove the second boot leaves it alone.
 
 ## Cluster API / cloud-init
 
