@@ -93,9 +93,27 @@ firmware:
       initrdPath: /boot/initramfs.gz
 ```
 
-Under Cluster API the same fields live in the `KubevirtMachineTemplate`, and
-CAPK populates `cloudInitNoCloud` from the bootstrap Secret rather than you
-writing it. Two things to know:
+A complete Cluster API manifest set is in
+[`examples/capi-kubevirt.yaml`](../examples/capi-kubevirt.yaml): `Cluster`,
+`KubevirtCluster`, `K0sControlPlane`, `MachineDeployment`,
+`K0sWorkerConfigTemplate` and both `KubevirtMachineTemplate`s. Field names come
+from the providers' Go types, but the set has not yet been reconciled by a real
+cluster — treat the first run as a test of the manifests too.
+
+Three things that are easy to get wrong:
+
+- **`virtualMachineBootstrapCheck.checkStrategy: none`.** CAPK defaults to `ssh`
+  and reads the CAPI sentinel file over it. k0smos has no SSH, so without this
+  machines never report bootstrapped even though the node joins.
+- **CAPK attaches a config-drive, not NoCloud.** It uses
+  `CloudInitConfigDrive`, so the drive is labelled `config-2` with the
+  `openstack/latest/user_data` layout. k0smos handles both, and there is an e2e
+  test for the config-drive path specifically because that is the one CAPI
+  exercises.
+- **Do not add a cloud-init volume yourself.** CAPK appends the volume and disk
+  from the bootstrap Secret.
+
+Two more things to know:
 
 - **Set `preInstalledK0s: true`** in the `K0sControllerConfig` /
   `K0sWorkerConfig` spec. k0smotron's `DownloadCommands` returns nothing when it

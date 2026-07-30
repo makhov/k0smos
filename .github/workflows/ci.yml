@@ -1,0 +1,116 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Nightly, for the slow k0s boots.
+    - cron: "0 3 * * *"
+
+jobs:
+  # Fast and hermetic: no VM, no root, no network beyond the module cache.
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: vet (host and linux target)
+        run: make vet
+
+      - name: unit tests
+        run: go test -race ./...
+
+      # The e2e package only builds under its tag, so nothing else type-checks
+      # it. Without this a broken harness lands unnoticed.
+      - name: vet e2e harness
+        run: go vet -tags e2e ./e2e/
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l cmd internal e2e)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt'd:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: shell syntax
+        run: for f in image/*.sh; do bash -n "$f"; done
+
+  # Boots k0smos under QEMU. Needs KVM, which GitHub's ubuntu runners provide on
+  # larger images; without it QEMU falls back to TCG and the timeouts will not
+  # hold.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: install qemu and enable KVM
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils xorriso e2fsprogs
+          # The runner user needs access or QEMU silently drops to TCG.
+          sudo usermod -aG kvm "$USER" || true
+          ls -l /dev/kvm || echo "no /dev/kvm — expect TCG and slow boots"
+
+      - name: build artifacts
+        run: |
+          make kernel
+          make k0s
+          make initramfs
+          make disk
+
+      # Fast suite: no k0s, so every boot is short. This is the gate.
+      - name: e2e (fast)
+        run: go test -tags e2e -short -v -timeout 40m ./e2e/
+
+      - name: keep consoles from failures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-consoles
+          path: dist/e2e/*.console.log
+          if-no-files-found: ignore
+
+  # The k0s boots: minutes each, and they pull container images, so they run
+  # nightly rather than on every push.
+  e2e-k0s:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: install qemu
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils xorriso e2fsprogs
+          ls -l /dev/kvm || echo "no /dev/kvm — expect TCG and slow boots"
+
+      - name: build artifacts
+        run: make kernel k0s initramfs disk
+
+      # make disk rebuilds every time, so the root image is pristine — the k0s
+      # tests skip themselves against an image that already holds cluster state.
+      - name: e2e (with k0s)
+        run: go test -tags e2e -v -timeout 110m ./e2e/
+
+      - name: keep consoles from failures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-k0s-consoles
+          path: dist/e2e/*.console.log
+          if-no-files-found: ignore
