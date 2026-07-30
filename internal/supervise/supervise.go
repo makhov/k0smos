@@ -12,8 +12,12 @@ import (
 // Options configures the supervised child. Command/Args describe the real
 // child; start/sleep are injectable seams for testing.
 type Options struct {
-	Command    string
-	Args       []string
+	Command string
+	Args    []string
+	// Env are extra KEY=VALUE pairs for the child, added to this process's
+	// environment. Used for `k0s install --env` settings, which ask for
+	// environment in a service unit k0smos never writes.
+	Env        []string
 	MaxBackoff time.Duration
 	// OnExit, if set, is called with the child's exit error every time it dies.
 	// Without it a crash-looping child is invisible on the console.
@@ -31,6 +35,9 @@ func Run(ctx context.Context, opts Options) error {
 			cmd := exec.CommandContext(ctx, opts.Command, opts.Args...)
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
+			if len(opts.Env) > 0 {
+				cmd.Env = append(os.Environ(), opts.Env...)
+			}
 			return cmd.Run()
 		}
 	}

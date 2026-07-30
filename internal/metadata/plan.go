@@ -34,6 +34,10 @@ type Plan struct {
 	// Workload is the long-running child to supervise, or nil if user-data did
 	// not describe one.
 	Workload []string
+	// Env are KEY=VALUE pairs for the workload, taken from `k0s install --env`.
+	// They exist because that flag asks for environment in the service unit that
+	// k0smos never writes, so the values are applied to the child directly.
+	Env []string
 	// Actions are file operations to perform, in order.
 	Actions []Action
 	// Unsupported holds commands that were recognised as commands but not
@@ -71,7 +75,9 @@ func (u UserData) Plan() Plan {
 		// `k0s install <role> ...` describes the workload; supervising it is
 		// what `k0s start` would have achieved.
 		case bin == "k0s" && len(cmd) >= 3 && cmd[1] == "install":
-			p.Workload = append([]string{cmd[0]}, cmd[2:]...)
+			argv, env := translateInstall(cmd)
+			p.Workload = argv
+			p.Env = append(p.Env, env...)
 			continue
 		case bin == "k0s" && len(cmd) >= 2 && (cmd[1] == "start" || cmd[1] == "stop"):
 			continue
@@ -87,6 +93,44 @@ func (u UserData) Plan() Plan {
 		p.Actions = append(p.Actions, actions...)
 	}
 	return p
+}
+
+// installOnlyFlags are accepted by `k0s install` but not by the foreground
+// `k0s <role>` command, so carrying them across would produce a command line
+// k0s rejects. Verified against the k0s binary: `k0s controller --help` lists
+// neither.
+var installOnlyFlags = map[string]bool{"--force": true}
+
+// translateInstall turns `k0s install <role> [args]` into the equivalent
+// foreground command, separating out environment settings.
+//
+// `--env KEY=VALUE` (and `-e`) asks for environment in the service unit k0smos
+// never writes; the values are returned so the caller can apply them to the
+// supervised child instead. k0smotron uses this for AUTOPILOT_HOSTNAME, which
+// autopilot needs in order to identify the node.
+func translateInstall(cmd []string) (argv []string, env []string) {
+	argv = append(argv, cmd[0])  // the k0s binary
+	rest := cmd[2:]              // drop "install"
+	argv = append(argv, rest[0]) // the role: controller or worker
+	for i := 1; i < len(rest); i++ {
+		a := rest[i]
+		switch {
+		case installOnlyFlags[a]:
+			continue
+		case a == "--env" || a == "-e":
+			if i+1 < len(rest) {
+				env = append(env, rest[i+1])
+				i++
+			}
+		case strings.HasPrefix(a, "--env="):
+			env = append(env, strings.TrimPrefix(a, "--env="))
+		case strings.HasPrefix(a, "-e="):
+			env = append(env, strings.TrimPrefix(a, "-e="))
+		default:
+			argv = append(argv, a)
+		}
+	}
+	return argv, env
 }
 
 // interpret maps one file-manipulation command to actions, reporting false when

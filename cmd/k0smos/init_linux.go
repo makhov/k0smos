@@ -464,6 +464,9 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		workloadCmd = plan.Workload
 		logf("workload from user-data")
 	}
+	if len(plan.Env) > 0 {
+		logf("workload env from user-data: %v", plan.Env)
+	}
 
 	logf("supervising %v", workloadCmd)
 	childDone := make(chan struct{})
@@ -472,6 +475,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		_ = supervise.Run(runCtx, supervise.Options{
 			Command:    workloadCmd[0],
 			Args:       workloadCmd[1:],
+			Env:        plan.Env,
 			MaxBackoff: 10 * time.Second,
 			OnExit:     func(err error) { logf("child exited: %v", err) },
 		})

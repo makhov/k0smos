@@ -25,6 +25,52 @@ func TestPlanTranslatesK0sInstall(t *testing.T) {
 	}
 }
 
+// Real k0smotron output. `--force` and `--env` are k0s *install* flags —
+// `k0s controller` rejects both — so they must not survive the translation, and
+// --env has to become an actual environment variable for the child.
+func TestPlanTranslatesRealK0smotronInstallCommand(t *testing.T) {
+	p := UserData{RunCmd: [][]string{
+		{
+			"/usr/local/bin/k0s", "install", "controller",
+			"--force", "--enable-dynamic-config",
+			"--env", "AUTOPILOT_HOSTNAME=node-07",
+			"--config", "/etc/k0s/k0s.yaml",
+			"--token-file", "/etc/k0s/join-token",
+		},
+		{"/usr/local/bin/k0s", "start"},
+	}}.Plan()
+
+	want := []string{
+		"/usr/local/bin/k0s", "controller",
+		"--enable-dynamic-config",
+		"--config", "/etc/k0s/k0s.yaml",
+		"--token-file", "/etc/k0s/join-token",
+	}
+	if !slices.Equal(p.Workload, want) {
+		t.Errorf("workload =\n  %v\nwant\n  %v", p.Workload, want)
+	}
+	if !slices.Equal(p.Env, []string{"AUTOPILOT_HOSTNAME=node-07"}) {
+		t.Errorf("env = %v, want [AUTOPILOT_HOSTNAME=node-07]", p.Env)
+	}
+}
+
+// Both spellings of the env flag, and the joined form.
+func TestPlanCollectsEnvFlagForms(t *testing.T) {
+	p := UserData{RunCmd: [][]string{{
+		"k0s", "install", "worker",
+		"-e", "A=1",
+		"--env=B=2",
+		"--env", "C=3",
+	}}}.Plan()
+
+	if !slices.Equal(p.Workload, []string{"k0s", "worker"}) {
+		t.Errorf("workload = %v, want [k0s worker]", p.Workload)
+	}
+	if !slices.Equal(p.Env, []string{"A=1", "B=2", "C=3"}) {
+		t.Errorf("env = %v, want [A=1 B=2 C=3]", p.Env)
+	}
+}
+
 func TestPlanHandlesWorkerRole(t *testing.T) {
 	p := UserData{RunCmd: [][]string{
 		{"/usr/local/bin/k0s", "install", "worker", "--token-file", "/etc/k0s/join-token"},
