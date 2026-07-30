@@ -32,8 +32,11 @@ var Default = []string{
 	// the node NotReady. nft_compat is what makes the iptables-nft shim work.
 	"nfnetlink", "nf_tables", "nft_compat", "nft_chain_nat",
 
-	// Legacy iptables path, in case k0s picks it instead.
+	// Legacy iptables path, in case k0s picks it instead. IPv6 too: kube-proxy
+	// programs both families and reports failure for either.
 	"ip_tables", "iptable_nat", "iptable_filter",
+	"ip6_tables", "ip6table_nat", "ip6table_filter",
+	"nf_reject_ipv6", "nft_reject_ipv6",
 
 	// Connection tracking and the xtables matches/targets kube-proxy emits.
 	// REJECT in particular is not optional: kube-proxy's KUBE-SERVICES chain
@@ -45,7 +48,9 @@ var Default = []string{
 	"ipt_REJECT", "nft_ct", "nft_nat", "nft_masq",
 	"xt_conntrack", "xt_MASQUERADE", "xt_comment", "xt_mark", "xt_tcpudp",
 	"xt_multiport", "xt_addrtype", "xt_statistic", "xt_nat", "xt_recent",
-	"nfnetlink_acct",
+	// nfacct: kube-proxy's KUBE-FORWARD counts invalid-conntrack drops with
+	// `-m nfacct`, so without the match module that chain fails to load.
+	"nfnetlink_acct", "xt_nfacct",
 
 	// ipsets, used by kube-router for its firewall rules.
 	"ip_set", "ip_set_hash_ip", "ip_set_hash_net", "xt_set",
