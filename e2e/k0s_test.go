@@ -22,7 +22,9 @@ func requireFullSuite(t *testing.T) {
 func TestK0sNodeReachesReady(t *testing.T) {
 	requireFullSuite(t)
 	requireArtifacts(t, "dist/k0smos.img", "dist/k0smos-initramfs.gz")
-	disk := cloneDisk(t, filepath.Join(repoRoot(t), "dist/k0smos.img"))
+	base := filepath.Join(repoRoot(t), "dist/k0smos.img")
+	requirePristineDisk(t, base)
+	disk := cloneDisk(t, base)
 
 	iso := makeCidata(t, `#cloud-config
 write_files:
@@ -66,7 +68,9 @@ runcmd:
 func TestK0sAppliesShippedManifest(t *testing.T) {
 	requireFullSuite(t)
 	requireArtifacts(t, "dist/k0smos.img", "dist/k0smos-initramfs.gz")
-	disk := cloneDisk(t, filepath.Join(repoRoot(t), "dist/k0smos.img"))
+	base := filepath.Join(repoRoot(t), "dist/k0smos.img")
+	requirePristineDisk(t, base)
+	disk := cloneDisk(t, base)
 
 	manifest := `apiVersion: v1
 kind: Namespace
@@ -112,7 +116,9 @@ runcmd:
 func TestK0sEtcdLeaveIsAttemptedOnShutdown(t *testing.T) {
 	requireFullSuite(t)
 	requireArtifacts(t, "dist/k0smos.img", "dist/k0smos-initramfs.gz")
-	disk := cloneDisk(t, filepath.Join(repoRoot(t), "dist/k0smos.img"))
+	base := filepath.Join(repoRoot(t), "dist/k0smos.img")
+	requirePristineDisk(t, base)
+	disk := cloneDisk(t, base)
 
 	iso := makeCidata(t, `#cloud-config
 write_files:
