@@ -31,6 +31,14 @@ func (s *Sys) WriteFile(path string, data []byte, perm os.FileMode) error {
 
 func (s *Sys) ReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
 
+// MkdirAll, Chmod, Chown and Symlink carry out the file operations interpreted
+// from cloud-init runcmd (see internal/metadata). They exist so k0smos can
+// honour those entries without exec'ing coreutils it does not ship.
+func (s *Sys) MkdirAll(path string, perm os.FileMode) error { return os.MkdirAll(path, perm) }
+func (s *Sys) Chmod(path string, mode os.FileMode) error    { return os.Chmod(path, mode) }
+func (s *Sys) Chown(path string, uid, gid int) error        { return os.Chown(path, uid, gid) }
+func (s *Sys) Symlink(target, link string) error            { return os.Symlink(target, link) }
+
 // BlockDevices lists block device names from sysfs. sysfs is used rather than
 // /dev/disk/by-* because those symlinks come from udev, which k0smos does not
 // run; the device nodes in /dev come from devtmpfs and do exist.
