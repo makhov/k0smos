@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
@@ -18,6 +19,7 @@ import (
 	"github.com/amakhov/k0smos/internal/config"
 	"github.com/amakhov/k0smos/internal/control"
 	"github.com/amakhov/k0smos/internal/dhcp"
+	"github.com/amakhov/k0smos/internal/metadata"
 	"github.com/amakhov/k0smos/internal/module"
 	"github.com/amakhov/k0smos/internal/mount"
 	knet "github.com/amakhov/k0smos/internal/net"
@@ -55,6 +57,11 @@ const (
 	// How long to keep looking for the root device before giving up.
 	rootProbeAttempts = 30
 	rootProbeInterval = 500 * time.Millisecond
+
+	// metadataMount is where a cloud-init drive is mounted while being read.
+	metadataMount = "/run/k0smos/metadata"
+	// msReadOnly is MS_RDONLY: a metadata drive is never written to.
+	msReadOnly = 0x1
 
 	// childGrace is how long the k0s child gets to exit after ctx cancellation
 	// before we start detaching filesystems under it.
@@ -173,6 +180,80 @@ func configureDHCP(ctx context.Context, s *sys.Sys, cfg config.Config) (string, 
 		return lease.DNS[0].String(), nil
 	}
 	return "", nil
+}
+
+// loadMetadata finds a cloud-init drive, applies its write_files, and returns
+// what it said. This is how Cluster API hands a machine its identity: a
+// bootstrap provider renders a cloud-config, and the infrastructure provider
+// attaches it as a NoCloud ISO or an OpenStack config-drive.
+//
+// Everything here is best-effort. A machine with no such drive — a manual boot,
+// or a platform that supplies nothing — must still come up.
+func loadMetadata(s *sys.Sys) (metadata.UserData, metadata.MetaData) {
+	var ud metadata.UserData
+	var md metadata.MetaData
+
+	dev := ""
+	label := ""
+	for _, l := range metadata.Labels {
+		if d, err := blkid.Resolve(s, "LABEL="+l); err == nil {
+			dev, label = d, l
+			break
+		}
+	}
+	if dev == "" {
+		return ud, md
+	}
+
+	if err := s.Mkdir(metadataMount, 0755); err != nil {
+		logf("warn: mkdir %s: %v", metadataMount, err)
+		return ud, md
+	}
+	// Try each filesystem: NoCloud drives are iso9660, config-drives usually
+	// vfat, and the label alone does not say which.
+	mounted := false
+	for _, fstype := range []string{"iso9660", "vfat", "ext4"} {
+		if err := s.Mount(dev, metadataMount, fstype, msReadOnly, ""); err == nil {
+			mounted = true
+			logf("mounted %s (%s, LABEL=%s) at %s", dev, fstype, label, metadataMount)
+			break
+		}
+	}
+	if !mounted {
+		logf("warn: could not mount metadata drive %s", dev)
+		return ud, md
+	}
+	defer func() {
+		if err := s.Unmount(metadataMount, 0); err != nil {
+			logf("warn: unmount %s: %v", metadataMount, err)
+		}
+	}()
+
+	ud, md, err := metadata.Load(metadataMount)
+	if err != nil {
+		logf("warn: read metadata: %v", err)
+		return metadata.UserData{}, metadata.MetaData{}
+	}
+	for _, w := range ud.Warnings {
+		logf("metadata: %s", w)
+	}
+	if len(ud.WriteFiles) > 0 {
+		if err := metadata.Apply(ud, s.Mkdir, s.WriteFile); err != nil {
+			logf("warn: apply write_files: %v", err)
+		} else {
+			logf("wrote %d file(s) from user-data", len(ud.WriteFiles))
+		}
+	}
+	return ud, md
+}
+
+// runOnce executes a setup command from user-data to completion, sending its
+// output to the console.
+func runOnce(ctx context.Context, argv []string) error {
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 // watchPowerButton returns a channel that fires when the hardware power button
@@ -340,10 +421,18 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		}
 	}
 
-	if err := s.Sethostname(cfg.Hostname); err != nil {
-		logf("warn: sethostname %q: %v", cfg.Hostname, err)
+	// Metadata is read after networking so a future HTTP source could work, and
+	// before the hostname is set so it can supply one. CAPI names machines, so
+	// its value wins over the cmdline default.
+	userData, metaData := loadMetadata(s)
+	hostname := cfg.Hostname
+	if metaData.Hostname != "" {
+		hostname = metaData.Hostname
+	}
+	if err := s.Sethostname(hostname); err != nil {
+		logf("warn: sethostname %q: %v", hostname, err)
 	} else {
-		logf("hostname set to %q", cfg.Hostname)
+		logf("hostname set to %q", hostname)
 	}
 
 	// Reaper: SIGCHLD -> coalescing trigger -> drain wait4.
@@ -365,13 +454,31 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	hostCmds := watchControlPort(runCtx)
 	powerBtn := watchPowerButton(runCtx)
 
-	logf("supervising %v", cfg.Exec)
+	// Setup commands from user-data run before the workload, in order. They are
+	// one-shot: failures are reported but do not stop the boot, matching
+	// cloud-init's own behaviour.
+	workload, oneshots := userData.Workload()
+	for _, cmd := range oneshots {
+		logf("running %v", cmd)
+		if err := runOnce(runCtx, cmd); err != nil {
+			logf("warn: %v: %v", cmd, err)
+		}
+	}
+	// A workload described by user-data wins: that is CAPI telling this machine
+	// whether it is a control plane or a worker, and with which join token.
+	workloadCmd := cfg.Exec
+	if len(workload) > 0 {
+		workloadCmd = workload
+		logf("workload from user-data")
+	}
+
+	logf("supervising %v", workloadCmd)
 	childDone := make(chan struct{})
 	go func() {
 		defer close(childDone)
 		_ = supervise.Run(runCtx, supervise.Options{
-			Command:    cfg.Exec[0],
-			Args:       cfg.Exec[1:],
+			Command:    workloadCmd[0],
+			Args:       workloadCmd[1:],
 			MaxBackoff: 10 * time.Second,
 			OnExit:     func(err error) { logf("child exited: %v", err) },
 		})

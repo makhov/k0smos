@@ -78,6 +78,14 @@ boot=(-initrd "$initramfs")
 # With a disk attached, k0smos loads the storage modules and switch_roots onto
 # it. Without one it stays on the initramfs — fine for an init smoke test, but
 # kubelet cannot run on a ramfs root.
+# A cloud-init drive, as a CAPI infrastructure provider would attach. Build one
+# with xorriso: `xorriso -as mkisofs -V cidata -J -r -o cidata.iso <dir>/`
+# containing user-data and meta-data.
+if [ -n "${CIDATA:-}" ]; then
+  [ -f "$CIDATA" ] || { echo "cloud-init drive $CIDATA not found" >&2; exit 1; }
+  boot+=(-drive file="$CIDATA",if=virtio,format=raw,readonly=on)
+fi
+
 if [ -n "$img" ]; then
   [ -f "$img" ] || { echo "disk $img not found — run 'make disk'" >&2; exit 1; }
   boot+=(-drive file="$img",if=virtio,format=raw)
