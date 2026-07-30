@@ -31,6 +31,32 @@ func (s *Sys) WriteFile(path string, data []byte, perm os.FileMode) error {
 
 func (s *Sys) ReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
 
+// BlockDevices lists block device names from sysfs. sysfs is used rather than
+// /dev/disk/by-* because those symlinks come from udev, which k0smos does not
+// run; the device nodes in /dev come from devtmpfs and do exist.
+func (s *Sys) BlockDevices() ([]string, error) {
+	entries, err := os.ReadDir("/sys/class/block")
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names, nil
+}
+
+// ReadAt fills p from /dev/<dev> at off.
+func (s *Sys) ReadAt(dev string, p []byte, off int64) error {
+	f, err := os.Open("/dev/" + dev)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.ReadAt(p, off)
+	return err
+}
+
 func (s *Sys) Chdir(dir string) error  { return unix.Chdir(dir) }
 func (s *Sys) Chroot(dir string) error { return unix.Chroot(dir) }
 

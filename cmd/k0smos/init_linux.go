@@ -13,12 +13,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/amakhov/k0smos/internal/blkid"
 	"github.com/amakhov/k0smos/internal/cgroup"
 	"github.com/amakhov/k0smos/internal/config"
 	"github.com/amakhov/k0smos/internal/control"
 	"github.com/amakhov/k0smos/internal/module"
 	"github.com/amakhov/k0smos/internal/mount"
 	knet "github.com/amakhov/k0smos/internal/net"
+	"github.com/amakhov/k0smos/internal/power"
 	"github.com/amakhov/k0smos/internal/reaper"
 	"github.com/amakhov/k0smos/internal/shutdown"
 	"github.com/amakhov/k0smos/internal/supervise"
@@ -44,8 +46,14 @@ const (
 	// side is set up by image/run-qemu.sh.
 	virtioPortsDir  = "/sys/class/virtio-ports"
 	controlPortName = "k0smos.control"
+	// inputDevDir holds the evdev nodes the ACPI power button reports through.
+	inputDevDir = "/dev/input"
 	// controlRetry is how long to wait before reopening an idle control port.
 	controlRetry = time.Second
+
+	// How long to keep looking for the root device before giving up.
+	rootProbeAttempts = 30
+	rootProbeInterval = 500 * time.Millisecond
 
 	// childGrace is how long the k0s child gets to exit after ctx cancellation
 	// before we start detaching filesystems under it.
@@ -109,16 +117,69 @@ func watchControlPort(ctx context.Context) <-chan control.Command {
 	}, controlRetry)
 }
 
+// watchPowerButton returns a channel that fires when the hardware power button
+// is pressed, or nil if there are no input devices to watch.
+//
+// Every /dev/input/event* is watched because which one carries the power key
+// depends on the platform, and without udev there are no by-path symlinks to
+// pick from. Non-power events are filtered out by internal/power.
+func watchPowerButton(ctx context.Context) <-chan struct{} {
+	entries, err := os.ReadDir(inputDevDir)
+	if err != nil {
+		return nil // no evdev: no ACPI button, or the module is not loaded
+	}
+	merged := make(chan struct{})
+	watched := 0
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "event") {
+			continue
+		}
+		f, err := os.Open(filepath.Join(inputDevDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		watched++
+		go func() {
+			for range power.Watch(ctx, f) {
+				select {
+				case merged <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+	if watched == 0 {
+		return nil
+	}
+	logf("watching %d input device(s) for the power button", watched)
+	return merged
+}
+
 // pivot mounts the real root filesystem and switches into it, re-executing
 // k0smos there as PID1. It does not return on success.
 func pivot(s *sys.Sys, cfg config.Config) error {
+	// UUID=/LABEL= are resolved here rather than passed to mount(2): on real
+	// hardware disks enumerate as /dev/sda or /dev/nvme0n1 and can reorder
+	// between boots. Retried because virtio_blk and friends probe
+	// asynchronously, so the device can appear just after its module loads.
+	dev, err := blkid.ResolveWait(s, cfg.Root, rootProbeAttempts, func() {
+		time.Sleep(rootProbeInterval)
+	})
+	if err != nil {
+		return fmt.Errorf("find root %s: %w", cfg.Root, err)
+	}
+	if dev != cfg.Root {
+		logf("resolved %s to %s", cfg.Root, dev)
+	}
+
 	if err := s.Mkdir(newRootDir, 0755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", newRootDir, err)
 	}
-	if err := s.Mount(cfg.Root, newRootDir, cfg.RootFSType, 0, cfg.RootFlags); err != nil {
-		return fmt.Errorf("mount %s (%s): %w", cfg.Root, cfg.RootFSType, err)
+	if err := s.Mount(dev, newRootDir, cfg.RootFSType, 0, cfg.RootFlags); err != nil {
+		return fmt.Errorf("mount %s (%s): %w", dev, cfg.RootFSType, err)
 	}
-	logf("mounted %s at %s, switching root", cfg.Root, newRootDir)
+	logf("mounted %s at %s, switching root", dev, newRootDir)
 	// The marker tells the next k0smos it is already on the real root, so it
 	// proceeds with the rest of init instead of trying to switch again.
 	return switchroot.Do(s, newRootDir, initPath, []string{initPath, switchedFlag})
@@ -232,6 +293,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	// Started before the child so a host shutdown request is never missed while
 	// k0s is coming up, which can take minutes.
 	hostCmds := watchControlPort(runCtx)
+	powerBtn := watchPowerButton(runCtx)
 
 	logf("supervising %v", cfg.Exec)
 	childDone := make(chan struct{})
@@ -269,6 +331,15 @@ wait:
 			if cmd == control.Reboot {
 				how = shutdown.Reboot
 			}
+			break wait
+		case _, ok := <-powerBtn:
+			// Same closed-channel hazard as above: a closed channel yields a
+			// zero value that must not be read as a button press.
+			if !ok {
+				powerBtn = nil
+				continue
+			}
+			logf("power button pressed, shutting down")
 			break wait
 		case <-ctx.Done():
 			logf("context cancelled, shutting down")
