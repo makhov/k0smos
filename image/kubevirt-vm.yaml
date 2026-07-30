@@ -1,0 +1,86 @@
+# A KubeVirt VM booting k0smos. Standalone example — under Cluster API the
+# equivalent fields live in the KubevirtMachineTemplate, and cloudInitNoCloud
+# is populated by CAPK from the bootstrap Secret rather than written by hand.
+#
+# Field names verified against kubevirt.io/api/core/v1: KernelBoot{KernelArgs,
+# Container{Image, KernelPath, InitrdPath}}.
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: k0smos-0
+spec:
+  runStrategy: Always
+  template:
+    spec:
+      domain:
+        cpu:
+          cores: 4
+        memory:
+          guest: 8Gi
+        firmware:
+          kernelBoot:
+            # Direct kernel boot: the initramfs is k0smos, which loads the
+            # storage modules and then switch_roots onto the disk below. A stock
+            # kernel cannot mount that ext4 root by itself.
+            kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp"
+            container:
+              image: ghcr.io/amakhov/k0smos-boot:dev
+              kernelPath: /boot/vmlinuz
+              initrdPath: /boot/initramfs.gz
+        devices:
+          disks:
+            - name: root
+              disk:
+                bus: virtio
+            - name: bootstrap
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              masquerade: {}
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: root
+          containerDisk:
+            image: ghcr.io/amakhov/k0smos-disk:dev
+        # Cloud-init bootstrap data. CAPK fills this from the bootstrap Secret;
+        # k0smos finds the drive by its "cidata" label, applies write_files, and
+        # takes the k0s role and args from the k0s install line in runcmd.
+        - name: bootstrap
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              write_files:
+                - path: /etc/k0s/k0s.yaml
+                  permissions: "0644"
+                  content: |
+                    apiVersion: k0s.k0sproject.io/v1beta1
+                    kind: ClusterConfig
+                    spec:
+                      storage:
+                        type: kine
+              runcmd:
+                - /usr/local/bin/k0s install controller --single --config /etc/k0s/k0s.yaml
+                - /usr/local/bin/k0s start
+            networkData: |
+              version: 2
+              ethernets:
+                eth0:
+                  dhcp4: true
+---
+# Notes for the Cluster API path (CAPK + k0smotron):
+#
+#   * Set preInstalledK0s: true in the K0sControllerConfig/K0sWorkerConfig spec.
+#     k0smotron's DownloadCommands returns nothing when it is set, so no
+#     curl/wget commands are emitted — the image already ships k0s.
+#
+#   * k0smos interprets runcmd rather than executing it. `k0s install <role>`
+#     becomes the supervised workload, install-only flags (--force) are dropped,
+#     and `--env KEY=VALUE` is applied to the child's environment. Anything else
+#     is logged UNSUPPORTED and skipped, so avoid PreK0sCommands/PostK0sCommands
+#     that assume a shell.
+#
+#   * Deleting the VM raises an ACPI power button event, which k0smos honours by
+#     shutting down cleanly. No extra channel is needed on KubeVirt.

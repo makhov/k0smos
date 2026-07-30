@@ -67,6 +67,48 @@ k0smos honours. `virsh console` gives you the boot log.
 With real KVM this boots considerably faster than the HVF setup used for
 development.
 
+## KubeVirt (and Cluster API via CAPK + k0smotron)
+
+KubeVirt needs two OCI artifacts, because it cannot direct-kernel-boot from the
+same place it gets the root disk. `make oci` builds both:
+
+```bash
+ARCH=x86_64 REGISTRY=ghcr.io/you TAG=v0 PUSH=1 make oci
+```
+
+- `k0smos-boot:<tag>` — `/boot/vmlinuz` and `/boot/initramfs.gz`, referenced by
+  `spec.domain.firmware.kernelBoot.container`
+- `k0smos-disk:<tag>` — the ext4 root at `/disk/k0smos.img`, the containerDisk
+  convention
+
+`image/kubevirt-vm.yaml` is a complete working VM spec. The essentials:
+
+```yaml
+firmware:
+  kernelBoot:
+    kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp"
+    container:
+      image: ghcr.io/you/k0smos-boot:v0
+      kernelPath: /boot/vmlinuz
+      initrdPath: /boot/initramfs.gz
+```
+
+Under Cluster API the same fields live in the `KubevirtMachineTemplate`, and
+CAPK populates `cloudInitNoCloud` from the bootstrap Secret rather than you
+writing it. Two things to know:
+
+- **Set `preInstalledK0s: true`** in the `K0sControllerConfig` /
+  `K0sWorkerConfig` spec. k0smotron's `DownloadCommands` returns nothing when it
+  is set, so no `curl`/`wget` commands are emitted — the image already ships k0s.
+- **runcmd is interpreted, not executed** (see
+  [architecture.md](architecture.md)). `k0s install <role>` becomes the
+  supervised workload, `--force` is dropped, `--env KEY=VALUE` is applied to the
+  child's environment, and anything else is logged `UNSUPPORTED`. Avoid
+  `preK0sCommands`/`postK0sCommands` that assume a shell.
+
+Deleting a VM raises an ACPI power button event, which k0smos honours by shutting
+down cleanly, so no extra channel is needed.
+
 ## Bare metal
 
 Works in principle, with two things to arrange.
