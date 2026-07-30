@@ -22,7 +22,7 @@ spec:
             # Direct kernel boot: the initramfs is k0smos, which loads the
             # storage modules and then switch_roots onto the disk below. A stock
             # kernel cannot mount that ext4 root by itself.
-            kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp"
+            kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.data=auto"
             container:
               image: ghcr.io/amakhov/k0smos-boot:dev
               kernelPath: /boot/vmlinuz
@@ -35,6 +35,9 @@ spec:
             - name: bootstrap
               disk:
                 bus: virtio
+            - name: data
+              disk:
+                bus: virtio
           interfaces:
             - name: default
               masquerade: {}
@@ -45,6 +48,11 @@ spec:
         - name: root
           containerDisk:
             image: ghcr.io/amakhov/k0smos-disk:dev
+        # Mutable data at /var/lib/k0s. emptyDisk shares the VMI lifecycle:
+        # kept across a guest reboot, gone when the VM is deleted.
+        - name: data
+          emptyDisk:
+            capacity: 20Gi
         # Cloud-init bootstrap data. CAPK fills this from the bootstrap Secret;
         # k0smos finds the drive by its "cidata" label, applies write_files, and
         # takes the k0s role and args from the k0s install line in runcmd.

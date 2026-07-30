@@ -112,6 +112,12 @@ Three things that are easy to get wrong:
   exercises.
 - **Do not add a cloud-init volume yourself.** CAPK appends the volume and disk
   from the bootstrap Secret.
+- **Attach a data volume** and pass `k0smos.data=auto`. The manifests use
+  KubeVirt's `emptyDisk`, which shares the VMI's lifecycle: it survives a guest
+  reboot and is discarded when the machine is replaced. That is what makes these
+  nodes disposable without being diskless — kubelet gets a real filesystem, etcd
+  survives an in-place reboot, and images are cached rather than re-pulled. Swap
+  it for a `DataVolume`/PVC if you want it to outlive the machine.
 
 Two more things to know:
 
@@ -201,11 +207,11 @@ machine down cleanly, then read the disk with `debugfs`; see
 **Data — treat every machine as disposable.** k0s state lives in `/var/lib/k0s`
 on the root filesystem, and nothing is designed to outlive the machine:
 
-- On **KubeVirt**, a `containerDisk` is read-only. The guest writes to an
-  ephemeral overlay in the virt-launcher pod, discarded when the pod goes away,
-  so a restart is a full re-bootstrap. That is fine by design — the workload
-  comes from user-data on every boot — but it means the root disk is working
-  space for extracted binaries and pulled images, not storage.
+- On **KubeVirt**, a `containerDisk` is read-only and the guest writes to an
+  ephemeral overlay discarded with the pod. The root is therefore never storage.
+  Attach a data volume (`k0smos.data=auto`) and everything mutable lands there
+  instead: with `emptyDisk` it survives a guest reboot and dies with the machine;
+  with a `DataVolume`/PVC it outlives both.
 - On **bare metal** the disk does persist across reboots, but Cluster API still
   replaces machines rather than repairing them, so do not rely on it.
 
