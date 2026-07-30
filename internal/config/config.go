@@ -27,6 +27,16 @@ type Config struct {
 	RootFSType string
 	RootFlags  string
 
+	// Data selects the mutable data volume, mounted at DataDir. This follows
+	// Talos's split: an interchangeable root plus a separate volume holding
+	// everything that changes, so a machine can be disposable without being
+	// diskless. "auto" finds a volume labelled DataLabel or formats the single
+	// blank device; a path or LABEL=/UUID= names one explicitly; empty disables it.
+	Data       string
+	DataLabel  string
+	DataFSType string
+	DataDir    string
+
 	// Path is the PATH exported to child processes. PID1 inherits no
 	// environment from anyone, so without this k0s and kubelet cannot find the
 	// iptables binaries k0s stages into /var/lib/k0s/bin, and kubelet reports
@@ -48,6 +58,9 @@ func Parse(cmdline string) Config {
 		Exec:       defaultExec,
 		Iface:      "eth0",
 		RootFSType: "ext4",
+		DataLabel:  "k0smos-data",
+		DataFSType: "ext4",
+		DataDir:    "/var/lib/k0s",
 		Path:       defaultPath,
 	}
 	for _, tok := range strings.Fields(cmdline) {
@@ -78,6 +91,20 @@ func Parse(cmdline string) Config {
 			}
 		case "rootflags":
 			c.RootFlags = v
+		case "data":
+			c.Data = v
+		case "datalabel":
+			if v != "" {
+				c.DataLabel = v
+			}
+		case "datafstype":
+			if v != "" {
+				c.DataFSType = v
+			}
+		case "datadir":
+			if v != "" {
+				c.DataDir = v
+			}
 		case "iface":
 			if v != "" {
 				c.Iface = v

@@ -149,6 +149,33 @@ write_files:
 	}
 }
 
+// The config-drive layout, which is what Cluster API on KubeVirt actually
+// attaches (CAPK uses CloudInitConfigDrive, so label "config-2" and
+// openstack/latest/ paths rather than NoCloud's "cidata" and /user-data).
+func TestConfigDriveLayoutIsConsumed(t *testing.T) {
+	requireArtifacts(t, "dist/k0smos.img", "dist/k0smos-initramfs.gz")
+	disk := cloneDisk(t, filepath.Join(repoRoot(t), "dist/k0smos.img"))
+
+	iso := makeConfigDrive(t, `#cloud-config
+write_files:
+  - path: /etc/k0s/from-config-drive
+    permissions: "0600"
+    content: |
+      arrived via openstack/latest/user_data
+`, `{"uuid":"i-cd-1","hostname":"cd-node"}`)
+
+	v := boot(t, bootOpts{Disk: disk, Cidata: iso, Exec: execNoop})
+	v.waitFor(`mounted /dev/vd\w+ \((iso9660|vfat), LABEL=config-2\)`, bootTimeout)
+	v.waitFor(`wrote 1 file\(s\) from user-data`, bootTimeout)
+	// meta_data.json spells the hostname differently from NoCloud's meta-data.
+	v.waitFor(`hostname set to "cd-node"`, bootTimeout)
+	v.stop()
+
+	if got := debugfsCmd(t, disk, "cat /etc/k0s/from-config-drive"); !strings.Contains(got, "openstack/latest") {
+		t.Errorf("config-drive user_data not applied: %q", got)
+	}
+}
+
 // DHCP against QEMU's built-in server, which hands out the same addresses a real
 // network would supply.
 func TestDHCPAcquiresLease(t *testing.T) {

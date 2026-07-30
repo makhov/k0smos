@@ -18,6 +18,7 @@ import (
 	"github.com/amakhov/k0smos/internal/cgroup"
 	"github.com/amakhov/k0smos/internal/config"
 	"github.com/amakhov/k0smos/internal/control"
+	"github.com/amakhov/k0smos/internal/datavol"
 	"github.com/amakhov/k0smos/internal/dhcp"
 	"github.com/amakhov/k0smos/internal/etcd"
 	"github.com/amakhov/k0smos/internal/metadata"
@@ -388,6 +389,13 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	// Only readable now that /proc is mounted.
 	cfg := config.Parse(readCmdline(cmdlinePath))
 
+	// Exported here rather than just before the workload: PID1 inherits no
+	// environment, and k0smos itself execs bundled binaries (mkfs for the data
+	// volume, k0s for the etcd leave) well before the child starts.
+	if err := os.Setenv("PATH", cfg.Path); err != nil {
+		logf("warn: set PATH: %v", err)
+	}
+
 	// Modules come before cgroup and net: a stock distro kernel ships virtio,
 	// ext4 and overlayfs as modules, so without this there is no NIC and no
 	// container storage. Failures are not fatal — the kernel may have the
@@ -404,6 +412,24 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		if err := pivot(s, cfg); err != nil {
 			return fmt.Errorf("switch root: %w", err)
 		}
+	}
+
+	// The mutable data volume, mounted before k0s can touch its data directory.
+	// Not fatal: without one, k0s falls back to the root filesystem, which is how
+	// a machine with no data volume already behaves.
+	if res, err := datavol.Prepare(s, datavol.Options{
+		Spec:       cfg.Data,
+		Label:      cfg.DataLabel,
+		FSType:     cfg.DataFSType,
+		MountPoint: cfg.DataDir,
+	}); err != nil {
+		logf("warn: data volume: %v", err)
+	} else if res.Device != "" {
+		verb := "mounted"
+		if res.Formatted {
+			verb = "formatted and mounted"
+		}
+		logf("%s data volume %s at %s", verb, res.Device, cfg.DataDir)
 	}
 
 	if err := cgroup.Setup(s); err != nil {
@@ -468,12 +494,6 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	trigger := make(chan struct{}, 1)
 	go pump(chld, trigger)
 	go reaper.Run(runCtx, s, trigger)
-
-	// PID1 starts with no environment at all, so children inherit an empty
-	// PATH and cannot exec the binaries k0s stages at runtime.
-	if err := os.Setenv("PATH", cfg.Path); err != nil {
-		logf("warn: set PATH: %v", err)
-	}
 
 	// Started before the child so a host shutdown request is never missed while
 	// k0s is coming up, which can take minutes.
