@@ -35,10 +35,17 @@ var Default = []string{
 	// Legacy iptables path, in case k0s picks it instead.
 	"ip_tables", "iptable_nat", "iptable_filter",
 
-	// Connection tracking and the xtables matches kube-proxy emits.
+	// Connection tracking and the xtables matches/targets kube-proxy emits.
+	// REJECT in particular is not optional: kube-proxy's KUBE-SERVICES chain
+	// rejects traffic to services with no endpoints, and without it
+	// iptables-restore fails the whole batch with `RULE_APPEND failed (No such
+	// file or directory)`, so no service rules are programmed at all.
 	"nf_conntrack", "nf_conntrack_netlink", "nf_nat",
-	"xt_conntrack", "xt_MASQUERADE", "xt_comment", "xt_mark",
-	"xt_multiport", "xt_addrtype", "xt_statistic", "xt_nat",
+	"nf_reject_ipv4", "nft_reject", "nft_reject_ipv4", "nft_reject_inet",
+	"ipt_REJECT", "nft_ct", "nft_nat", "nft_masq",
+	"xt_conntrack", "xt_MASQUERADE", "xt_comment", "xt_mark", "xt_tcpudp",
+	"xt_multiport", "xt_addrtype", "xt_statistic", "xt_nat", "xt_recent",
+	"nfnetlink_acct",
 
 	// ipsets, used by kube-router for its firewall rules.
 	"ip_set", "ip_set_hash_ip", "ip_set_hash_net", "xt_set",
