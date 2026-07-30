@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
@@ -247,15 +246,6 @@ func loadMetadata(s *sys.Sys) (metadata.UserData, metadata.MetaData) {
 	return ud, md
 }
 
-// runOnce executes a setup command from user-data to completion, sending its
-// output to the console.
-func runOnce(ctx context.Context, argv []string) error {
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
 // watchPowerButton returns a channel that fires when the hardware power button
 // is pressed, or nil if there are no input devices to watch.
 //
@@ -454,21 +444,24 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	hostCmds := watchControlPort(runCtx)
 	powerBtn := watchPowerButton(runCtx)
 
-	// Setup commands from user-data run before the workload, in order. They are
-	// one-shot: failures are reported but do not stop the boot, matching
-	// cloud-init's own behaviour.
-	workload, oneshots := userData.Workload()
-	for _, cmd := range oneshots {
-		logf("running %v", cmd)
-		if err := runOnce(runCtx, cmd); err != nil {
-			logf("warn: %v: %v", cmd, err)
-		}
+	// runcmd is interpreted, never executed: k0smos does not exec binaries named
+	// in user-data, so machine state stays a function of its configuration and
+	// the image needs neither a shell nor coreutils.
+	plan := userData.Plan()
+	for _, cmd := range plan.Unsupported {
+		logf("user-data: UNSUPPORTED runcmd %v, skipped", cmd)
+	}
+	for _, err := range metadata.RunActions(s, plan.Actions) {
+		logf("warn: user-data action: %v", err)
+	}
+	if n := len(plan.Actions); n > 0 {
+		logf("applied %d file action(s) from runcmd", n)
 	}
 	// A workload described by user-data wins: that is CAPI telling this machine
 	// whether it is a control plane or a worker, and with which join token.
 	workloadCmd := cfg.Exec
-	if len(workload) > 0 {
-		workloadCmd = workload
+	if len(plan.Workload) > 0 {
+		workloadCmd = plan.Workload
 		logf("workload from user-data")
 	}
 

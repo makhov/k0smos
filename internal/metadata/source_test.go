@@ -40,8 +40,7 @@ func TestLoadConfigDriveLayout(t *testing.T) {
 	if md.Hostname != "node-2" {
 		t.Errorf("hostname = %q, want node-2", md.Hostname)
 	}
-	argv, _ := ud.Workload()
-	if len(argv) != 2 || argv[1] != "worker" {
+	if argv := ud.Plan().Workload; len(argv) != 2 || argv[1] != "worker" {
 		t.Errorf("workload = %v, want [k0s worker]", argv)
 	}
 }

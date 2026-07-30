@@ -108,6 +108,41 @@ pieces kube-proxy needs, ipsets, veth/bridge, and the ACPI power button.
 Modules absent from the running kernel are skipped, so the same list is safe on
 a monolithic kernel.
 
+## Cluster API / cloud-init
+
+k0smos reads bootstrap data from a cloud-init drive — a NoCloud ISO labelled
+`cidata` or an OpenStack config-drive labelled `config-2` — which is how Cluster
+API hands a machine its identity.
+
+Supported, from `user-data`:
+
+| Key | Behaviour |
+|---|---|
+| `write_files` | Written with the requested `permissions`; `encoding: b64` decoded; parent directories created |
+| `runcmd`: `k0s install <role> …` | Becomes the supervised workload (`k0s <role> …`) |
+| `runcmd`: `k0s start`/`stop`, `systemctl`, `service` | Dropped — there is no service manager |
+| `runcmd`: `mkdir`, `chmod`, `chown`, `ln -s` | **Interpreted** and performed via syscalls |
+| `runcmd`: anything else | Logged `UNSUPPORTED` and skipped |
+
+And from `meta-data`: `local-hostname`/`hostname` sets the hostname (overriding
+`k0smos.hostname=`), plus `instance-id`.
+
+**k0smos never executes a binary named in user-data.** Commands are interpreted,
+which is why the image needs no shell and no coreutils — and why anything not in
+the table above is refused rather than half-applied. Bare-string `runcmd` entries
+containing shell syntax (`|`, `>`, `&&`, `$(…)`) are skipped with a warning, since
+honouring them would require a shell.
+
+To try it locally, build a drive and pass `CIDATA=`:
+
+```bash
+mkdir -p /tmp/cidata
+printf '#cloud-config\nwrite_files:\n  - path: /etc/demo\n    content: hi\n' > /tmp/cidata/user-data
+printf 'instance-id: i-1\nlocal-hostname: node-1\n' > /tmp/cidata/meta-data
+xorriso -as mkisofs -V cidata -J -r -o dist/cidata.iso /tmp/cidata
+IMG=dist/k0smos.img CIDATA=dist/cidata.iso ./image/run-qemu.sh
+```
+
 ## Script environment variables
 
 `image/run-qemu.sh` and the builders are driven by environment variables:
@@ -122,6 +157,7 @@ a monolithic kernel.
 | `SERIAL` | run-qemu | `stdio` (default) or a file path for headless runs |
 | `CONTROL` | run-qemu | control socket path (default `dist/control.sock`) |
 | `MONITOR` | run-qemu | optional QEMU monitor socket |
+| `CIDATA` | run-qemu | cloud-init drive (ISO) to attach |
 | `NET_ARGS` | run-qemu | replaces the default `k0smos.ip=…` cmdline fragment |
 | `ROOT` | run-qemu | overrides `k0smos.root=` (default `LABEL=k0smos`) |
 | `EXEC` | run-qemu | sets `k0smos.exec=` |

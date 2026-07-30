@@ -144,6 +144,41 @@ an alias — is loaded first. A module that fails is logged and skipped rather
 than aborting the list, so one bad module cannot cost you ext4, overlayfs and
 netfilter.
 
+## Why runcmd is interpreted and never executed
+
+Cluster API hands a machine its identity as cloud-init user-data: a bootstrap
+provider (kubeadm, or k0smotron for k0s) renders a cloud-config, and the
+infrastructure provider attaches it as a NoCloud ISO (`cidata`) or an OpenStack
+config-drive (`config-2`). Reading it is what tells a machine whether it is a
+control plane or a worker, and with which join token.
+
+But cloud-init assumes a machine k0smos deliberately is not: one with a shell
+and a service manager. Rather than acquiring those, k0smos **interprets**
+user-data instead of executing it — the same stance Talos takes, which supports
+no cloud-init and no arbitrary boot-time commands at all, because machine state
+should be a function of declared configuration.
+
+Concretely:
+
+- **`k0s install <role> …` followed by `k0s start`** is how providers register a
+  systemd unit. k0smos supervises one child, so the install form is translated
+  into the equivalent foreground command and service-manager calls are dropped.
+- **File verbs are interpreted, not run.** `mkdir`, `chmod`, `chown` and `ln -s`
+  become typed actions carried out with syscalls. This is why the image needs no
+  coreutils: an earlier version exec'd them and every entry failed with
+  `mkdir: executable file not found in $PATH`.
+- **Everything else is refused and logged.** `curl`, `sed`, a custom script — all
+  reported as `UNSUPPORTED runcmd` and skipped. Nothing named in user-data is
+  ever exec'd.
+- **Shell syntax is refused.** A bare-string runcmd is meant for a shell; one
+  containing `|`, `>`, `&&`, `$(…)` and so on is skipped with a warning rather
+  than mis-executed by naive word splitting.
+
+The trade-off is deliberate: some provider's user-data may ask for something
+k0smos ignores. A loud console line is better than half-applying a bootstrap, and
+far better than shipping a scripting substrate into an image specified to have
+none.
+
 ## Why there are two shutdown triggers
 
 A guest must be stoppable cleanly, or its filesystem is corrupted on every stop.
