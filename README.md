@@ -118,7 +118,7 @@ Supported, from `user-data`:
 
 | Key | Behaviour |
 |---|---|
-| `write_files` | Written with the requested `permissions`; `encoding: b64` decoded; parent directories created |
+| `write_files` | Written with the requested `permissions`; parent directories created. Encodings: plain, `b64`/`base64`, and `gz+base64`/`gzip+base64`/`gz+b64`/`gzip+b64` |
 | `runcmd`: `k0s install <role> …` | Becomes the supervised workload (`k0s <role> …`) |
 | `runcmd`: `k0s start`/`stop`, `systemctl`, `service` | Dropped — there is no service manager |
 | `runcmd`: `mkdir`, `chmod`, `chown`, `ln -s` | **Interpreted** and performed via syscalls |
@@ -126,6 +126,25 @@ Supported, from `user-data`:
 
 And from `meta-data`: `local-hostname`/`hostname` sets the hostname (overriding
 `k0smos.hostname=`), plus `instance-id`.
+
+### Deploying Kubernetes resources without a shell
+
+k0s applies anything left in `/var/lib/k0s/manifests/<stack>/`, so addons ship as
+`write_files` entries rather than `kubectl apply` in `runcmd` — which is what
+makes refusing arbitrary commands practical:
+
+```yaml
+write_files:
+  - path: /var/lib/k0s/manifests/my-addon/resources.yaml
+    permissions: "0644"
+    encoding: gzip+base64        # optional; manifests get large
+    content: H4sIAAAA...
+```
+
+The file must sit in a **subdirectory** of `manifests/` — that directory name is
+the stack. k0smos writes it before starting k0s, so it is applied on the first
+reconcile, and because nothing persists it is re-written and re-applied on every
+boot (idempotent by design).
 
 **k0smos never executes a binary named in user-data.** Commands are interpreted,
 which is why the image needs no shell and no coreutils — and why anything not in
