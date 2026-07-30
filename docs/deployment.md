@@ -180,10 +180,27 @@ k0smos.ip=10.0.0.20/24 k0smos.gw=10.0.0.1 k0smos.dns=10.0.0.53
 machine down cleanly, then read the disk with `debugfs`; see
 [Debugging](../README.md#debugging).
 
-**Data.** k0s state lives in `/var/lib/k0s` on the ext4 root and survives
-reboots. Rebuilding the disk image destroys the cluster. There is no A/B image
-scheme, so plan upgrades as rebuild-and-restore, or do not upgrade machines you
-care about yet.
+**Data — treat every machine as disposable.** k0s state lives in `/var/lib/k0s`
+on the root filesystem, and nothing is designed to outlive the machine:
+
+- On **KubeVirt**, a `containerDisk` is read-only. The guest writes to an
+  ephemeral overlay in the virt-launcher pod, discarded when the pod goes away,
+  so a restart is a full re-bootstrap. That is fine by design — the workload
+  comes from user-data on every boot — but it means the root disk is working
+  space for extracted binaries and pulled images, not storage.
+- On **bare metal** the disk does persist across reboots, but Cluster API still
+  replaces machines rather than repairing them, so do not rely on it.
+
+Size the root for the container images a node will pull (`PAD_MB=`, default 3072
+on top of the content). There is no A/B image scheme and no in-place upgrade:
+roll machines instead.
+
+**One consequence to plan for:** if you run the k0s control plane *on* k0smos
+machines with etcd, every replacement is an etcd membership change, and k0smos
+does not yet do a graceful `k0s etcd leave` on shutdown (see
+[architecture.md](architecture.md) on the k0sleave commands it skips). Running
+the control plane hosted in the management cluster, with k0smos machines as
+workers, avoids the question entirely.
 
 **Kubernetes access.** The API server listens on 6443. The admin kubeconfig is
 written inside the guest at `/var/lib/k0s/pki/admin.conf`; with no shell, the
