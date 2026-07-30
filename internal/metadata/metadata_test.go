@@ -1,6 +1,9 @@
 package metadata
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"slices"
 	"strings"
 	"testing"
@@ -101,6 +104,65 @@ write_files:
 	}
 	if got.WriteFiles[0].Content != "hello" {
 		t.Errorf("content = %q, want hello", got.WriteFiles[0].Content)
+	}
+}
+
+// Kubernetes manifests shipped through write_files are exactly the content
+// people compress, and cloud-init spells the encoding several ways.
+func TestParseUserDataGzipEncodings(t *testing.T) {
+	// gzip("apiVersion: v1\nkind: Namespace\n") base64-encoded.
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write([]byte("apiVersion: v1\nkind: Namespace\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	for _, enc := range []string{"gz+base64", "gzip+base64", "gz+b64", "gzip+b64"} {
+		doc := "#cloud-config\nwrite_files:\n  - path: /var/lib/k0s/manifests/x/ns.yaml\n" +
+			"    encoding: " + enc + "\n    content: " + b64 + "\n"
+		got, err := ParseUserData([]byte(doc))
+		if err != nil {
+			t.Fatalf("%s: %v", enc, err)
+		}
+		if len(got.WriteFiles) != 1 {
+			t.Fatalf("%s: skipped (%v)", enc, got.Warnings)
+		}
+		if !strings.Contains(got.WriteFiles[0].Content, "kind: Namespace") {
+			t.Errorf("%s: content = %q", enc, got.WriteFiles[0].Content)
+		}
+	}
+}
+
+// Bare "gz"/"gzip" is deliberately not supported: the content field arrives as
+// a JSON string (sigs.k8s.io/yaml converts YAML to JSON), which cannot carry raw
+// compressed bytes. That is why providers always use the base64 pairing.
+func TestParseUserDataBareGzipIsUnsupported(t *testing.T) {
+	doc := "#cloud-config\nwrite_files:\n  - path: /x\n    encoding: gzip\n    content: whatever\n"
+	got, err := ParseUserData([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.WriteFiles) != 0 || len(got.Warnings) == 0 {
+		t.Errorf("files = %v, warnings = %v; want it skipped with a warning", got.WriteFiles, got.Warnings)
+	}
+}
+
+func TestParseUserDataRejectsCorruptGzip(t *testing.T) {
+	doc := "#cloud-config\nwrite_files:\n  - path: /x\n    encoding: gzip+base64\n    content: " +
+		base64.StdEncoding.EncodeToString([]byte("not gzip at all")) + "\n"
+	got, err := ParseUserData([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.WriteFiles) != 0 {
+		t.Error("accepted corrupt gzip content")
+	}
+	if len(got.Warnings) == 0 {
+		t.Error("skipped without a warning")
 	}
 }
 

@@ -12,8 +12,12 @@
 package metadata
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"strconv"
 	"strings"
@@ -63,6 +67,47 @@ type cloudConfig struct {
 	RunCmd []any `json:"runcmd"`
 }
 
+// decodeContent applies cloud-init's write_files encoding.
+//
+// The gzip pairings matter for Kubernetes manifests: k0s applies anything left
+// in /var/lib/k0s/manifests/<stack>/, so shipping addons as files is the way to
+// deploy without a shell — and manifests are large enough that providers
+// compress them.
+//
+// Bare "gz"/"gzip" is not supported: content arrives as a JSON string, because
+// sigs.k8s.io/yaml converts YAML to JSON, and raw compressed bytes cannot travel
+// in one. That is exactly why the base64 pairing exists.
+func decodeContent(encoding, content string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(encoding)) {
+	case "", "text/plain":
+		return content, nil
+
+	case "b64", "base64":
+		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(content))
+		if err != nil {
+			return "", errors.New("bad base64")
+		}
+		return string(raw), nil
+
+	case "gz+base64", "gzip+base64", "gz+b64", "gzip+b64":
+		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(content))
+		if err != nil {
+			return "", errors.New("bad base64")
+		}
+		zr, err := gzip.NewReader(bytes.NewReader(raw))
+		if err != nil {
+			return "", fmt.Errorf("bad gzip: %w", err)
+		}
+		defer zr.Close()
+		out, err := io.ReadAll(zr)
+		if err != nil {
+			return "", fmt.Errorf("bad gzip: %w", err)
+		}
+		return string(out), nil
+	}
+	return "", fmt.Errorf("unsupported encoding %q", encoding)
+}
+
 // shellMeta are characters that only mean something to a shell. k0smos has no
 // shell, so a command containing them cannot be run faithfully.
 const shellMeta = "|&;<>$`*?()[]{}!~"
@@ -86,20 +131,10 @@ func ParseUserData(b []byte) (UserData, error) {
 	}
 
 	for _, f := range cc.WriteFiles {
-		content := f.Content
-		switch f.Encoding {
-		case "", "text/plain":
-		case "b64", "base64":
-			raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(content))
-			if err != nil {
-				out.Warnings = append(out.Warnings,
-					fmt.Sprintf("write_files %s: bad base64, skipped", f.Path))
-				continue
-			}
-			content = string(raw)
-		default:
+		content, err := decodeContent(f.Encoding, f.Content)
+		if err != nil {
 			out.Warnings = append(out.Warnings,
-				fmt.Sprintf("write_files %s: unsupported encoding %q, skipped", f.Path, f.Encoding))
+				fmt.Sprintf("write_files %s: %v, skipped", f.Path, err))
 			continue
 		}
 		out.WriteFiles = append(out.WriteFiles, WriteFile{
