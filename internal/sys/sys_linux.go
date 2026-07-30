@@ -77,6 +77,11 @@ func (s *Sys) Sync() { unix.Sync() }
 
 func (s *Sys) Reboot(cmd int) error { return unix.Reboot(cmd) }
 
+// KillAll signals every process except this one. kill(-1, sig) as PID1 reaches
+// everything else on the machine, which is how an init clears the way before
+// unmounting.
+func (s *Sys) KillAll(sig int) error { return unix.Kill(-1, unix.Signal(sig)) }
+
 // Reap collects one exited child. ok=false means "no child ready right now".
 func (s *Sys) Reap() (int, bool, error) {
 	var ws unix.WaitStatus
