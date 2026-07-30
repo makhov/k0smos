@@ -77,6 +77,8 @@ unaided. k0smos loads those, then `switch_root`s onto the ext4 image. See
 | `make disk` | build the ext4 root image |
 | `make smoke` | init-only boot, 1 GB, no k0s |
 | `make boot` | full boot: initramfs → switch_root → k0s |
+| `make e2e` | boot under QEMU and assert on behaviour — fast, no k0s (~40s/boot) |
+| `make e2e-full` | adds the k0s tests (node Ready, manifests, etcd leave) |
 | `make accept` | boot headless, wait for `Ready`, power off |
 | `make clean-dist` | delete `dist/` |
 
@@ -186,6 +188,25 @@ IMG=dist/k0smos.img CIDATA=dist/cidata.iso ./image/run-qemu.sh
 | `APK_PKGS` | mkrootfs | userspace packages for the root image |
 | `MODULES_DIR` | mkrootfs, mkinitramfs | module tree to bundle |
 | `MARKER`, `TIMEOUT`, `LOG` | acceptance | readiness pattern, deadline, log path |
+
+## Tests
+
+```bash
+make test       # unit tests: no root, no VM, ~1s
+make e2e        # boots under QEMU, asserts on behaviour. No k0s, ~40s per boot
+make e2e-full   # adds the k0s tests: node Ready, manifests, etcd leave
+```
+
+The unit tests cover the logic; **the e2e suite covers the things unit tests
+structurally cannot.** Every interesting bug in this project was found by
+booting — the cold-boot mount ordering, kubelet refusing a ramfs root, an empty
+PID1 `PATH`, missing netfilter modules, a closed channel read as a shutdown
+request. None of those were reachable from a unit test.
+
+The fast suite avoids k0s entirely by supervising a workload that exits
+immediately, which is what keeps it usable while iterating. It asserts on console
+output and, after a clean shutdown, on the guest's filesystem via `debugfs` —
+file contents, modes, symlinks, and that `e2fsck` finds nothing to repair.
 
 ## Debugging
 
