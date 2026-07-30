@@ -61,6 +61,35 @@ func requireArtifacts(t *testing.T, names ...string) {
 	}
 }
 
+// requirePristineDisk refuses to run a k0s test against a root image that
+// already holds cluster state.
+//
+// Booting a pre-bootstrapped image is silently useless: its PKI and kubelet.conf
+// belong to whatever node name built them, so a node with a new name never
+// registers and the test times out looking like a k0smos failure. This cost a
+// 25-minute run to diagnose, hence the guard.
+func requirePristineDisk(t *testing.T, img string) {
+	t.Helper()
+	abs, err := filepath.Abs(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("docker", "run", "--rm",
+		"-v", filepath.Dir(abs)+":/d", "alpine:3.20", "sh", "-c",
+		"apk add -q --no-cache e2fsprogs e2fsprogs-extra >/dev/null && "+
+			"debugfs -R 'ls /var/lib/k0s' /d/"+filepath.Base(abs)+" 2>/dev/null")
+	out, err := cmd.Output()
+	if err != nil {
+		return // cannot tell; let the test proceed and fail on its own terms
+	}
+	for _, stale := range []string{"pki", "kubelet.conf", "db"} {
+		if strings.Contains(string(out), stale) {
+			t.Skipf("%s already holds k0s state (%q) — rebuild it with 'make disk' "+
+				"before running the k0s tests", img, stale)
+		}
+	}
+}
+
 // vm is a running guest.
 type vm struct {
 	t       *testing.T
