@@ -11,7 +11,6 @@
 package blkid
 
 import (
-	"encoding/binary"
 	"fmt"
 	"strings"
 )
@@ -61,13 +60,9 @@ func Resolve(p Prober, spec string) (string, error) {
 		return "", fmt.Errorf("list block devices: %w", err)
 	}
 	for _, dev := range devs {
-		buf := make([]byte, sbLen)
-		if err := p.ReadAt(dev, buf, sbOffset); err != nil {
-			continue // no media, busy, or too small — not our root
-		}
-		uuid, label, ok := parse(buf)
+		uuid, label, ok := identify(p, dev)
 		if !ok {
-			continue // no ext4 superblock here
+			continue // no filesystem we recognise
 		}
 		got := label
 		if byUUID {
@@ -98,17 +93,20 @@ func ResolveWait(p Prober, spec string, attempts int, sleep func()) (string, err
 	return "", err
 }
 
-// parse extracts the UUID and label from a superblock, reporting false when the
-// ext4 magic is absent.
-func parse(sb []byte) (uuid, label string, ok bool) {
-	if len(sb) < sbLabelOff+16 {
-		return "", "", false
+// identify tries each known filesystem on dev, returning the first match. A
+// device that cannot be read is not an error: an empty drive or one too small
+// for a given probe simply is not the thing being looked for.
+func identify(p Prober, dev string) (uuid, label string, ok bool) {
+	for _, pr := range probers {
+		buf := make([]byte, pr.length)
+		if err := p.ReadAt(dev, buf, pr.offset); err != nil {
+			continue
+		}
+		if uuid, label, ok := pr.parse(buf); ok {
+			return uuid, label, true
+		}
 	}
-	if binary.LittleEndian.Uint16(sb[sbMagicOff:]) != ext4Magic {
-		return "", "", false
-	}
-	return formatUUID(sb[sbUUIDOff : sbUUIDOff+16]),
-		string(trimNUL(sb[sbLabelOff : sbLabelOff+16])), true
+	return "", "", false
 }
 
 // formatUUID renders 16 raw bytes in the canonical 8-4-4-4-12 form.

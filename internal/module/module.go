@@ -26,6 +26,11 @@ var Default = []string{
 	"virtio_net", "virtio_blk", "virtio_pci",
 	"ext4", "overlay",
 
+	// Cloud-init drives: Cluster API bootstrap data arrives as a NoCloud ISO
+	// (iso9660) or an OpenStack config-drive (usually vfat). nls_cp437 is what
+	// vfat needs to translate filenames.
+	"isofs", "vfat", "nls_cp437", "nls_utf8",
+
 	// nftables. k0s selects iptables-nft mode, and without these kube-proxy
 	// dies with `iptables: Failed to initialize nft: Protocol not supported`,
 	// which crashloops kube-proxy, starves kube-router of the API, and leaves
