@@ -170,6 +170,10 @@ Concretely:
 - **Everything else is refused and logged.** `curl`, `sed`, a custom script — all
   reported as `UNSUPPORTED runcmd` and skipped. Nothing named in user-data is
   ever exec'd.
+- **The k0sleave shell blocks are skipped**, but what they were for is done
+  natively: k0smos runs `k0s etcd leave` on shutdown (see below). That is the one
+  command k0smos executes, and it is not user-data driven — the binary is the
+  workload already being supervised and the subcommand is fixed in code.
 - **Shell syntax is refused.** A bare-string runcmd is meant for a shell; one
   containing `|`, `>`, `&&`, `$(…)` and so on is skipped with a warning rather
   than mis-executed by naive word splitting.
@@ -205,6 +209,24 @@ Two non-obvious details in the control port:
   yields the zero value; treating that as a request powered the machine off
   seconds into boot on the first attempt. The same hazard applies to the power
   button channel.
+
+## Why etcd is left before anything is stopped
+
+Nothing on a k0smos machine persists, and Cluster API replaces machines rather
+than repairing them, so every stop is effectively a permanent departure. An etcd
+member that disappears without leaving stays in the member list and counts
+against quorum — a three-controller cluster would degrade with each replacement.
+
+So `k0s etcd leave` runs first, before the child is signalled: a controller
+cannot give up its membership once it has been stopped. It is bounded by a
+timeout, because a cluster that has lost quorum cannot process the removal and
+must not be able to keep the machine alive. Skipped for workers (no membership)
+and for `--single`, which is kine-backed rather than etcd.
+
+Verified on a single-node cluster, where etcd correctly *refuses*: `rejecting
+member remove; started member will be less than quorum`. That is the request
+reaching etcd and being declined on quorum grounds, not a plumbing failure —
+k0smos logs it and shuts down cleanly regardless.
 
 ## Why shutdown kills everything before touching filesystems
 
