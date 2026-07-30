@@ -97,5 +97,8 @@ size_mb=$(( $(du -sm "$root" | cut -f1) + 3072 ))
 mkdir -p "$(dirname "$img")"
 rm -f "$img"
 truncate -s "${size_mb}M" "$img"
-mkfs.ext4 -q -d "$root" "$img"
-echo "wrote $img (${size_mb}M, linux/$goarch)"
+# -L so the root can be named as LABEL=k0smos on the kernel cmdline instead of
+# a device path, which is not dependable on real hardware where disks enumerate
+# as /dev/sda or /dev/nvme0n1 and can reorder between boots.
+mkfs.ext4 -q -L "${FSLABEL:-k0smos}" -d "$root" "$img"
+echo "wrote $img (${size_mb}M, linux/$goarch, LABEL=${FSLABEL:-k0smos})"

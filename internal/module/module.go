@@ -57,6 +57,11 @@ var Default = []string{
 
 	// Pod networking: veth pairs into a bridge, with netfilter on the bridge.
 	"veth", "bridge", "br_netfilter", "ipip",
+
+	// Graceful power-off on real hardware and hypervisors: the ACPI button
+	// driver raises the press and evdev exposes it as /dev/input/eventN. Absent
+	// these, a power button or `virsh shutdown` does nothing at all.
+	"button", "evdev",
 }
 
 // Load loads each named module along with its dependencies, dependencies first.

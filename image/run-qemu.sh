@@ -81,7 +81,9 @@ boot=(-initrd "$initramfs")
 if [ -n "$img" ]; then
   [ -f "$img" ] || { echo "disk $img not found — run 'make disk'" >&2; exit 1; }
   boot+=(-drive file="$img",if=virtio,format=raw)
-  append="$append k0smos.root=/dev/vda k0smos.rootfstype=ext4"
+  # By label, not /dev/vda: this is what a real deployment must use, since disk
+  # enumeration is not stable on real hardware. Override with ROOT=/dev/vda.
+  append="$append k0smos.root=${ROOT:-LABEL=k0smos} k0smos.rootfstype=ext4"
 fi
 [ -n "${EXEC:-}" ] && append="$append k0smos.exec=$EXEC"
 
