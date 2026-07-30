@@ -3,7 +3,7 @@ BIN := dist/k0smos
 # a host build on macOS would just produce the "linux only" stub.
 GO_BUILD := GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags '-extldflags "-static"'
 
-.PHONY: build test vet kernel k0s initramfs disk boot smoke oci accept clean-dist
+.PHONY: build test vet kernel k0s initramfs disk boot smoke oci e2e e2e-full accept clean-dist
 build:
 	$(GO_BUILD) -o $(BIN) ./cmd/k0smos
 
@@ -51,6 +51,15 @@ smoke: kernel initramfs
 oci: kernel disk
 	./image/mkinitramfs.sh
 	./image/mkoci.sh
+
+# End-to-end tests: boot k0smos under QEMU and assert on what happens. The fast
+# suite never starts k0s (a workload that exits immediately), so each boot is
+# ~40s; e2e-full adds the k0s tests, which take minutes each.
+e2e: kernel initramfs disk
+	go test -tags e2e -short -v -timeout 30m ./e2e/
+
+e2e-full: kernel initramfs disk
+	go test -tags e2e -v -timeout 90m ./e2e/
 
 accept: disk
 	./image/mkinitramfs.sh
