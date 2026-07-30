@@ -1,3 +1,15 @@
+> **HISTORICAL — do not follow this as documentation.**
+>
+> This is the original design from 2026-07-28, kept as a record of what was
+> planned. Parts of it were proven wrong by actually booting the thing, most
+> importantly the assumption that a kernel can mount an ext4 root directly:
+> stock distro kernels ship `virtio_blk` and `ext4` as modules, so k0smos boots
+> from an initramfs and `switch_root`s instead. In-init DHCP and the power
+> button, deferred here to M2, are now implemented.
+>
+> For how the system actually works, see [architecture.md](../../architecture.md).
+> For how to use it, see the [README](../../../README.md).
+
 # k0smos — PID1 init for a Talos-like k0s VM distro
 
 **Date:** 2026-07-28

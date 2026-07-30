@@ -1,3 +1,16 @@
+> **HISTORICAL — do not follow this as documentation.**
+>
+> This is the original implementation plan from 2026-07-28, kept as a record.
+> Tasks 1–11 were completed, but the design changed materially once it was run
+> on real hardware: boot now goes initramfs → load modules → `switch_root` onto
+> the ext4 root, not the direct `root=/dev/vda init=/sbin/k0smos` this plan
+> describes. The `ip=dhcp` in the cmdline examples below does nothing — the
+> kernel's autoconfiguration runs before `/init`, and this kernel does not build
+> `CONFIG_IP_PNP`.
+>
+> For how the system actually works, see [architecture.md](../../architecture.md).
+> For how to use it, see the [README](../../../README.md).
+
 # k0smos PID1 Init — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
