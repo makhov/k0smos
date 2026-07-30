@@ -122,7 +122,7 @@ spec:
                   # below, because a stock kernel cannot mount that ext4 root
                   # unaided.
                   kernelBoot:
-                    kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp"
+                    kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.data=auto"
                     container:
                       image: REGISTRY/k0smos-boot:TAG
                       kernelPath: /boot/vmlinuz
@@ -130,6 +130,9 @@ spec:
                 devices:
                   disks:
                     - name: root
+                      disk:
+                        bus: virtio
+                    - name: data
                       disk:
                         bus: virtio
                   interfaces:
@@ -142,6 +145,21 @@ spec:
                 - name: root
                   containerDisk:
                     image: REGISTRY/k0smos-disk:TAG
+                # The mutable data volume, mounted by k0smos at /var/lib/k0s:
+                # etcd, containerd, kubelet and pulled images. emptyDisk shares
+                # the VMI's lifecycle, so it survives a guest reboot and is
+                # discarded when the machine is replaced — which is what makes
+                # these nodes disposable without being diskless.
+                #
+                # k0smos formats it on first boot and reuses it afterwards. It
+                # is chosen because it is the only device with no filesystem;
+                # the root and the cloud-init drive both have one.
+                #
+                # Sizing: this consumes the node's ephemeral storage, and pulled
+                # images dominate. Raise it if pods pull large images.
+                - name: data
+                  emptyDisk:
+                    capacity: 20Gi
               # CAPK appends the cloud-init config-drive volume and disk itself,
               # from the bootstrap Secret. Do not add one here.
 ---
@@ -207,7 +225,7 @@ spec:
                   guest: 4Gi
                 firmware:
                   kernelBoot:
-                    kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp"
+                    kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.data=auto"
                     container:
                       image: REGISTRY/k0smos-boot:TAG
                       kernelPath: /boot/vmlinuz
@@ -215,6 +233,9 @@ spec:
                 devices:
                   disks:
                     - name: root
+                      disk:
+                        bus: virtio
+                    - name: data
                       disk:
                         bus: virtio
                   interfaces:
@@ -227,3 +248,18 @@ spec:
                 - name: root
                   containerDisk:
                     image: REGISTRY/k0smos-disk:TAG
+                # The mutable data volume, mounted by k0smos at /var/lib/k0s:
+                # etcd, containerd, kubelet and pulled images. emptyDisk shares
+                # the VMI's lifecycle, so it survives a guest reboot and is
+                # discarded when the machine is replaced — which is what makes
+                # these nodes disposable without being diskless.
+                #
+                # k0smos formats it on first boot and reuses it afterwards. It
+                # is chosen because it is the only device with no filesystem;
+                # the root and the cloud-init drive both have one.
+                #
+                # Sizing: this consumes the node's ephemeral storage, and pulled
+                # images dominate. Raise it if pods pull large images.
+                - name: data
+                  emptyDisk:
+                    capacity: 20Gi
