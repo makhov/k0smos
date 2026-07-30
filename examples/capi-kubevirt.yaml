@@ -1,0 +1,229 @@
+# Cluster API on KubeVirt, with k0smos as the machine OS and k0smotron as the
+# k0s bootstrap/control-plane provider.
+#
+# Field names were taken from the providers' Go types, not from memory:
+#   K0sControlPlane        controlplane.cluster.x-k8s.io/v1beta2  (k0smotron)
+#   K0sWorkerConfigTemplate  bootstrap.cluster.x-k8s.io/v1beta2   (k0smotron)
+#   KubevirtCluster/MachineTemplate  infrastructure.cluster.x-k8s.io/v1alpha1 (CAPK)
+#
+# NOT YET APPLIED TO A CLUSTER. Every field is real, but this set has never been
+# reconciled, so treat the first run as a test of the manifests as much as of
+# k0smos.
+#
+# Version skew to watch: k0smotron's v1beta2 builds against CAPI core v1beta2,
+# while CAPK v1alpha1 still builds against core v1beta1. The core objects below
+# use cluster.x-k8s.io/v1beta1, which CAPI converts; on a very new CAPI you may
+# need v1beta2, where infrastructureRef/controlPlaneRef take apiGroup instead of
+# apiVersion.
+#
+# Prerequisites:
+#   * KubeVirt on the workload side, CAPI + CAPK + k0smotron on the management side
+#   * ARCH=x86_64 REGISTRY=... TAG=... PUSH=1 make oci
+#   * Replace REGISTRY/TAG below
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: k0smos-demo
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks: ["10.244.0.0/16"]
+    services:
+      cidrBlocks: ["10.96.0.0/12"]
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+    kind: K0sControlPlane
+    name: k0smos-demo-cp
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+    kind: KubevirtCluster
+    name: k0smos-demo
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtCluster
+metadata:
+  name: k0smos-demo
+  namespace: default
+spec:
+  controlPlaneServiceTemplate:
+    spec:
+      # ClusterIP is enough when the management cluster reaches pods directly.
+      # Use LoadBalancer if the API has to be reachable from outside.
+      type: ClusterIP
+---
+# The control plane machines. k0smotron renders cloud-init into a Secret; CAPK
+# attaches it to the VM as a config-drive, and k0smos reads it from there.
+apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+kind: K0sControlPlane
+metadata:
+  name: k0smos-demo-cp
+  namespace: default
+spec:
+  replicas: 3
+  version: v1.34.1+k0s.0
+  machineTemplate:
+    infrastructureRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      kind: KubevirtMachineTemplate
+      name: k0smos-demo-cp
+      namespace: default
+  k0sConfigSpec:
+    # The image already ships k0s. Without this, k0smotron emits curl/wget
+    # download commands, which k0smos refuses to execute (and does not need).
+    preInstalledK0s: true
+    # cloud-config is the default; ignition would express commands as systemd
+    # units, which k0smos has no way to honour.
+    provisioner:
+      type: cloud-config
+    k0s:
+      apiVersion: k0s.k0sproject.io/v1beta1
+      kind: ClusterConfig
+      metadata:
+        name: k0s
+      spec:
+        api:
+          extraArgs:
+            anonymous-auth: "true"
+        storage:
+          type: etcd
+    # Avoid preK0sCommands/postK0sCommands: they are arbitrary shell, and k0smos
+    # interprets runcmd rather than executing it. See docs/architecture.md.
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: k0smos-demo-cp
+  namespace: default
+spec:
+  template:
+    spec:
+      # CAPK defaults to checkStrategy: ssh, which reads the CAPI sentinel file
+      # over SSH. k0smos has no SSH and never will, so this must be "none" or
+      # machines never report bootstrapped even though the node joins.
+      virtualMachineBootstrapCheck:
+        checkStrategy: none
+      virtualMachineTemplate:
+        metadata:
+          namespace: default
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              domain:
+                cpu:
+                  cores: 4
+                memory:
+                  guest: 8Gi
+                firmware:
+                  # Direct kernel boot. The initramfs is k0smos: it loads the
+                  # storage modules, then switch_roots onto the containerDisk
+                  # below, because a stock kernel cannot mount that ext4 root
+                  # unaided.
+                  kernelBoot:
+                    kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp"
+                    container:
+                      image: REGISTRY/k0smos-boot:TAG
+                      kernelPath: /boot/vmlinuz
+                      initrdPath: /boot/initramfs.gz
+                devices:
+                  disks:
+                    - name: root
+                      disk:
+                        bus: virtio
+                  interfaces:
+                    - name: default
+                      masquerade: {}
+              networks:
+                - name: default
+                  pod: {}
+              volumes:
+                - name: root
+                  containerDisk:
+                    image: REGISTRY/k0smos-disk:TAG
+              # CAPK appends the cloud-init config-drive volume and disk itself,
+              # from the bootstrap Secret. Do not add one here.
+---
+# Workers.
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: k0smos-demo-md
+  namespace: default
+spec:
+  clusterName: k0smos-demo
+  replicas: 2
+  selector:
+    matchLabels: {}
+  template:
+    spec:
+      clusterName: k0smos-demo
+      version: v1.34.1
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+          kind: K0sWorkerConfigTemplate
+          name: k0smos-demo-md
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+        kind: KubevirtMachineTemplate
+        name: k0smos-demo-md
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: K0sWorkerConfigTemplate
+metadata:
+  name: k0smos-demo-md
+  namespace: default
+spec:
+  template:
+    spec:
+      version: v1.34.1+k0s.0
+      preInstalledK0s: true
+      provisioner:
+        type: cloud-config
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: k0smos-demo-md
+  namespace: default
+spec:
+  template:
+    spec:
+      virtualMachineBootstrapCheck:
+        checkStrategy: none
+      virtualMachineTemplate:
+        metadata:
+          namespace: default
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              domain:
+                cpu:
+                  cores: 2
+                memory:
+                  guest: 4Gi
+                firmware:
+                  kernelBoot:
+                    kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp"
+                    container:
+                      image: REGISTRY/k0smos-boot:TAG
+                      kernelPath: /boot/vmlinuz
+                      initrdPath: /boot/initramfs.gz
+                devices:
+                  disks:
+                    - name: root
+                      disk:
+                        bus: virtio
+                  interfaces:
+                    - name: default
+                      masquerade: {}
+              networks:
+                - name: default
+                  pod: {}
+              volumes:
+                - name: root
+                  containerDisk:
+                    image: REGISTRY/k0smos-disk:TAG
