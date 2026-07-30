@@ -31,8 +31,11 @@ import (
 const (
 	// bootTimeout bounds a boot that never reaches its marker.
 	bootTimeout = 3 * time.Minute
-	// k0sTimeout bounds the slow tests, where k0s must converge.
-	k0sTimeout = 12 * time.Minute
+	// k0sTimeout bounds the slow tests. Generous on purpose: the first boot pulls
+	// every image over QEMU's user-mode network, so convergence has been observed
+	// anywhere between 5 and 13 minutes on the same machine. A tight bound here
+	// produces a failure that looks like a k0smos bug and is not one.
+	k0sTimeout = 25 * time.Minute
 	pollEvery  = 2 * time.Second
 )
 
@@ -237,6 +240,18 @@ func (v *vm) stop() {
 }
 
 func (v *vm) dumpConsole() {
+	// Keep the full console somewhere durable: t.TempDir() is deleted when the
+	// test ends, which threw away the evidence for the first failure this suite
+	// produced.
+	if saved := filepath.Join(v.root, "dist", "e2e", sanitise(v.t.Name())+".console.log"); true {
+		if err := os.MkdirAll(filepath.Dir(saved), 0755); err == nil {
+			if b, err := os.ReadFile(v.console); err == nil {
+				if os.WriteFile(saved, b, 0644) == nil {
+					v.t.Logf("full console saved to %s", saved)
+				}
+			}
+		}
+	}
 	text := v.consoleText()
 	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
 	if len(lines) > 60 {
