@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
@@ -18,6 +19,7 @@ import (
 	"github.com/amakhov/k0smos/internal/config"
 	"github.com/amakhov/k0smos/internal/control"
 	"github.com/amakhov/k0smos/internal/dhcp"
+	"github.com/amakhov/k0smos/internal/etcd"
 	"github.com/amakhov/k0smos/internal/metadata"
 	"github.com/amakhov/k0smos/internal/module"
 	"github.com/amakhov/k0smos/internal/mount"
@@ -65,6 +67,10 @@ const (
 	// childGrace is how long the k0s child gets to exit after ctx cancellation
 	// before we start detaching filesystems under it.
 	childGrace = 5 * time.Second
+	// etcdLeaveTimeout bounds the graceful etcd departure. Generous, because a
+	// busy cluster can take a while, but finite so a lost quorum cannot stop the
+	// machine from shutting down.
+	etcdLeaveTimeout = 30 * time.Second
 )
 
 // logf writes a progress line to the console. As PID1 there is nowhere else to
@@ -244,6 +250,36 @@ func loadMetadata(s *sys.Sys) (metadata.UserData, metadata.MetaData) {
 		}
 	}
 	return ud, md
+}
+
+// leaveEtcd asks k0s to give up this node's etcd membership, bounded by a
+// timeout so a stalled cluster cannot keep the machine alive indefinitely.
+//
+// This runs a command, which everything else in k0smos deliberately avoids —
+// but the binary is the workload already being supervised and the subcommand is
+// fixed here, not taken from user-data.
+func leaveEtcd(workload []string) {
+	argv := etcd.LeaveCmd(workload)
+	if argv == nil {
+		return // worker, or kine-backed: no membership to give up
+	}
+	logf("leaving etcd cluster: %v", argv)
+
+	// Deliberately not derived from the boot context: that may already be
+	// cancelled, and the leave needs its own window regardless of why we stop.
+	ctx, cancel := context.WithTimeout(context.Background(), etcdLeaveTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		// Not fatal. A single-node or kine cluster refuses, and a lost quorum
+		// cannot process the removal — in both cases stopping is still correct.
+		logf("warn: etcd leave: %v", err)
+		return
+	}
+	logf("left etcd cluster")
 }
 
 // watchPowerButton returns a channel that fires when the hardware power button
@@ -520,6 +556,12 @@ wait:
 			break wait
 		}
 	}
+
+	// Give up etcd membership while the controller is still running — it cannot
+	// leave once it has been stopped. Nothing on this machine persists, so a
+	// member that vanishes without leaving would sit in the member list counting
+	// against quorum forever.
+	leaveEtcd(workloadCmd)
 
 	stopChild()
 	select {

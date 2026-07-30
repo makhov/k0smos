@@ -195,12 +195,14 @@ Size the root for the container images a node will pull (`PAD_MB=`, default 3072
 on top of the content). There is no A/B image scheme and no in-place upgrade:
 roll machines instead.
 
-**One consequence to plan for:** if you run the k0s control plane *on* k0smos
-machines with etcd, every replacement is an etcd membership change, and k0smos
-does not yet do a graceful `k0s etcd leave` on shutdown (see
-[architecture.md](architecture.md) on the k0sleave commands it skips). Running
-the control plane hosted in the management cluster, with k0smos machines as
-workers, avoids the question entirely.
+**etcd membership is handled.** If you run the k0s control plane *on* k0smos
+machines, every replacement is an etcd membership change — and because nothing
+persists, a member that vanishes without leaving would sit in the member list
+counting against quorum forever. k0smos therefore runs `k0s etcd leave` on
+shutdown, while the controller is still up, before stopping anything. It is
+skipped for workers and for `--single` (kine-backed) controllers, and a failure
+is logged rather than blocking the shutdown: a cluster that has already lost
+quorum cannot process the removal, and stopping is still correct.
 
 **Kubernetes access.** The API server listens on 6443. The admin kubeconfig is
 written inside the guest at `/var/lib/k0s/pki/admin.conf`; with no shell, the
