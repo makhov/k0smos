@@ -38,8 +38,11 @@ if ! command -v mkfs.ext4 >/dev/null 2>&1; then
     exit 1
   }
   echo "no mkfs.ext4 on this host — assembling inside $platform container"
+  # Every knob has to be forwarded explicitly: the container stage re-runs this
+  # script, and anything not listed here is silently lost on a macOS host.
   exec docker run --rm --platform "$platform" -v "$repo:/repo" -w /repo \
     -e K0S_BIN -e K0SMOS_BIN -e MODULES_DIR -e ARCH \
+    -e PAD_MB -e FSLABEL -e APK_PKGS \
     alpine:3.20 sh -c 'apk add -q --no-cache e2fsprogs bash >/dev/null && exec bash image/mkrootfs.sh "$1"' _ "$img"
 fi
 
@@ -91,9 +94,20 @@ else
   echo "warn: no modules dir at $moddir" >&2
 fi
 
-# k0s embeds containerd/runc/kubelet and extracts them at runtime, and pulled
-# images land here too — pad generously.
-size_mb=$(( $(du -sm "$root" | cut -f1) + 3072 ))
+# Headroom on top of the content. This is working space, not storage: k0s
+# extracts its embedded containerd/runc/kubelet into /var/lib/k0s/bin at
+# runtime, and pulled container images land there too. Size it for the images a
+# node will pull, since that dominates.
+#
+# Nothing here is expected to persist. On KubeVirt a containerDisk is read-only
+# and the guest writes to an ephemeral overlay that is discarded with the pod;
+# on bare metal the disk does persist, but Cluster API replaces machines rather
+# than repairing them either way.
+#
+# The file is sparse, so a generous number costs little: a 3 GB pad over ~290 MB
+# of content allocates ~290 MB and compresses to ~220 MB in an OCI layer.
+pad_mb=${PAD_MB:-3072}
+size_mb=$(( $(du -sm "$root" | cut -f1) + pad_mb ))
 mkdir -p "$(dirname "$img")"
 rm -f "$img"
 truncate -s "${size_mb}M" "$img"
@@ -101,4 +115,4 @@ truncate -s "${size_mb}M" "$img"
 # a device path, which is not dependable on real hardware where disks enumerate
 # as /dev/sda or /dev/nvme0n1 and can reorder between boots.
 mkfs.ext4 -q -L "${FSLABEL:-k0smos}" -d "$root" "$img"
-echo "wrote $img (${size_mb}M, linux/$goarch, LABEL=${FSLABEL:-k0smos})"
+echo "wrote $img (${size_mb}M apparent, $(du -m "$img" | cut -f1)M allocated, linux/$goarch, LABEL=${FSLABEL:-k0smos})"
