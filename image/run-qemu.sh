@@ -87,6 +87,10 @@ if [ -n "$img" ]; then
 fi
 [ -n "${EXEC:-}" ] && append="$append k0smos.exec=$EXEC"
 
+# NOTE on the ${arr[@]+"${arr[@]}"} expansions below: macOS ships bash 3.2,
+# where expanding an empty array under `set -u` fails with "unbound variable".
+# That form expands to nothing when the array is empty instead of erroring.
+#
 # Control port for clean shutdown. This guest has no usable power button --
 # direct kernel boot means no UEFI hence no ACPI, and this kernel builds no
 # gpio-keys driver -- so without this the only way to stop it is to kill QEMU,
@@ -127,6 +131,6 @@ exec "$qemu" \
   -m "$mem" -smp "$cpus" \
   -kernel "$kernel" -append "$append" \
   "${boot[@]}" \
-  "${control_args[@]}" "${monitor_args[@]}" \
+  ${control_args[@]+"${control_args[@]}"} ${monitor_args[@]+"${monitor_args[@]}"} \
   -netdev user,id=n0,hostfwd=tcp::6443-:6443 -device virtio-net-pci,netdev=n0 \
   "${display[@]}"
