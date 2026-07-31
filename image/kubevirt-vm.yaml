@@ -23,8 +23,10 @@ spec:
             # storage modules and then switch_roots onto the disk below. A stock
             # kernel cannot mount that ext4 root by itself.
             kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.data=auto"
+            # The same image as the containerDisk below: it holds the kernel,
+            # the initramfs and the root, so the three cannot be mismatched.
             container:
-              image: ghcr.io/amakhov/k0smos-boot:dev
+              image: ghcr.io/amakhov/k0smos:dev
               kernelPath: /boot/vmlinuz
               initrdPath: /boot/initramfs.gz
         devices:
@@ -47,7 +49,7 @@ spec:
       volumes:
         - name: root
           containerDisk:
-            image: ghcr.io/amakhov/k0smos-disk:dev
+            image: ghcr.io/amakhov/k0smos:dev
         # Mutable data at /var/lib/k0s. emptyDisk shares the VMI lifecycle:
         # kept across a guest reboot, gone when the VM is deleted.
         - name: data

@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
-# Package the boot artifacts as OCI images for KubeVirt.
+# Package a k0smos node as a single OCI image for KubeVirt.
 #
-# KubeVirt needs two, because it cannot direct-kernel-boot from the same place
-# it gets the root disk:
+#   <repo>/k0smos:<tag>   /boot/vmlinuz         kernelBoot.container.kernelPath
+#                         /boot/initramfs.gz    kernelBoot.container.initrdPath
+#                         /disk/k0smos.img      the containerDisk convention
 #
-#   <repo>/k0smos-boot:<tag>   kernel + initramfs, referenced by
-#                              spec.domain.firmware.kernelBoot.container
-#                              (KernelBootContainer{Image,KernelPath,InitrdPath})
-#   <repo>/k0smos-disk:<tag>   the ext4 root at /disk/k0smos.img, which is the
-#                              containerDisk convention
+# One image, referenced twice in a VM spec — once as the kernelBoot container and
+# once as the containerDisk volume. KubeVirt supports exactly this and documents it.
 #
-# Both are FROM scratch: they carry data, not a runtime. Set PUSH=1 to push.
+# It was two images, and that was a mistake worth not repeating: the kernel and the
+# root are not independently versionable. The root carries the module tree, so
+# pairing k0smos:v1's kernel with a v2 root gives the version skew k0smos warns
+# about at boot ("kernel and modules are out of step, so NO modules were loaded").
+# One image makes that pairing unrepresentable, and the node is pulled once instead
+# of twice.
+#
+# FROM scratch: it carries data, not a runtime. Set PUSH=1 to push.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/.." && pwd)
@@ -35,58 +40,44 @@ done
 ctx=$(mktemp -d)
 trap 'rm -rf "$ctx"' EXIT
 
-# --- boot image: kernel + initramfs ---
-mkdir -p "$ctx/boot/boot"
-cp "$kernel" "$ctx/boot/boot/vmlinuz"
-cp "$initramfs" "$ctx/boot/boot/initramfs.gz"
-cat > "$ctx/boot/Dockerfile" <<'EOF'
+mkdir -p "$ctx/node/boot"
+cp "$kernel" "$ctx/node/boot/vmlinuz"
+cp "$initramfs" "$ctx/node/boot/initramfs.gz"
+mkdir -p "$ctx/node/disk"
+cp "$img" "$ctx/node/disk/k0smos.img"
+cat > "$ctx/node/Dockerfile" <<'EOF'
 FROM scratch
-# Paths here are what the VM spec must reference as kernelPath/initrdPath.
+# /boot paths are what the VM spec references as kernelPath and initrdPath.
 ADD boot/vmlinuz /boot/vmlinuz
 ADD boot/initramfs.gz /boot/initramfs.gz
-EOF
-
-# --- disk image: the ext4 root ---
-mkdir -p "$ctx/disk/disk"
-cp "$img" "$ctx/disk/disk/k0smos.img"
-cat > "$ctx/disk/Dockerfile" <<'EOF'
-FROM scratch
 # /disk is where KubeVirt looks for a containerDisk's image.
 ADD disk/k0smos.img /disk/k0smos.img
 EOF
 
-build() {
-  local dir=$1 name=$2
-  local ref="$registry/$name:$tag"
-  echo "building $ref ($platform)"
-  local args=(build --platform "$platform" -t "$ref" "$ctx/$dir")
-  if [ "${PUSH:-0}" = "1" ]; then
-    # buildx is required to push a cross-platform image.
-    docker buildx build --platform "$platform" -t "$ref" --push "$ctx/$dir"
-  else
-    docker "${args[@]}"
-  fi
-  echo "  $ref"
-}
-
-build boot k0smos-boot
-build disk k0smos-disk
+ref="$registry/k0smos:$tag"
+echo "building $ref ($platform)"
+if [ "${PUSH:-0}" = "1" ]; then
+  # buildx is required to push a cross-platform image.
+  docker buildx build --platform "$platform" -t "$ref" --push "$ctx/node"
+else
+  docker build --platform "$platform" -t "$ref" "$ctx/node"
+fi
 
 cat <<EOF
 
-Artifacts ready. Reference them from a KubeVirt VM as:
+Built $ref. Reference it twice in a KubeVirt VM — once to boot, once as the disk:
 
   firmware:
     kernelBoot:
       container:
-        image: $registry/k0smos-boot:$tag
+        image: $ref
         kernelPath: /boot/vmlinuz
         initrdPath: /boot/initramfs.gz
       # kernelArgs go here; see image/kubevirt-vm.yaml
   volumes:
     - name: root
       containerDisk:
-        image: $registry/k0smos-disk:$tag
+        image: $ref
 
 See image/kubevirt-vm.yaml for a complete example.
 EOF

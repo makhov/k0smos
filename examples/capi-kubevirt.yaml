@@ -124,7 +124,7 @@ spec:
                   kernelBoot:
                     kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.data=auto"
                     container:
-                      image: REGISTRY/k0smos-boot:TAG
+                      image: REGISTRY/k0smos:TAG
                       kernelPath: /boot/vmlinuz
                       initrdPath: /boot/initramfs.gz
                 devices:
@@ -144,7 +144,7 @@ spec:
               volumes:
                 - name: root
                   containerDisk:
-                    image: REGISTRY/k0smos-disk:TAG
+                    image: REGISTRY/k0smos:TAG
                 # The mutable data volume, mounted by k0smos at /var/lib/k0s:
                 # etcd, containerd, kubelet and pulled images. emptyDisk shares
                 # the VMI's lifecycle, so it survives a guest reboot and is
@@ -227,7 +227,7 @@ spec:
                   kernelBoot:
                     kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.data=auto"
                     container:
-                      image: REGISTRY/k0smos-boot:TAG
+                      image: REGISTRY/k0smos:TAG
                       kernelPath: /boot/vmlinuz
                       initrdPath: /boot/initramfs.gz
                 devices:
@@ -247,7 +247,7 @@ spec:
               volumes:
                 - name: root
                   containerDisk:
-                    image: REGISTRY/k0smos-disk:TAG
+                    image: REGISTRY/k0smos:TAG
                 # The mutable data volume, mounted by k0smos at /var/lib/k0s:
                 # etcd, containerd, kubelet and pulled images. emptyDisk shares
                 # the VMI's lifecycle, so it survives a guest reboot and is

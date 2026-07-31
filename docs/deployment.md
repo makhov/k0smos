@@ -78,29 +78,35 @@ development.
 
 ## KubeVirt (and Cluster API via CAPK + k0smotron)
 
-KubeVirt needs two OCI artifacts, because it cannot direct-kernel-boot from the
-same place it gets the root disk. `make oci` builds both:
+`make oci` builds one OCI image holding everything a node needs:
 
 ```bash
 ARCH=x86_64 REGISTRY=ghcr.io/you TAG=v0 PUSH=1 make oci
 ```
 
-- `k0smos-boot:<tag>` — `/boot/vmlinuz` and `/boot/initramfs.gz`, referenced by
-  `spec.domain.firmware.kernelBoot.container`
-- `k0smos-disk:<tag>` — the ext4 root at `/disk/k0smos.img`, the containerDisk
-  convention
-
-`image/kubevirt-vm.yaml` is a complete working VM spec. The essentials:
+`k0smos:<tag>` contains `/boot/vmlinuz`, `/boot/initramfs.gz` and the ext4 root at
+`/disk/k0smos.img`. A VM references it **twice** — as
+`spec.domain.firmware.kernelBoot.container` and as a `containerDisk` volume — which
+KubeVirt supports and documents:
 
 ```yaml
 firmware:
   kernelBoot:
-    kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp"
     container:
-      image: ghcr.io/you/k0smos-boot:v0
+      image: ghcr.io/you/k0smos:v0
       kernelPath: /boot/vmlinuz
       initrdPath: /boot/initramfs.gz
+    kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.data=auto"
+volumes:
+  - name: root
+    containerDisk:
+      image: ghcr.io/you/k0smos:v0
 ```
+
+One image rather than two because the kernel and the root cannot be versioned
+independently: the root carries the module tree, so a mismatched pair produces the
+skew k0smos reports at boot as "kernel and modules are out of step". It is also
+pulled once instead of twice.
 
 A complete Cluster API manifest set is in
 [`examples/capi-kubevirt.yaml`](../examples/capi-kubevirt.yaml): `Cluster`,

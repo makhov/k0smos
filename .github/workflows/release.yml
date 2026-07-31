@@ -119,10 +119,11 @@ jobs:
           | `k0smos-initramfs-<arch>.gz` | k0smos as `/init` |
           | `k0smos-<arch>.img.zst` | ext4 root: k0smos + k0s, ~157MB. `zstd -d` before use — it restores the file's holes, so it occupies ~240MB not 3.3GB |
 
-          Also pushed to GHCR for KubeVirt, arch-suffixed:
-          `k0smos-boot:<tag>-<goarch>` (kernel at `/boot/vmlinuz`, initrd at
-          `/boot/initramfs.gz`) and `k0smos-disk:<tag>-<goarch>` (root at
-          `/disk/k0smos.img`).
+          Also pushed to GHCR for KubeVirt as one image per architecture,
+          `k0smos:<tag>-<goarch>`, holding the kernel at `/boot/vmlinuz`, the
+          initrd at `/boot/initramfs.gz` and the root at `/disk/k0smos.img`. A VM
+          spec references it twice — as the kernelBoot container and as the
+          containerDisk volume.
 
           ## Booting one
 
