@@ -55,7 +55,7 @@ make artifacts ctl
 Then boot with the CLI:
 
 ```bash
-./dist/k0smosctl boot
+k0smosctl boot
 guest "default" running in the background (pid 7547)
   console:  k0smosctl logs -f
   cluster:  k0smosctl kubeconfig -o kubeconfig   (API on :6443)
@@ -93,8 +93,8 @@ first time and never writes to the image itself, which is what makes a second gu
 one command:
 
 ```bash
-./dist/k0smosctl boot --name vm2 --api-port 7443
-./dist/k0smosctl kubeconfig --name vm2 -o kubeconfig2   # port comes from the guest
+k0smosctl boot --name vm2 --api-port 7443
+k0smosctl kubeconfig --name vm2 -o kubeconfig2   # port comes from the guest
 ```
 
 Every subcommand takes `--name`:
@@ -330,10 +330,15 @@ ARCH=x86_64 make oci                              # for an amd64 cluster
 PUSH=1 REGISTRY=ghcr.io/you TAG=v0 make oci
 ```
 
-That produces `k0smos-boot` (kernel at `/boot/vmlinuz`, initramfs at
-`/boot/initramfs.gz`) and `k0smos-disk` (the ext4 root at `/disk/k0smos.img`, where
-KubeVirt looks for a containerDisk). `mkoci.sh` prints a matching VM spec when it
-finishes, and `image/kubevirt-vm.yaml` is a worked example. The shape that matters:
+That produces one image, `k0smos:<tag>`, holding the kernel at `/boot/vmlinuz`, the
+initramfs at `/boot/initramfs.gz` and the ext4 root at `/disk/k0smos.img` (where
+KubeVirt looks for a containerDisk). A VM references it **twice** — once to boot
+from, once as the disk — which KubeVirt supports and documents.
+
+One image rather than two because the kernel and the root are not independently
+versionable: the root carries the module tree, so mixing versions produces the skew
+k0smos warns about at boot. `mkoci.sh` prints a matching VM spec when it finishes,
+and `image/kubevirt-vm.yaml` is a worked example. The shape that matters:
 
 ```yaml
 spec:
@@ -341,7 +346,7 @@ spec:
     firmware:
       kernelBoot:
         container:
-          image: ghcr.io/you/k0smos-boot:v0
+          image: ghcr.io/you/k0smos:v0
           kernelPath: /boot/vmlinuz
           initrdPath: /boot/initramfs.gz
         kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.data=auto"
