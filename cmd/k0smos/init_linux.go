@@ -403,10 +403,24 @@ func pivot(s *sys.Sys, cfg config.Config) error {
 	if err := s.Mkdir(newRootDir, 0755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", newRootDir, err)
 	}
-	if err := s.Mount(dev, newRootDir, cfg.RootFSType, 0, cfg.RootFlags); err != nil {
+	// Read-write first, then read-only. A writable root is what ext4 wants; but a
+	// read-only filesystem (erofs) or a read-only device — which is exactly how
+	// KubeVirt attaches a containerDisk — refuses the first attempt with EACCES,
+	// and the boot has nothing useful to say about why.
+	err = s.Mount(dev, newRootDir, cfg.RootFSType, 0, cfg.RootFlags)
+	readOnly := false
+	if errors.Is(err, unix.EACCES) || errors.Is(err, unix.EROFS) {
+		err = s.Mount(dev, newRootDir, cfg.RootFSType, msReadOnly, cfg.RootFlags)
+		readOnly = err == nil
+	}
+	if err != nil {
 		return fmt.Errorf("mount %s (%s): %w", dev, cfg.RootFSType, err)
 	}
-	logf("mounted %s at %s, switching root", dev, newRootDir)
+	how := "read-write"
+	if readOnly {
+		how = "read-only"
+	}
+	logf("mounted %s at %s %s, switching root", dev, newRootDir, how)
 	// The marker tells the next k0smos it is already on the real root, so it
 	// proceeds with the rest of init instead of trying to switch again.
 	return switchroot.Do(s, newRootDir, initPath, []string{initPath, switchedFlag})
@@ -500,6 +514,20 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		}
 	}
 
+	// A read-only root — erofs — cannot serve the paths k0s and cloud-init write
+	// to, so those get a tmpfs overlay before anything tries. Done here because it
+	// must precede the resolv.conf write, cloud-init's write_files and the
+	// workload, and because /run has to be a tmpfs already (mount.Ensure).
+	if ro, err := s.IsReadOnly("/"); err != nil {
+		logf("warn: could not tell whether the root is read-only: %v", err)
+	} else if ro {
+		if err := mount.MakeWritable(s, mount.WritablePaths); err != nil {
+			logf("warn: %v", err)
+		} else {
+			logf("root is read-only; overlaid %v with tmpfs", mount.WritablePaths)
+		}
+	}
+
 	// The mutable data volume, mounted before k0s can touch its data directory.
 	// Not fatal: without one, k0s falls back to the root filesystem, which is how
 	// a machine with no data volume already behaves.
@@ -516,6 +544,11 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 			verb = "formatted and mounted"
 		}
 		logf("%s data volume %s at %s", verb, res.Device, cfg.DataDir)
+		// /opt is a symlink to /var/opt on a read-only root, so the target has to
+		// exist before containerd stages plugins into it.
+		if err := s.MkdirAll("/var/opt", 0755); err != nil {
+			logf("warn: mkdir /var/opt: %v", err)
+		}
 	}
 
 	if err := cgroup.Setup(s); err != nil {
