@@ -310,6 +310,13 @@ func (v *vm) k0smosLines() string {
 // makeCidata builds a NoCloud ISO, the way a CAPI infrastructure provider would
 // attach one. xorriso runs in a container so the test needs no host tooling.
 func makeCidata(t *testing.T, userData, metaData string) string {
+	// -J -r matches what KubeVirt produces (xorrisofs -joliet -rock).
+	return makeCidataOpts(t, userData, metaData, "-J", "-r")
+}
+
+// makeCidataOpts builds the drive with explicit xorriso extension flags, so a
+// test can pin which ISO9660 extensions k0smos actually depends on.
+func makeCidataOpts(t *testing.T, userData, metaData string, isoFlags ...string) string {
 	t.Helper()
 	root := repoRoot(t)
 	src := t.TempDir()
@@ -334,8 +341,8 @@ func makeCidata(t *testing.T, userData, metaData string) string {
 	cmd := exec.Command("docker", "run", "--rm",
 		"-v", src+":/in", "-v", outDir+":/out",
 		"alpine:3.20", "sh", "-c",
-		"apk add -q --no-cache xorriso >/dev/null && xorriso -as mkisofs -V cidata -J -r -o /out/"+
-			filepath.Base(iso)+" /in 2>/dev/null")
+		"apk add -q --no-cache xorriso >/dev/null && xorriso -as mkisofs -V cidata "+
+			strings.Join(isoFlags, " ")+" -o /out/"+filepath.Base(iso)+" /in 2>/dev/null")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build cidata iso: %v\n%s", err, out)
 	}

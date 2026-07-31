@@ -21,11 +21,15 @@
 #
 # It is therefore useful for boots that need no bootstrap drive, and as evidence
 # that the monolithic direction works (a node reaches Ready with zero modules).
-# Making it usable for CAPI is a one-filesystem delta: Kata's fragments plus
-# CONFIG_ISO9660_FS and CONFIG_JOLIET. vfat is not needed, because KubeVirt
-# builds both its NoCloud and config-drive volumes with `xorrisofs -joliet
-# -rock` (one code path in pkg/cloud-init). That is a small change on a
-# maintained base, and the trigger for owning a kernel build.
+# Making it usable for CAPI is a one-symbol delta: Kata's fragments plus
+# CONFIG_ISO9660_FS. Not CONFIG_JOLIET -- Rock Ridge comes with ISO9660 support
+# unconditionally, preserves names like "user-data", and is what Linux prefers
+# when both extensions are present; Joliet would additionally pull in
+# CONFIG_NLS. Not vfat either: KubeVirt writes every cloud-init volume as an ISO
+# (xorrisofs -joliet -rock, one code path in pkg/cloud-init).
+#
+# That is the trigger for owning a kernel build, and about as small as such a
+# justification gets.
 #
 # Apple's `container` uses the same artifact, pinning url + digest + inner path.
 # This does the same, except the digest pins the kernel itself rather than the

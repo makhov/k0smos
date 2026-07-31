@@ -182,6 +182,37 @@ write_files:
 	}
 }
 
+// Which ISO9660 extensions are actually required.
+//
+// This pins the kernel config a monolithic build would need. Rock Ridge is
+// compiled into CONFIG_ISO9660_FS unconditionally and is what preserves a name
+// like "user-data" (the hyphen is outside the ISO9660 Level 1 charset). Joliet
+// is a separate option that also drags in CONFIG_NLS, and Linux prefers Rock
+// Ridge when both are present — so an ISO with Rock Ridge only must work.
+func TestCloudInitNeedsOnlyRockRidge(t *testing.T) {
+	requireArtifacts(t, "dist/k0smos.img", "dist/k0smos-initramfs.gz")
+	disk := cloneDisk(t, filepath.Join(repoRoot(t), "dist/k0smos.img"))
+
+	// -r only: no -J, so the drive carries no Joliet records at all.
+	iso := makeCidataOpts(t, `#cloud-config
+write_files:
+  - path: /etc/k0s/rock-ridge-only
+    content: |
+      read without Joliet
+`, "instance-id: i-rr\nlocal-hostname: rr-node\n", "-r")
+
+	v := boot(t, bootOpts{Disk: disk, Cidata: iso, Exec: execNoop})
+	v.waitFor(`mounted /dev/vd\w+ \(iso9660, LABEL=cidata\)`, bootTimeout)
+	// The long, hyphenated filenames survived, so Rock Ridge alone is enough.
+	v.waitFor(`wrote 1 file\(s\) from user-data`, bootTimeout)
+	v.waitFor(`hostname set to "rr-node"`, bootTimeout)
+	v.stop()
+
+	if got := debugfsCmd(t, disk, "cat /etc/k0s/rock-ridge-only"); !strings.Contains(got, "without Joliet") {
+		t.Errorf("file not written from a Rock-Ridge-only ISO: %q", got)
+	}
+}
+
 // DHCP against QEMU's built-in server, which hands out the same addresses a real
 // network would supply.
 func TestDHCPAcquiresLease(t *testing.T) {
