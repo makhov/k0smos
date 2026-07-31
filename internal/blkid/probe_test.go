@@ -1,6 +1,7 @@
 package blkid
 
 import (
+	"encoding/binary"
 	"testing"
 )
 
@@ -143,5 +144,53 @@ func TestProbesRejectNonFilesystems(t *testing.T) {
 	}
 	if _, _, ok := probeExt4(junk); ok {
 		t.Error("ext4 probe matched junk")
+	}
+}
+
+// erofsImage builds the superblock that identifies a read-only erofs image, which
+// is what a root filesystem carried inside the initramfs is.
+func erofsImage(label string, uuid []byte) []byte {
+	img := make([]byte, erofsSBOffset+erofsSBLen)
+	sb := img[erofsSBOffset:]
+	binary.LittleEndian.PutUint32(sb[0:], erofsMagic)
+	copy(sb[erofsUUIDOff:], uuid)
+	copy(sb[erofsLabelOff:], label)
+	return img
+}
+
+// Detecting erofs is what lets k0smos mount a root carried in the initramfs without
+// being told its type on the kernel cmdline.
+func TestIdentifyRecognisesEROFS(t *testing.T) {
+	uuid := []byte{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+		0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef}
+	p := &fakeProber{
+		devs:   []string{"loop0"},
+		images: map[string][]byte{"loop0": erofsImage("k0smos", uuid)},
+	}
+	info, ok := Identify(p, "loop0")
+	if !ok || info.FSType != "erofs" {
+		t.Fatalf("Identify = %+v, %t; want erofs", info, ok)
+	}
+	if info.Label != "k0smos" {
+		t.Errorf("label = %q, want k0smos", info.Label)
+	}
+	if info.UUID == "" {
+		t.Error("no UUID reported")
+	}
+}
+
+// An erofs image must not be mistaken for a blank device: formatting one would
+// destroy the root filesystem.
+func TestEROFSIsNotBlank(t *testing.T) {
+	p := &fakeProber{
+		devs:   []string{"vda"},
+		images: map[string][]byte{"vda": erofsImage("k0smos", nil)},
+	}
+	got, err := Blank(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("Blank = %v, want nothing — an erofs image has a filesystem", got)
 	}
 }

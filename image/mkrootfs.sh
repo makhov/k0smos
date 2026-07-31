@@ -57,6 +57,17 @@ if ! command -v "$mkfs_tool" >/dev/null 2>&1 || ! command -v apk >/dev/null 2>&1
     echo "need docker, or both $mkfs_tool and apk, to build the root image" >&2
     exit 1
   }
+  # The container sees only the repository, mounted at /repo, so an absolute host
+  # path has to be rewritten relative to it. Without this the image is written
+  # inside the container, the success message names a path that looks right, and
+  # the file disappears with --rm — a silent nothing rather than an error.
+  case "$img" in
+    "$repo"/*) img=${img#"$repo"/} ;;
+    /*)
+      echo "output path $img is outside the repository, which the build container cannot see" >&2
+      exit 1
+      ;;
+  esac
   echo "assembling inside $platform container (need $mkfs_tool and apk)"
   # Every knob has to be forwarded explicitly: the container stage re-runs this
   # script, and anything not listed here is silently lost on a macOS host.

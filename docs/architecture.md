@@ -49,6 +49,36 @@ is mounted before anything can write to `/var/lib/k0s`, and the cloud-init drive
 read after networking (so an HTTP source could later work) but before the hostname
 is set (so it can supply one).
 
+## Why a read-only root works at all
+
+The ext4 root exists because kubelet cannot run on a ramfs: cadvisor asks the kernel
+for filesystem statistics about the root device and a ramfs reports none. That
+constraint is about the root being *block-backed*, not about it being *writable* — so
+a read-only erofs image, loop-attached, satisfies it. That is how Talos ships its own
+root, and it is why the OS can travel inside the initramfs instead of as a second
+artifact.
+
+What a read-only root does force is a writable layer for the paths that are written,
+and the useful distinction is between paths that need to *exist* and paths that need
+to be *written*:
+
+| path | how | why |
+|---|---|---|
+| `/var/run` → `/run` | symlink in the image | containerd's NRI socket; a `mkdir` here is fatal |
+| `/lib/modules` | empty dir in the image | kubelet bind-mounts it into kube-router, even with no modules |
+| `/usr/libexec/kubernetes/…` | dirs in the image | the plugin prober only needs them present |
+| `/etc` | tmpfs overlay | k0s creates and `chmod`s `/etc/k0s`; cloud-init writes here |
+| `/usr/libexec` | tmpfs overlay | kubelet creates `/usr/libexec/k0s` |
+| `/opt` → `/var/opt` | symlink to the data volume | CNI binaries are tens of MB — disk, not RAM |
+| `/var` | the data volume itself | kubelet writes `/var/lib/kubelet`, not just `/var/lib/k0s` |
+
+Overlays rather than plain tmpfs mounts, so the image's own `/etc/passwd` and baked
+`k0s.yaml` stay visible underneath; a file written at runtime shadows them, which is
+exactly what a user-supplied config wants.
+
+Every row came from a boot that failed without it, which is why the list is this
+shape rather than "mount tmpfs over everything".
+
 ## Why an initramfs at all
 
 The original design booted `root=/dev/vda init=/sbin/k0smos` directly. That
