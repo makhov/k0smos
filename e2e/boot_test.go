@@ -99,8 +99,8 @@ func TestCorruptCloudInitDriveStillBoots(t *testing.T) {
 	requireArtifacts(t, "dist/k0smos.img", "dist/k0smos-initramfs.gz")
 	disk := cloneDisk(t, filepath.Join(repoRoot(t), "dist/k0smos.img"))
 
-	iso := makeCidata(t, "#cloud-config\nwrite_files:\n  - path: /etc/k0s/x\n    content: y\n", "")
-	corruptRootDirectory(t, iso)
+	iso := corruptedCopy(t, makeCidata(t,
+		"#cloud-config\nwrite_files:\n  - path: /etc/k0s/x\n    content: y\n", ""))
 
 	v := boot(t, bootOpts{Disk: disk, Cidata: iso, Exec: execNoop})
 	// The drive is still found by label — the volume identifier is intact — and
@@ -118,10 +118,15 @@ func TestCorruptCloudInitDriveStillBoots(t *testing.T) {
 	v.stop()
 }
 
-// corruptRootDirectory points the primary volume descriptor's root directory
-// record at an extent past the end of the image, leaving the volume identifier
-// (and so the label) readable.
-func corruptRootDirectory(t *testing.T, iso string) {
+// corruptedCopy writes a copy of an ISO whose primary volume descriptor points its
+// root directory at an extent past the end of the image, leaving the volume
+// identifier — and so the label — readable.
+//
+// A copy rather than an edit in place: makeCidata builds the ISO inside a container
+// running as root, so on a Linux host the file is root-owned and unwritable.
+// Editing it worked only on macOS, where Docker Desktop maps container root to the
+// calling user — so this passed locally and failed on the first CI run.
+func corruptedCopy(t *testing.T, iso string) string {
 	t.Helper()
 	img, err := os.ReadFile(iso)
 	if err != nil {
@@ -131,9 +136,13 @@ func corruptRootDirectory(t *testing.T, iso string) {
 	// is a little-endian 32-bit LBA at offset 2 of that record.
 	const off = 32768 + 156 + 2
 	img[off], img[off+1], img[off+2], img[off+3] = 0xff, 0xff, 0xff, 0x0f
-	if err := os.WriteFile(iso, img, 0644); err != nil {
+
+	dst := filepath.Join(filepath.Dir(iso), sanitise(t.Name())+"-corrupt.iso")
+	t.Cleanup(func() { os.Remove(dst) })
+	if err := os.WriteFile(dst, img, 0644); err != nil {
 		t.Fatal(err)
 	}
+	return dst
 }
 
 // runcmd is interpreted, never executed. The file verbs must take effect via
