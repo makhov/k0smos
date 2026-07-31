@@ -123,16 +123,39 @@ func findControlPort(name string) string {
 // The port is reopened on EOF: with no host client attached it reads EOF
 // immediately, so watching it once would stop listening before anyone could
 // send anything.
-func watchControlPort(ctx context.Context) <-chan control.Command {
+func watchControlPort(ctx context.Context, cfg config.Config) <-chan control.Command {
 	dev := findControlPort(controlPortName)
 	if dev == "" {
 		logf("no control port; shutdown only via SIGTERM/SIGINT")
 		return nil
 	}
-	logf("listening for shutdown commands on %s", dev)
-	return control.WatchReopen(ctx, func() (io.ReadCloser, error) {
-		return os.Open(dev)
-	}, controlRetry)
+	logf("listening for host commands on %s", dev)
+	return control.WatchReopen(ctx, func() (io.ReadWriteCloser, error) {
+		// Read-write, because requests are answered down the same port. Opening
+		// it read-only was enough while shutdown was the only thing it carried.
+		return os.OpenFile(dev, os.O_RDWR, 0)
+	}, controlRetry, func(request string) ([]byte, error) {
+		return answerRequest(cfg, request)
+	})
+}
+
+// answerRequest serves a host request for data from the node.
+//
+// Only the kubeconfig, which exists so that reaching a cluster does not mean
+// shutting the machine down and reading its disk with debugfs. It comes off the
+// filesystem rather than from k0s, so it works whether or not k0s is still
+// running — and reports plainly when the cluster has not got that far.
+func answerRequest(cfg config.Config, request string) ([]byte, error) {
+	if request != control.RequestKubeconfig {
+		return nil, fmt.Errorf("unknown request %q", request)
+	}
+	path := filepath.Join(cfg.DataDir, "pki", "admin.conf")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("%s is not readable yet; the cluster may still be starting: %w", path, err)
+	}
+	logf("sent %s to the host on request", path)
+	return data, nil
 }
 
 // configureDHCP brings the interface up, acquires a lease, applies it, and keeps
@@ -560,7 +583,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 
 	// Started before the child so a host shutdown request is never missed while
 	// k0s is coming up, which can take minutes.
-	hostCmds := watchControlPort(runCtx)
+	hostCmds := watchControlPort(runCtx, cfg)
 	powerBtn := watchPowerButton(runCtx)
 
 	// runcmd is interpreted, never executed: k0smos does not exec binaries named

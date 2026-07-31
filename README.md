@@ -95,14 +95,34 @@ no Docker) is needed:
 
 ```bash
 make ctl
-./dist/k0smosctl gen -file k0s.yaml:/etc/k0s/k0s.yaml -hostname node-1 -o cidata.iso
+./dist/k0smosctl gen --file k0s.yaml:/etc/k0s/k0s.yaml --hostname node-1 -o cidata.iso
 CIDATA=cidata.iso make boot
 ```
 
-`-user-data <file>` passes a cloud-config through whole instead. Either way it is
-parsed before being written, so mistakes surface before the boot rather than as a
-console warning after it. See
+`--user-data <file>` passes a cloud-config through whole instead. Either way it is
+checked with the same parser the node uses, so a drive that would be ignored —
+malformed YAML, or a cloud-config missing its `#cloud-config` first line — is
+refused before it can boot into a silently unconfigured machine. See
 [usage.md](docs/usage.md#configure-a-node-with-cloud-init) for more.
+
+## Talking to a running node
+
+A node has no SSH and no shell. It answers a small set of requests on a
+virtio-serial control port instead:
+
+```bash
+./dist/k0smosctl kubeconfig -o kubeconfig   # then KUBECONFIG=kubeconfig kubectl get nodes
+./dist/k0smosctl shutdown                   # or reboot — never kill QEMU
+```
+
+The kubeconfig comes off the node's filesystem, so it works whether or not k0s is
+still running, and says so plainly when the cluster has not written its PKI yet.
+The API server address is rewritten to `127.0.0.1`, which is where `run-qemu.sh`
+forwards 6443.
+
+Whoever can write to that port obtains cluster-admin. That is not a new exposure —
+the same channel stops the machine — but do not expose the port anywhere the disk
+is not equally exposed.
 
 From `user-data`:
 
@@ -243,7 +263,8 @@ No shell and no SSH, so there are two ways in.
 logs to the same console. `SERIAL=dist/console.log` captures it headlessly.
 
 **Read the disk offline.** Container logs never reach the console, but the root is
-a raw ext4 file, so `debugfs` reads it without mounting or root:
+a raw ext4 file, so `debugfs` reads it without mounting or root (Docker because
+`debugfs` is not on macOS):
 
 ```bash
 docker run --rm -v "$PWD/dist:/d" alpine:3.20 sh -c '

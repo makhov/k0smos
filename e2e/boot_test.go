@@ -277,7 +277,7 @@ func TestDHCPAcquiresLease(t *testing.T) {
 func TestControlPortDoesNotSelfTrigger(t *testing.T) {
 	requireArtifacts(t, "dist/k0smos-initramfs.gz")
 	v := boot(t, bootOpts{Exec: "/init", Mem: "1024"})
-	v.waitFor(`listening for shutdown commands on /dev/vport`, bootTimeout)
+	v.waitFor(`listening for host commands on /dev/vport`, bootTimeout)
 	v.refute(`syncing and unmounting`, `supervising \[/init\]`, bootTimeout)
 }
 

@@ -3,12 +3,15 @@
 package e2e
 
 import (
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/amakhov/k0smos/internal/control"
 	"github.com/amakhov/k0smos/internal/iso9660"
 )
 
@@ -103,8 +106,8 @@ func TestCLIGeneratedDriveBoots(t *testing.T) {
 	t.Cleanup(func() { os.Remove(iso) })
 
 	gen := exec.Command(bin, "gen",
-		"-file", src+":/etc/k0s/from-cli.yaml",
-		"-hostname", "cli-node",
+		"--file", src+":/etc/k0s/from-cli.yaml",
+		"--hostname", "cli-node",
 		"-o", iso)
 	if out, err := gen.CombinedOutput(); err != nil {
 		t.Fatalf("k0smosctl gen: %v\n%s", err, out)
@@ -153,4 +156,46 @@ write_files:
 	if ls := debugfsCmd(t, disk, "ls -l /etc/k0s"); !strings.Contains(ls, "100600") {
 		t.Errorf("mode not applied:\n%s", ls)
 	}
+}
+
+// requestNode performs a control-port request against a running guest, using the
+// same code path k0smosctl does.
+func requestNode(t *testing.T, v *vm, name string) ([]byte, error) {
+	t.Helper()
+	conn, err := net.DialTimeout("unix", v.control, 5*time.Second)
+	if err != nil {
+		t.Fatalf("dial control socket: %v", err)
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(20 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	return control.Request(conn, name)
+}
+
+// Before k0s has written a kubeconfig there is nothing to send, and the node must
+// say so rather than answer with an empty success — an empty kubeconfig would fail
+// later and much less clearly. This runs in the fast suite because it needs the
+// plumbing, not a cluster.
+func TestKubeconfigRequestReportsWhenAbsent(t *testing.T) {
+	requireArtifacts(t, "dist/k0smos.img", "dist/k0smos-initramfs.gz")
+	disk := cloneDisk(t, filepath.Join(repoRoot(t), "dist/k0smos.img"))
+
+	v := boot(t, bootOpts{Disk: disk, Exec: execNoop})
+	v.waitFor(`listening for host commands on /dev/vport`, bootTimeout)
+	v.waitFor(`supervising`, bootTimeout)
+
+	got, err := requestNode(t, v, control.RequestKubeconfig)
+	if err == nil {
+		t.Fatalf("request succeeded with %d bytes; no cluster has run on this disk", len(got))
+	}
+	// The error must name the file, so the reason is obvious without the console.
+	if !strings.Contains(err.Error(), "admin.conf") {
+		t.Errorf("error = %v, want it to name admin.conf", err)
+	}
+	// And the node must still be alive: a failed request cannot cost the port.
+	if _, err := requestNode(t, v, control.RequestKubeconfig); err == nil {
+		t.Error("second request unexpectedly succeeded")
+	}
+	v.stop()
 }
