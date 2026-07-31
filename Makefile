@@ -3,7 +3,7 @@ BIN := dist/k0smos
 # a host build on macOS would just produce the "linux only" stub.
 GO_BUILD := GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags '-extldflags "-static"'
 
-.PHONY: build test vet kernel k0s initramfs disk boot smoke oci e2e e2e-full accept clean-dist
+.PHONY: build test vet kernel kernel-kata k0s initramfs disk boot smoke oci e2e e2e-full accept clean-dist
 build:
 	$(GO_BUILD) -o $(BIN) ./cmd/k0smos
 
@@ -19,6 +19,13 @@ vet:
 # Alpine linux-virt kernel for the host arch. Needs docker to unpack the .apk.
 kernel:
 	./image/fetch-kernel.sh
+
+# A Kata Containers guest kernel instead: monolithic, so no module tree, a
+# ~1.2MB initramfs and no kernel/module version skew. Verified to reach Ready
+# with zero modules. VMs only — it has no bare-metal drivers.
+#   make kernel-kata && MODULES_DIR=/nonexistent make disk
+kernel-kata:
+	./image/fetch-kernel-kata.sh
 
 # Latest k0s release binary for the host arch (~240MB).
 k0s:
