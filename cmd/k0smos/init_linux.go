@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"github.com/amakhov/k0smos/internal/datavol"
 	"github.com/amakhov/k0smos/internal/dhcp"
 	"github.com/amakhov/k0smos/internal/etcd"
+	"github.com/amakhov/k0smos/internal/iso9660"
 	"github.com/amakhov/k0smos/internal/metadata"
 	"github.com/amakhov/k0smos/internal/module"
 	"github.com/amakhov/k0smos/internal/mount"
@@ -213,31 +215,14 @@ func loadMetadata(s *sys.Sys) (metadata.UserData, metadata.MetaData) {
 		return ud, md
 	}
 
-	if err := s.Mkdir(metadataMount, 0755); err != nil {
-		logf("warn: mkdir %s: %v", metadataMount, err)
+	files, done, err := openMetadata(s, dev, label)
+	if err != nil {
+		logf("warn: read metadata drive %s: %v", dev, err)
 		return ud, md
 	}
-	// Try each filesystem: NoCloud drives are iso9660, config-drives usually
-	// vfat, and the label alone does not say which.
-	mounted := false
-	for _, fstype := range []string{"iso9660", "vfat", "ext4"} {
-		if err := s.Mount(dev, metadataMount, fstype, msReadOnly, ""); err == nil {
-			mounted = true
-			logf("mounted %s (%s, LABEL=%s) at %s", dev, fstype, label, metadataMount)
-			break
-		}
-	}
-	if !mounted {
-		logf("warn: could not mount metadata drive %s", dev)
-		return ud, md
-	}
-	defer func() {
-		if err := s.Unmount(metadataMount, 0); err != nil {
-			logf("warn: unmount %s: %v", metadataMount, err)
-		}
-	}()
+	defer done()
 
-	ud, md, err := metadata.Load(metadataMount)
+	ud, md, err = metadata.Load(files)
 	if err != nil {
 		logf("warn: read metadata: %v", err)
 		return metadata.UserData{}, metadata.MetaData{}
@@ -253,6 +238,53 @@ func loadMetadata(s *sys.Sys) (metadata.UserData, metadata.MetaData) {
 		}
 	}
 	return ud, md
+}
+
+// openMetadata returns a reader for the files on a cloud-init drive, plus a
+// cleanup to call when done.
+//
+// An ISO is parsed in userspace, which is the case that matters: every CAPI
+// infrastructure provider attaches its bootstrap data as one, and KubeVirt has a
+// single code path that always writes an ISO. Doing it here rather than asking
+// the kernel to mount it means CONFIG_ISO9660_FS is not required, which is what
+// keeps otherwise-good monolithic kernels usable — Kata's builds in no ISO9660
+// at all.
+//
+// Anything else falls back to mount, and so depends on the kernel supporting
+// that filesystem. Note what this does and does not buy: an Ironic-style vfat
+// config-drive would reach the fallback, but internal/module ships no vfat
+// module, so mounting it fails. Supporting bare metal means adding "vfat" and
+// the nls_* codepages back there — the fallback alone is not enough.
+func openMetadata(s *sys.Sys, dev, label string) (metadata.Files, func(), error) {
+	name := strings.TrimPrefix(dev, "/dev/")
+	info, _ := blkid.Identify(s, name)
+	if info.FSType == "iso9660" {
+		r, err := iso9660.Open(iso9660.OnDevice(s, name))
+		if err != nil {
+			return nil, nil, err
+		}
+		logf("reading %s (iso9660, LABEL=%s) directly, no mount", dev, label)
+		return r, func() {}, nil
+	}
+
+	if err := s.Mkdir(metadataMount, 0755); err != nil {
+		return nil, nil, fmt.Errorf("mkdir %s: %w", metadataMount, err)
+	}
+	// The label alone does not say which filesystem this is, and probing may
+	// have recognised nothing, so try the plausible ones. iso9660 is not among
+	// them: probing identifies it by the same primary volume descriptor the
+	// reader parses, so a drive that got here is not one.
+	for _, fstype := range []string{"vfat", "ext4"} {
+		if err := s.Mount(dev, metadataMount, fstype, msReadOnly, ""); err == nil {
+			logf("mounted %s (%s, LABEL=%s) at %s", dev, fstype, label, metadataMount)
+			return metadata.Dir(metadataMount), func() {
+				if err := s.Unmount(metadataMount, 0); err != nil {
+					logf("warn: unmount %s: %v", metadataMount, err)
+				}
+			}, nil
+		}
+	}
+	return nil, nil, errors.New("no filesystem could be read or mounted")
 }
 
 // leaveEtcd asks k0s to give up this node's etcd membership, bounded by a

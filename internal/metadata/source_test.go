@@ -11,7 +11,7 @@ func TestLoadNoCloudLayout(t *testing.T) {
 	write(t, dir, "user-data", "#cloud-config\nruncmd:\n  - [k0s, install, controller]\n")
 	write(t, dir, "meta-data", "instance-id: i-1\nlocal-hostname: node-1\n")
 
-	ud, md, err := Load(dir)
+	ud, md, err := Load(Dir(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestLoadConfigDriveLayout(t *testing.T) {
 	write(t, sub, "user_data", "#cloud-config\nruncmd:\n  - [k0s, install, worker]\n")
 	write(t, sub, "meta_data.json", `{"uuid":"i-2","hostname":"node-2"}`)
 
-	ud, md, err := Load(dir)
+	ud, md, err := Load(Dir(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,9 +45,39 @@ func TestLoadConfigDriveLayout(t *testing.T) {
 	}
 }
 
+// mapFiles stands in for a drive that is read without being mounted, which is
+// what internal/iso9660 does for an ISO.
+type mapFiles map[string]string
+
+func (m mapFiles) ReadFile(name string) ([]byte, error) {
+	b, ok := m[name]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return []byte(b), nil
+}
+
+// Load must work off an unmounted source, since that is the path CAPI bootstrap
+// data actually takes.
+func TestLoadFromUnmountedSource(t *testing.T) {
+	ud, md, err := Load(mapFiles{
+		"user-data": "#cloud-config\nwrite_files:\n  - path: /etc/k0s/k0s.yaml\n    content: cfg\n",
+		"meta-data": "instance-id: i-3\nlocal-hostname: node-3\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if md.Hostname != "node-3" {
+		t.Errorf("hostname = %q, want node-3", md.Hostname)
+	}
+	if len(ud.WriteFiles) != 1 || ud.WriteFiles[0].Content != "cfg" {
+		t.Errorf("write_files = %v, want one entry containing cfg", ud.WriteFiles)
+	}
+}
+
 // A drive with neither layout is not an error: it may be some other disk.
 func TestLoadEmptyDrive(t *testing.T) {
-	ud, md, err := Load(t.TempDir())
+	ud, md, err := Load(Dir(t.TempDir()))
 	if err != nil {
 		t.Fatal(err)
 	}

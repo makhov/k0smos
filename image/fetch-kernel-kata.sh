@@ -7,29 +7,23 @@
 # with it the 50 hard-coded module names, the ~21 MB they add to the initramfs,
 # and the kernel/module version-skew hazard.
 #
-# Confirmed working: a node reaches Ready with zero modules loaded.
+# Confirmed working: a node reaches Ready with zero modules loaded, and the
+# cloud-init e2e tests pass on it.
 #
-# TWO CATCHES, the second disqualifying for Cluster API today:
+# ONE CATCH: this is a *guest* kernel. No NVME, ATA, SCSI, USB or physical NIC
+# drivers, so it cannot boot bare metal. Use Alpine's kernel there.
 #
-#  1. This is a *guest* kernel: no NVME, ATA, SCSI, USB or physical NIC drivers,
-#     so it cannot boot bare metal.
+# It builds in no ISO9660 and no VFAT either, which used to disqualify it for
+# Cluster API outright -- a cloud-init drive is how CAPI delivers bootstrap data,
+# and all five cloud-init e2e tests failed here. That is fixed in the right
+# place: internal/iso9660 reads the drive off the block device in userspace, so
+# no kernel filesystem support is needed to consume bootstrap data at all. Kata
+# guests get their config over virtio-fs and vsock, which is why they never
+# needed those filesystems.
 #
-#  2. It builds in NO ISO9660 and NO VFAT, so it cannot mount a cloud-init drive
-#     -- which is how CAPI delivers bootstrap data. All five cloud-init e2e tests
-#     fail on it; everything else passes. Kata guests get their config over
-#     virtio-fs and vsock, so they never needed those filesystems.
-#
-# It is therefore useful for boots that need no bootstrap drive, and as evidence
-# that the monolithic direction works (a node reaches Ready with zero modules).
-# Making it usable for CAPI is a one-symbol delta: Kata's fragments plus
-# CONFIG_ISO9660_FS. Not CONFIG_JOLIET -- Rock Ridge comes with ISO9660 support
-# unconditionally, preserves names like "user-data", and is what Linux prefers
-# when both extensions are present; Joliet would additionally pull in
-# CONFIG_NLS. Not vfat either: KubeVirt writes every cloud-init volume as an ISO
-# (xorrisofs -joliet -rock, one code path in pkg/cloud-init).
-#
-# That is the trigger for owning a kernel build, and about as small as such a
-# justification gets.
+# Which also means there is no longer a reason to own a kernel build. The delta
+# was one symbol (CONFIG_ISO9660_FS); ~250 lines of read-only parsing of a format
+# frozen since 1988 is cheaper than a CVE cadence.
 #
 # Apple's `container` uses the same artifact, pinning url + digest + inner path.
 # This does the same, except the digest pins the kernel itself rather than the

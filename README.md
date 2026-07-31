@@ -125,6 +125,7 @@ Two sources, and the choice matters more than it looks.
 | module tree in the image | ~29 MB, must match the kernel exactly | none |
 | initramfs | ~22 MB | **~1.2 MB** |
 | bare metal | works | **no** — no NVME/ATA/SCSI/USB/NIC drivers |
+| cloud-init drive | works | works ([userspace ISO reader](internal/iso9660/iso9660.go)) |
 | pinned | no | yes, by kernel digest |
 
 Kata's kernel is built for VM guests and covers everything k0s itself needs —
@@ -132,23 +133,29 @@ verified against its config fragments, then by booting: a node reaches Ready wit
 **zero modules loaded**, which removes the module tree, the 50 hard-coded module
 names and the kernel/module version-skew hazard in one step.
 
-> **It cannot be used with Cluster API today.** Kata's kernel builds in no
-> `ISO9660` and no `VFAT`, so it cannot mount a cloud-init drive — the way CAPI
-> delivers bootstrap data. All five cloud-init e2e tests fail on it while
-> everything else passes. Kata guests receive their config over virtio-fs and
-> vsock, so those filesystems were never needed there.
->
-> Alpine's kernel remains the default and is what CI gates on. Making the
-> monolithic route usable is a **one-symbol** delta: Kata's fragments plus
-> `CONFIG_ISO9660_FS`.
->
-> Not `CONFIG_JOLIET`, and not vfat. Rock Ridge is compiled into
-> `CONFIG_ISO9660_FS` unconditionally and is what preserves names like
-> `user-data`; Joliet is optional and additionally needs `CONFIG_NLS`. KubeVirt
-> writes every cloud-init volume, NoCloud and config-drive alike, with
-> `xorrisofs -joliet -rock`, and Linux prefers Rock Ridge when both are present.
-> `TestCloudInitNeedsOnlyRockRidge` boots a Rock-Ridge-only drive to keep that
-> claim honest.
+It used to be unusable with Cluster API: Kata's kernel builds in no `ISO9660` and
+no `VFAT`, so it could not mount a cloud-init drive — the way CAPI delivers
+bootstrap data — and all five cloud-init e2e tests failed on it. Kata guests
+receive their config over virtio-fs and vsock, so those filesystems were never
+needed there.
+
+That was the one remaining gap, and the fix was to stop asking the kernel:
+[`internal/iso9660`](internal/iso9660/iso9660.go) reads the drive directly from
+the block device, ~250 lines of read-only parsing. **No kernel filesystem support
+is required to take CAPI bootstrap data at all**, which is worth more than making
+one kernel work — it removes a constraint on every kernel.
+
+Only Rock Ridge is implemented, not Joliet: Rock Ridge is what preserves names
+like `user-data`, whose hyphen is outside the ISO9660 Level 1 charset. KubeVirt
+writes every cloud-init volume, NoCloud and config-drive alike, with
+`xorrisofs -joliet -rock`, and Linux itself prefers Rock Ridge when both are
+present. `TestCloudInitNeedsOnlyRockRidge` boots a Rock-Ridge-only drive to keep
+that claim honest.
+
+A vfat config-drive, as Ironic writes for bare metal, is **not** supported: it
+falls back to `mount`, and no vfat module is shipped. Enabling it means adding
+`vfat` and the `nls_*` codepages back to `internal/module`, alongside the disk and
+NIC drivers bare metal needs anyway.
 
 ```bash
 make kernel-kata

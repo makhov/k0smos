@@ -71,7 +71,7 @@ write_files:
 `, "instance-id: i-e2e\nlocal-hostname: e2e-node\n")
 
 	v := boot(t, bootOpts{Disk: disk, Cidata: iso, Exec: execNoop})
-	v.waitFor(`mounted /dev/vd\w+ \(iso9660, LABEL=cidata\)`, bootTimeout)
+	v.waitFor(`reading /dev/vd\w+ \(iso9660, LABEL=cidata\) directly, no mount`, bootTimeout)
 	v.waitFor(`wrote 2 file\(s\) from user-data`, bootTimeout)
 	// meta-data must win over the k0smos.hostname= default.
 	v.waitFor(`hostname set to "e2e-node"`, bootTimeout)
@@ -171,7 +171,7 @@ write_files:
 `, `{"uuid":"i-cd-1","hostname":"cd-node"}`)
 
 	v := boot(t, bootOpts{Disk: disk, Cidata: iso, Exec: execNoop})
-	v.waitFor(`mounted /dev/vd\w+ \((iso9660|vfat), LABEL=config-2\)`, bootTimeout)
+	v.waitFor(`reading /dev/vd\w+ \(iso9660, LABEL=config-2\) directly, no mount`, bootTimeout)
 	v.waitFor(`wrote 1 file\(s\) from user-data`, bootTimeout)
 	// meta_data.json spells the hostname differently from NoCloud's meta-data.
 	v.waitFor(`hostname set to "cd-node"`, bootTimeout)
@@ -202,7 +202,7 @@ write_files:
 `, "instance-id: i-rr\nlocal-hostname: rr-node\n", "-r")
 
 	v := boot(t, bootOpts{Disk: disk, Cidata: iso, Exec: execNoop})
-	v.waitFor(`mounted /dev/vd\w+ \(iso9660, LABEL=cidata\)`, bootTimeout)
+	v.waitFor(`reading /dev/vd\w+ \(iso9660, LABEL=cidata\) directly, no mount`, bootTimeout)
 	// The long, hyphenated filenames survived, so Rock Ridge alone is enough.
 	v.waitFor(`wrote 1 file\(s\) from user-data`, bootTimeout)
 	v.waitFor(`hostname set to "rr-node"`, bootTimeout)

@@ -25,24 +25,41 @@ var (
 	metaDataPaths = []string{"meta-data", "openstack/latest/meta_data.json"}
 )
 
-// Load reads user-data and meta-data from a mounted cloud-init drive. Missing
-// files yield empty results rather than errors: a drive may carry only one, and
-// an unrelated disk carries neither.
-func Load(mountPoint string) (UserData, MetaData, error) {
-	ud, err := ParseUserData(readFirst(mountPoint, userDataPaths))
+// Files supplies the contents of a named file from a cloud-init drive, with
+// forward-slash paths relative to its root.
+//
+// This is an interface because the drive is not always mounted: an ISO is parsed
+// in userspace by internal/iso9660, which satisfies this directly and so needs
+// no kernel filesystem support. Dir covers the mounted case.
+type Files interface {
+	ReadFile(name string) ([]byte, error)
+}
+
+// Dir reads from a mounted drive.
+type Dir string
+
+func (d Dir) ReadFile(name string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(string(d), filepath.FromSlash(name)))
+}
+
+// Load reads user-data and meta-data from a cloud-init drive. Missing files
+// yield empty results rather than errors: a drive may carry only one, and an
+// unrelated disk carries neither.
+func Load(f Files) (UserData, MetaData, error) {
+	ud, err := ParseUserData(readFirst(f, userDataPaths))
 	if err != nil {
 		return UserData{}, MetaData{}, err
 	}
-	md, err := ParseMetaData(readFirst(mountPoint, metaDataPaths))
+	md, err := ParseMetaData(readFirst(f, metaDataPaths))
 	if err != nil {
 		return ud, MetaData{}, err
 	}
 	return ud, md, nil
 }
 
-func readFirst(root string, names []string) []byte {
+func readFirst(f Files, names []string) []byte {
 	for _, n := range names {
-		if b, err := os.ReadFile(filepath.Join(root, n)); err == nil {
+		if b, err := f.ReadFile(n); err == nil {
 			return b
 		}
 	}
