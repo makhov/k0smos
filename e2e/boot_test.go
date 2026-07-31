@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"encoding/base64"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -87,6 +88,51 @@ write_files:
 	}
 	if got := debugfsCmd(t, disk, "cat /etc/k0s/secret"); !strings.Contains(got, "decoded-secret") {
 		t.Errorf("base64 content not decoded on disk: %q", got)
+	}
+}
+
+// A corrupt cloud-init drive must not stop the machine from booting. This is
+// PID1 parsing a device it does not control, so the failure mode to rule out is
+// dying — the unit tests cover the parser, this covers what the boot does with
+// its error.
+func TestCorruptCloudInitDriveStillBoots(t *testing.T) {
+	requireArtifacts(t, "dist/k0smos.img", "dist/k0smos-initramfs.gz")
+	disk := cloneDisk(t, filepath.Join(repoRoot(t), "dist/k0smos.img"))
+
+	iso := makeCidata(t, "#cloud-config\nwrite_files:\n  - path: /etc/k0s/x\n    content: y\n", "")
+	corruptRootDirectory(t, iso)
+
+	v := boot(t, bootOpts{Disk: disk, Cidata: iso, Exec: execNoop})
+	// The drive is still found by label — the volume identifier is intact — and
+	// its volume descriptor still parses, so this exercises the reader's error
+	// path rather than the absent-drive one.
+	v.waitFor(`reading /dev/vd\w+ \(iso9660, LABEL=cidata\) directly, no mount`, bootTimeout)
+	// The failure must be reported, not silently treated as an empty drive: a
+	// machine whose bootstrap data was dropped would otherwise come up
+	// unconfigured with nothing in the log to explain it.
+	v.waitFor(`metadata: could not read user-data`, bootTimeout)
+	// A dying PID1 is the failure to rule out: the boot must get all the way to
+	// supervising a child, with neither a Go panic nor a kernel one. Matched
+	// specifically because the kernel cmdline itself contains "panic=10".
+	v.refute(`(panic: |Kernel panic)`, `supervising`, bootTimeout)
+	v.stop()
+}
+
+// corruptRootDirectory points the primary volume descriptor's root directory
+// record at an extent past the end of the image, leaving the volume identifier
+// (and so the label) readable.
+func corruptRootDirectory(t *testing.T, iso string) {
+	t.Helper()
+	img, err := os.ReadFile(iso)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// PVD at sector 16, its root directory record at offset 156, whose extent
+	// is a little-endian 32-bit LBA at offset 2 of that record.
+	const off = 32768 + 156 + 2
+	img[off], img[off+1], img[off+2], img[off+3] = 0xff, 0xff, 0xff, 0x0f
+	if err := os.WriteFile(iso, img, 0644); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -161,6 +161,17 @@ kernels usable, Kata's included. Malformed images must fail rather than panic,
 because this parses a device PID1 does not control and a panic there is a boot
 failure.
 
+A drive that cannot be read is reported, and is deliberately distinguished from
+one that simply does not carry a given file. The latter is normal — a drive
+carries the NoCloud layout or the config-drive one, not both — so warning about it
+would make every boot look broken. The former is not, and silence there is the
+worst outcome available: a machine whose bootstrap data was dropped comes up
+configured as though none was supplied, joins nothing, and offers no explanation.
+`internal/iso9660` wraps `fs.ErrNotExist` for genuine absence so the two can be
+told apart, and `TestCorruptCloudInitDriveStillBoots` boots a drive whose root
+directory points past the end of the image to prove both halves: the warning
+appears, and PID1 still reaches `supervising`.
+
 This covers every config-drive k0smos will realistically meet, Ironic's included.
 The spec permits ISO9660 or vfat, and the tooling only produces ISO9660: nova
 defaults to it, openstacksdk builds Ironic's config-drives with
