@@ -110,8 +110,26 @@ func Identify(p Prober, dev string) (Info, bool) {
 	return Info{}, false
 }
 
-// Blank lists the devices with no recognised filesystem. Partitions are included
-// because a caller may legitimately target one.
+// virtualPrefixes are kernel pseudo block devices. They are permanently blank
+// and never a data volume, so they must not be candidates for formatting.
+//
+// This matters more than it sounds: a monolithic kernel that builds in loop and
+// brd presents 24 of them, which turned "the one blank device" into "refusing to
+// guess between 25". A modular kernel simply never instantiates them.
+var virtualPrefixes = []string{"loop", "ram", "zram", "dm-", "md", "nbd", "fd", "sr"}
+
+func isVirtual(dev string) bool {
+	for _, p := range virtualPrefixes {
+		if strings.HasPrefix(dev, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// Blank lists the devices with no recognised filesystem, excluding kernel
+// pseudo-devices. Partitions are included because a caller may legitimately
+// target one.
 func Blank(p Prober) ([]string, error) {
 	devs, err := p.BlockDevices()
 	if err != nil {
@@ -119,6 +137,9 @@ func Blank(p Prober) ([]string, error) {
 	}
 	var out []string
 	for _, dev := range devs {
+		if isVirtual(dev) {
+			continue
+		}
 		if _, ok := Identify(p, dev); !ok {
 			out = append(out, dev)
 		}

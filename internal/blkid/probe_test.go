@@ -99,6 +99,26 @@ func TestResolveFindsFAT32BySerial(t *testing.T) {
 	}
 }
 
+// A monolithic kernel builds in loop and brd, so /sys/class/block is full of
+// permanently-blank pseudo-devices. Treating those as format candidates turned
+// "one blank disk" into an ambiguity refusal on Kata's kernel.
+func TestBlankIgnoresPseudoDevices(t *testing.T) {
+	p := &fakeProber{
+		devs: []string{"loop0", "loop7", "ram0", "ram15", "zram0", "sr0", "vda", "vdb"},
+		images: map[string][]byte{
+			"vda": superblock(uuidB, "root", ext4Magic),
+			"vdb": make([]byte, 2048), // the actual blank data volume
+		},
+	}
+	got, err := Blank(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "vdb" {
+		t.Errorf("Blank = %v, want [vdb] — pseudo-devices must be excluded", got)
+	}
+}
+
 // A label shorter than the field is padded; the padding must not be returned.
 func TestProbesTrimPadding(t *testing.T) {
 	if _, label, ok := probeISO9660(iso9660Image("cidata")); !ok || label != "cidata" {
