@@ -1,17 +1,45 @@
 # k0smos
 
-A minimal Go PID1 that boots a single-node [k0s](https://k0sproject.io) Kubernetes
-cluster inside a VM. No shell, no busybox, no systemd — the image contains
+A minimal Go PID1 for running [k0s](https://k0sproject.io) Kubernetes nodes. No
+shell, no busybox, no systemd, no cloud-init implementation — the image contains
 k0smos, k0s, and a handful of libraries.
 
-k0smos performs OS init (mount pseudo-filesystems, load kernel modules, set up
-cgroup2, configure networking), switches onto a real root filesystem, then
-supervises `k0s controller --single` for the life of the machine and shuts down
-cleanly when asked.
+k0smos does the OS init a Kubernetes node needs and nothing else: mount
+pseudo-filesystems, load kernel modules, switch onto a real root, prepare a data
+volume, configure networking, read its bootstrap data off a cloud-init drive, then
+supervise one workload for the life of the machine and shut down cleanly when
+asked. What that workload is comes from the machine's configuration — a
+single-node controller by default, or the role and join token Cluster API supplied.
 
-**Status: working prototype.** A node reaches `Ready` and shuts down leaving a
-consistent filesystem, verified on Apple Silicon under QEMU/HVF. See
-[Limitations](#limitations) before relying on it.
+The shape it is aimed at is Talos-like: an appliance you configure declaratively
+and replace rather than administer. There is no SSH and no shell to get into.
+Bootstrap data arrives as cloud-init (NoCloud or config-drive), which is what
+Cluster API providers already produce, and `runcmd` is **interpreted rather than
+executed** — the same stance Talos takes.
+
+## Status
+
+A **working prototype**, honest about which parts have actually run:
+
+| | |
+|---|---|
+| Single-node k0s reaching `Ready`, clean shutdown | verified, arm64 under QEMU/HVF |
+| Both kernels — monolithic (Kata) and modular (Alpine) | verified, 14 e2e boots each |
+| cloud-init `write_files`, `runcmd`, manifests, hostname | verified by e2e |
+| Data volume: format-once, reuse, refuse-to-guess | verified by e2e |
+| amd64 | builds and boots the initramfs; the disk/`switch_root`/k0s path has never completed |
+| Cluster API end to end | **never run** — manifests derived from provider types, never reconciled |
+| Multi-node (worker or joining controller) | **never run** — roles and tokens pass through, nothing more |
+| Bare metal | drivers autoload, but only ever exercised on virtio; no partition table, no grow-on-first-boot |
+
+173 unit tests, 14 fast e2e boots per kernel, 3 e2e boots with real k0s. CI runs
+both kernels — though see [Limitations](#limitations) for the one caveat about CI
+itself.
+
+**Start here:** [docs/usage.md](docs/usage.md) for how to actually use it,
+[docs/architecture.md](docs/architecture.md) for why the boot sequence is ordered
+the way it is, [docs/deployment.md](docs/deployment.md) for KubeVirt and Cluster
+API.
 
 ## Quick start
 
@@ -316,6 +344,8 @@ IMG=dist/k0smos.img CIDATA=dist/cidata.iso ./image/run-qemu.sh
 | `CONTROL` | run-qemu | control socket path (default `dist/control.sock`) |
 | `MONITOR` | run-qemu | optional QEMU monitor socket |
 | `CIDATA` | run-qemu | cloud-init drive (ISO) to attach |
+| `DATA` | run-qemu | data volume image to attach; created blank if absent |
+| `DATA_SIZE` | run-qemu | size for a newly created `DATA` (default `4G`) |
 | `NET_ARGS` | run-qemu | replaces the default `k0smos.ip=…` cmdline fragment |
 | `ROOT` | run-qemu | overrides `k0smos.root=` (default `LABEL=k0smos`) |
 | `EXEC` | run-qemu | sets `k0smos.exec=` |
@@ -325,6 +355,8 @@ IMG=dist/k0smos.img CIDATA=dist/cidata.iso ./image/run-qemu.sh
 | `APK_PKGS` | mkrootfs | userspace packages for the root image |
 | `MODULES_DIR` | mkrootfs, mkinitramfs | module tree to bundle |
 | `MARKER`, `TIMEOUT`, `LOG` | acceptance | readiness pattern, deadline, log path |
+| `PUSH`, `REGISTRY`, `TAG` | mkoci | push the OCI artifacts, and where to |
+| `K0SMOS_E2E_KEEP_CONSOLE` | e2e | `1` keeps guest consoles for passing tests too |
 
 ## Tests
 
@@ -396,6 +428,16 @@ Known and deliberate, as of this prototype:
 - **Fixed image size.** `mkrootfs.sh` sizes the filesystem at content + 3 GB and
   writes no partition table; there is no grow-on-first-boot.
 - **Everything runs as root.** `/etc/passwd` exists only so k0s stops warning.
+- **CI has never executed.** The workflow gates both kernels, unit tests, vet,
+  gofmt and manifest parsing — and none of it has run, because the repository has
+  no remote. Treat the workflow as unreviewed code, not as evidence.
+- **Cluster API has never been reconciled.** `examples/capi-kubevirt.yaml` was
+  derived from the providers' Go types and has never been applied to a cluster.
+  The cloud-init contract it depends on *is* covered by e2e tests, including the
+  config-drive layout CAPK attaches, but that is not the same as the loop working.
+- **Bare metal is untested.** Drivers autoload from `modules.alias`, which is what
+  makes arbitrary hardware possible in principle, but it has only ever run against
+  virtio. A slow-probing HBA and the rescan loop have never met.
 - **Module fragility, on the modular path.** Hardware drivers are no longer the
   problem — those are autoloaded from `modules.alias`. What remains named is the
   part no device announces: netfilter, nft, ipsets and overlayfs. A kernel that
@@ -411,8 +453,13 @@ For deploying outside the local QEMU setup, see
 cmd/k0smos/         PID1 entry point and boot sequence
 internal/sys/       every real syscall; other packages take a narrow interface
 internal/mount/     pseudo-filesystem mounts
-internal/module/    kernel module loading (modules.dep + softdep + alias)
-internal/blkid/     UUID=/LABEL= root resolution via ext4 superblocks
+internal/module/    kernel module loading: named set (modules.dep + softdep +
+                    alias) plus autoload by device modalias
+internal/blkid/     UUID=/LABEL= resolution by probing superblocks directly
+internal/iso9660/   reads cloud-init ISOs without mounting them
+internal/metadata/  cloud-init user-data/meta-data: parse, interpret, apply
+internal/datavol/   the mutable data volume: find, format once, reuse
+internal/etcd/      giving up etcd membership on shutdown
 internal/switchroot/ initramfs → real root
 internal/cgroup/    cgroup2 unified hierarchy
 internal/net/       loopback and static addressing
@@ -424,6 +471,8 @@ internal/control/   host shutdown requests over virtio-serial
 internal/power/     ACPI power button
 internal/shutdown/  sync, unmount, remount-ro, reboot(2)
 image/              kernel/k0s fetchers, image builders, QEMU runner
+e2e/                QEMU boots asserting on console output and guest disks
+examples/           Cluster API manifests (never reconciled — see Limitations)
 ```
 
 Every package defines its own minimal interface over `internal/sys` and fakes it

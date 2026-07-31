@@ -1,0 +1,280 @@
+# Using k0smos
+
+Task-oriented. Each section says up front whether the path has actually been run,
+because several have not — see [Status](../README.md#status).
+
+- [Boot a node locally](#boot-a-node-locally) — verified
+- [Configure a node with cloud-init](#configure-a-node-with-cloud-init) — verified
+- [Ship Kubernetes manifests](#ship-kubernetes-manifests) — verified
+- [Give it a data volume](#give-it-a-data-volume) — verified
+- [Reach the cluster from the host](#reach-the-cluster-from-the-host) — verified
+- [Shut it down](#shut-it-down) — verified
+- [Run it on KubeVirt](#run-it-on-kubevirt) — boots, not reconciled by CAPI
+- [Run it on bare metal](#run-it-on-bare-metal) — untested
+- [When something goes wrong](#when-something-goes-wrong)
+
+Throughout: k0smos has **no shell and no SSH**. Everything a machine needs is
+supplied before it boots, and everything it reports comes out of the console.
+That is the design, not a gap.
+
+## Boot a node locally
+
+Needs Go 1.25+, QEMU, and Docker (the ext4 image and the kernel unpack both need
+Linux tools). Works on Apple Silicon via HVF and on linux/KVM.
+
+```bash
+make boot
+```
+
+That fetches the kernel and the latest k0s release, builds the initramfs and a
+~3.3 GB ext4 root, and boots a single-node controller. Give it a minute or two;
+`k0s controller --single` has a lot to start.
+
+While iterating on k0smos itself, use the fast path instead — it boots the init
+alone with no k0s at all, in about 15 seconds:
+
+```bash
+make smoke
+```
+
+**If you change any k0smos code, rebuild both images.** After `switch_root`,
+k0smos re-execs `/sbin/k0smos` from the ext4 root, so everything after the pivot
+runs the binary in `dist/k0smos.img`, not the one in the initramfs:
+
+```bash
+./image/mkinitramfs.sh
+K0S_BIN=dist/k0s-$(go env GOARCH) ./image/mkrootfs.sh dist/k0smos.img
+```
+
+Rebuilding only the initramfs tests stale code that boots perfectly. It cost real
+debugging time to notice.
+
+## Configure a node with cloud-init
+
+This is the whole configuration interface. Build a NoCloud ISO and attach it:
+
+```bash
+mkdir -p /tmp/cidata
+cat > /tmp/cidata/user-data <<'EOF'
+#cloud-config
+write_files:
+  - path: /etc/k0s/k0s.yaml
+    permissions: "0644"
+    content: |
+      apiVersion: k0s.k0sproject.io/v1beta1
+      kind: ClusterConfig
+      spec:
+        telemetry:
+          enabled: false
+EOF
+printf 'instance-id: demo\nlocal-hostname: demo-node\n' > /tmp/cidata/meta-data
+
+xorriso -as mkisofs -V cidata -r -o dist/cidata.iso /tmp/cidata
+CIDATA=dist/cidata.iso make boot
+```
+
+No `xorriso` on macOS, which is the platform this is mostly developed on. Via
+Docker instead — the same thing the e2e harness does:
+
+```bash
+docker run --rm -v /tmp/cidata:/in -v "$PWD/dist:/out" alpine:3.20 sh -c \
+  'apk add -q --no-cache xorriso && xorriso -as mkisofs -V cidata -r -o /out/cidata.iso /in'
+```
+
+`-r` (Rock Ridge) is required; `-J` (Joliet) is not, and is ignored. Rock Ridge is
+what preserves the name `user-data`, whose hyphen is outside the ISO9660 charset.
+
+The drive is read **without being mounted** — k0smos parses the ISO itself — so no
+kernel filesystem support is involved. An OpenStack config-drive works too:
+label it `config-2` and use `openstack/latest/user_data` and
+`openstack/latest/meta_data.json`.
+
+### What is supported
+
+**`write_files`** — `path`, `content`, `permissions`, and `encoding` of `b64`,
+`gzip+base64` (or `gz+b64`), or plain. Parent directories are created. Bare
+`gzip` without base64 is *not* supported: content arrives as a JSON/YAML string
+and raw deflate bytes do not survive that.
+
+**`meta-data`** — `local-hostname` sets the hostname, beating `k0smos.hostname=`
+on the cmdline. `instance-id` is read and otherwise unused.
+
+**`runcmd`** — **interpreted, never executed.** Nothing named in user-data is ever
+exec'd. Four verbs are carried out with syscalls: `mkdir` (with `-p`), `chmod`,
+`chown`, and `ln -s`. A `k0s install <role> …` is translated into the equivalent
+foreground command, since k0smos supervises one process instead of registering a
+systemd unit, and `--env KEY=VALUE` is lifted into the child's environment.
+`systemctl` calls are dropped silently. Everything else — `curl`, `sed`, a script,
+or any string containing `|`, `>`, `&&`, `$(…)` — is refused and logged as
+`UNSUPPORTED runcmd`.
+
+If a provider's user-data depends on something in that last category, the machine
+will boot and tell you what it ignored. It will not half-apply it.
+
+## Ship Kubernetes manifests
+
+k0s applies anything under `/var/lib/k0s/manifests/<name>/`, so a manifest is just
+a file — no shell, no `kubectl apply`:
+
+```bash
+gzip -c my-namespace.yaml | base64 | tr -d '\n'   # -> $CONTENT
+```
+
+```yaml
+#cloud-config
+write_files:
+  - path: /var/lib/k0s/manifests/demo/ns.yaml
+    permissions: "0644"
+    encoding: gzip+base64
+    content: <CONTENT>
+```
+
+Compression matters here: cloud-init user-data has size limits and manifests are
+verbose.
+
+## Give it a data volume
+
+Without one, k0s writes to the root filesystem, which is fine for a throwaway
+boot. With one, `/var/lib/k0s` is a separate volume that survives a guest reboot
+— which is what lets etcd survive an in-place restart and images stay cached.
+
+```bash
+DATA=dist/data.img DATA_SIZE=8G make boot
+```
+
+The image is created blank if it does not exist. Then on the guest side:
+
+```
+k0smos.data=auto
+```
+
+`auto` picks the one blank device. The safety rule is absolute: **k0smos never
+formats a device that already has a filesystem**, and if the choice is ambiguous
+it refuses and says so rather than guessing. A volume it formatted once is
+recognised by label on later boots and reused.
+
+Other forms: `k0smos.data=/dev/vdb`, or `LABEL=`/`UUID=`. `k0smos.datadir=`
+changes the mountpoint, `k0smos.datafstype=` the filesystem.
+
+## Reach the cluster from the host
+
+`run-qemu.sh` forwards 6443. Get the admin kubeconfig off the disk image without
+booting anything — no shell required on the guest, and this works after shutdown:
+
+```bash
+./image/poweroff.sh                       # shut down cleanly first
+docker run --rm -v "$PWD/dist:/d" alpine:3.20 sh -c \
+  'apk add -q --no-cache e2fsprogs e2fsprogs-extra >/dev/null &&
+   debugfs -R "cat /var/lib/k0s/pki/admin.conf" /d/k0smos.img 2>/dev/null' \
+  | sed 's/localhost/127.0.0.1/' > /tmp/kubeconfig
+kubectl --kubeconfig /tmp/kubeconfig get nodes
+```
+
+Docker because `debugfs` (from `e2fsprogs`) is not on macOS either; with it
+installed, `debugfs -R "cat …" dist/k0smos.img` is the whole command.
+
+Reading the image while the guest is running gives a stale answer at best, hence
+shutting down first. If the data volume is separate, read `/var/lib/k0s` from that
+image instead — the root image will only have the empty mountpoint.
+
+## Shut it down
+
+**Do not kill QEMU.** A hard kill leaves the ext4 journal unreplayed and any later
+disk inspection will lie to you.
+
+```bash
+./image/poweroff.sh              # or CMD=reboot ./image/poweroff.sh
+```
+
+That writes to a virtio-serial control port. A real hypervisor or machine uses the
+ACPI power button instead, which k0smos also watches — the control port exists
+because QEMU's arm64 `virt` machine with direct kernel boot has no ACPI at all.
+`SIGTERM`/`SIGINT` work too.
+
+On the way down k0smos runs `k0s etcd leave` **before** stopping the child (a
+controller cannot give up membership once stopped), then kills everything, syncs,
+unmounts deepest-first, and remounts `/` read-only. The evidence that it worked is
+that `e2fsck -fn` afterwards is completely silent — no journal to replay.
+
+Skipped for workers and for `--single`, which is kine-backed rather than etcd.
+
+## Run it on KubeVirt
+
+Boots and has been verified as a VM; the CAPI loop around it has **not** been
+reconciled. Build the OCI artifacts:
+
+```bash
+ARCH=x86_64 make oci                              # for an amd64 cluster
+PUSH=1 REGISTRY=ghcr.io/you TAG=v0 make oci
+```
+
+That produces `k0smos-boot` (kernel at `/boot/vmlinuz`, initramfs at
+`/boot/initramfs.gz`) and `k0smos-disk` (the ext4 root at `/disk/k0smos.img`, where
+KubeVirt looks for a containerDisk). `mkoci.sh` prints a matching VM spec when it
+finishes, and `image/kubevirt-vm.yaml` is a worked example. The shape that matters:
+
+```yaml
+spec:
+  domain:
+    firmware:
+      kernelBoot:
+        container:
+          image: ghcr.io/you/k0smos-boot:v0
+          kernelPath: /boot/vmlinuz
+          initrdPath: /boot/initramfs.gz
+        kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.data=auto"
+```
+
+Note `k0smos.data=auto` with an `emptyDisk`: that shares the VMI's lifecycle, so it
+survives a guest reboot and is discarded when the machine is replaced. Swap it for
+a PVC if you want it to outlive the machine.
+
+See [deployment.md](deployment.md) for the Cluster API manifests and the three
+things that are easy to get wrong there — including `checkStrategy: none`, without
+which machines never report bootstrapped because CAPK tries to read a sentinel file
+over SSH that does not exist here.
+
+## Run it on bare metal
+
+**Untested.** The pieces are in place and nothing has run. What you need:
+
+1. **A kernel with drivers for your hardware.** Not the default — that is a Kata
+   *guest* kernel with no NVMe, ATA, SCSI, USB or physical NIC support. Alpine's
+   `linux-virt` covers NVMe, ATA, SCSI, USB-storage, `e1000e` and `mlx5`, but not
+   `igb`, `ixgbe`, `i40e`, `bnxt` or `megaraid_sas`. For anything else, supply a
+   distro kernel with a module tree — you do not need to build one. See
+   [Bring your own kernel](../README.md#bring-your-own-kernel).
+2. Point `MODULES_DIR` at that tree when building the images. Drivers are then
+   autoloaded by matching each device's `modalias` against `modules.alias`, so you
+   do not have to name them.
+3. Accept that the image writes **no partition table** and does not grow on first
+   boot, so it must be written to a disk it fits.
+
+## When something goes wrong
+
+The console is the only interface, and k0smos is deliberately talkative. Lines
+worth recognising:
+
+| Line | Meaning |
+|---|---|
+| `no module tree; assuming a monolithic kernel` | Normal on the default kernel |
+| `warn: /lib/modules has module trees […] but none for the running kernel` | Kernel and module tree are out of step — the images were built against a different kernel |
+| `reading /dev/vdX (iso9660, LABEL=cidata) directly, no mount` | The cloud-init drive was found and is being parsed |
+| `metadata: could not read user-data` | The drive was found but is unreadable — bootstrap data was **not** applied |
+| `refusing to guess: N blank devices` | `k0smos.data=auto` with more than one candidate; name the device explicitly |
+| `UNSUPPORTED runcmd […]` | A user-data command k0smos will not execute |
+| `warn: dhcp on eth0` | No lease; the node has loopback only and cannot pull images |
+
+Two failures that look like something else:
+
+- **kube-router crashlooping with `failed to synchronize cache`** is usually *not*
+  a kube-router problem. It means no service rules were programmed, so the
+  `kubernetes` ClusterIP does not work and it cannot reach the API. Look for a
+  missing netfilter module instead.
+- **DNS timeouts under QEMU on macOS.** slirp's resolver never answers. Pass
+  `k0smos.dns=1.1.1.1`; the local boot scripts already do.
+
+For e2e failures, guest consoles are saved to `dist/e2e/<test>.console.log`. They
+are kept on failure only — set `K0SMOS_E2E_KEEP_CONSOLE=1` to keep them for
+passing tests too, which is the only way to tell a passing assertion from one that
+was skipped.
