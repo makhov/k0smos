@@ -23,18 +23,22 @@ repo=$(cd "$here/.." && pwd)
 # Pinned so builds are reproducible. Bumping means updating the version, the
 # kernel path (it carries the version) and the digests together.
 kata_version=${KATA_VERSION:-4.0.0}
-kernel_name=${KATA_KERNEL:-vmlinux-6.18.35-200}
+kernel_release=${KATA_KERNEL_RELEASE:-6.18.35-200}
 
 arch=${ARCH:-$(uname -m)}
 case "$arch" in
   arm64 | aarch64)
     apkarch=aarch64; kata_arch=arm64
+    # arm64: vmlinux is the raw Image QEMU wants; vmlinuz is gzip-wrapped.
+    kernel_name=${KATA_KERNEL:-vmlinux-$kernel_release}
     want_sha=${KATA_KERNEL_SHA256:-4a8998a2e7ac12d6ad1f15b5e7d00571e4518ea9f33db1a1a568310373ca428d}
     ;;
   x86_64 | amd64)
     apkarch=x86_64; kata_arch=amd64
-    # Not yet pinned: set KATA_KERNEL_SHA256 to record it after the first fetch.
-    want_sha=${KATA_KERNEL_SHA256:-}
+    # x86: vmlinuz is the bzImage, which is what QEMU boots. vmlinux is the ELF
+    # used by Firecracker and Cloud Hypervisor.
+    kernel_name=${KATA_KERNEL:-vmlinuz-$kernel_release}
+    want_sha=${KATA_KERNEL_SHA256:-f10415216b52b2f05d173f8ea20934c386b5911c1d22b99ff02c30b64977ea34}
     ;;
   *) echo "unsupported ARCH=$arch" >&2; exit 1 ;;
 esac
