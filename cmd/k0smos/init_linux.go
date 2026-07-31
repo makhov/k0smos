@@ -405,12 +405,17 @@ func loadModules(s *sys.Sys, cfg config.Config) error {
 		return fmt.Errorf("uname: %w", err)
 	}
 	base := "/lib/modules/" + release
-	res, err := module.Load(s, base, names)
+	// The named set plus whatever the hardware asks for. Both in one call so a
+	// driver found twice is counted once — see module.LoadAll.
+	res, err := module.LoadAll(s, base, names, s.Modaliases)
 	if err != nil {
-		return err
+		// Individual failures are collected rather than fatal: one undriveable
+		// device or one bad module must not cost the machine the others.
+		logf("warn: modules: %v", err)
 	}
 	if res.TreeFound {
-		logf("loaded %d kernel module(s) from %s", res.Loaded, base)
+		logf("loaded %d kernel module(s) from %s, autoloaded %d driver(s) for %d device(s)",
+			res.Loaded, base, res.Autoloaded, res.Devices)
 		return nil
 	}
 

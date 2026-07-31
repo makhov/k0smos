@@ -5,8 +5,11 @@ package sys
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -54,6 +57,49 @@ func (s *Sys) BlockDevices() ([]string, error) {
 		names = append(names, e.Name())
 	}
 	return names, nil
+}
+
+// modaliasRoot is where the kernel exposes every device it has enumerated. Each
+// device that can be driven by a module carries a "modalias" file naming what it
+// is, in the same syntax as the patterns in modules.alias.
+const modaliasRoot = "/sys/devices"
+
+// Modaliases returns the modalias of every enumerated device, deduplicated.
+//
+// This is the input to module.LoadForDevices: matching these against
+// modules.alias is how a driver is found for hardware nobody listed in advance,
+// and is what udev does. There is no udev here, so k0smos walks sysfs itself.
+//
+// Errors on individual files are ignored: sysfs is full of entries that vanish
+// mid-walk or refuse to be read, and none of that should stop the others being
+// found.
+func (s *Sys) Modaliases() ([]string, error) {
+	var out []string
+	seen := map[string]bool{}
+
+	err := filepath.WalkDir(modaliasRoot, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			// A directory that disappeared or cannot be entered: skip it, keep
+			// walking. Returning the error would abandon the whole tree.
+			return nil //nolint:nilerr // deliberate: partial results beat none
+		}
+		if d.IsDir() || d.Name() != "modalias" {
+			return nil
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		if v := strings.TrimSpace(string(data)); v != "" && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+		return nil
+	})
+	if err != nil {
+		return out, err
+	}
+	return out, nil
 }
 
 // ReadAt fills p from /dev/<dev> at off.

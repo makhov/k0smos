@@ -144,6 +144,37 @@ an alias — is loaded first. A module that fails is logged and skipped rather
 than aborting the list, so one bad module cannot cost you ext4, overlayfs and
 netfilter.
 
+### And why a named list is not enough
+
+The list above is hand-written, which works for virtio and cannot work for real
+hardware: it names 50 modules, and no list enumerates the NICs and HBAs of an
+arbitrary machine. So after loading it, k0smos does what udev does — reads each
+device's `modalias` from `/sys/devices` and matches it against the glob patterns
+in `modules.alias`, which is the kernel's own index of what drives what:
+
+```
+alias virtio:d00000002v*                    virtio_blk
+alias pci:v00008086d000010D3sv*sd*bc*sc*i*  e1000e
+```
+
+Two things about this were not obvious until the real file was read:
+
+- **The patterns are globs**, so the exact-match lookup used for `crc32c` cannot
+  serve them. Device aliases and name aliases live in the same file and need
+  different treatment.
+- **Discovery is not one-shot.** `virtio_pci` is *built into* Alpine's kernel and
+  has no alias at all; the virtio devices it enumerates then appear with
+  `virtio:…` modaliases, and those are what `virtio_blk` binds to. Where the
+  transport is itself a module (`virtio_mmio`), its children do not exist until it
+  is loaded. udev sees this as a stream of events; with no udev, the equivalent is
+  to re-enumerate after each round and stop when nothing new loads.
+
+Named and discovered modules share one pass of bookkeeping. Two independent
+passes would re-submit an already-loaded driver, get `EEXIST` — which counts as
+success — and report it as autoloaded, overstating the one thing the number
+exists to measure. On a QEMU guest the honest figure is 2 drivers beyond the
+named set, not the 5 the double-counting version claimed.
+
 ## Why runcmd is interpreted and never executed
 
 Cluster API hands a machine its identity as cloud-init user-data: a bootstrap

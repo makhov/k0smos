@@ -87,6 +87,13 @@ type Result struct {
 	TreeFound bool
 	// Loaded counts the modules actually handed to init_module.
 	Loaded int
+	// Autoloaded counts those found by matching device modaliases rather than
+	// being named. Counted separately and never double-counted: a driver already
+	// loaded by name is not autoloaded, and reporting it as such would overstate
+	// what discovery contributes.
+	Autoloaded int
+	// Devices is how many device modaliases were considered.
+	Devices int
 }
 
 // Load loads each named module along with its dependencies, dependencies first.
@@ -100,28 +107,113 @@ type Result struct {
 // on the first bad module silently costs you storage and networking. Every
 // failure is collected and returned together.
 func Load(l Loader, base string, names []string) (Result, error) {
-	deps, err := readDeps(l, base)
-	if err != nil {
+	r, err := newResolver(l, base)
+	if r == nil {
 		return Result{}, err
-	}
-	if deps == nil {
-		// No modules.dep. Either the kernel is monolithic or the tree belongs to
-		// a different kernel; the caller decides which, since only it can see
-		// whether /lib/modules exists at all.
-		return Result{}, nil
-	}
-	r := &resolver{
-		l:     l,
-		base:  base,
-		deps:  deps,
-		soft:  readSoftdeps(l, base),
-		alias: readAliases(l, base),
-		done:  map[string]bool{},
 	}
 	for _, name := range names {
 		r.load(name)
 	}
 	return Result{TreeFound: true, Loaded: r.loaded}, errors.Join(r.errs...)
+}
+
+// maxDeviceRounds bounds device discovery. Two or three rounds is normal; the cap
+// only stops a pathological alias file from looping.
+const maxDeviceRounds = 8
+
+// LoadForDevices loads a driver for each device the kernel reports, by matching
+// its modalias against the patterns in modules.alias. devices enumerates the
+// modaliases currently present; see sys.Modaliases.
+//
+// This is what makes a kernel's full hardware support reachable. A hand-written
+// list cannot: Default names 50 modules, which is workable for virtio but cannot
+// enumerate the NICs and HBAs of arbitrary machines. Matching by modalias is how
+// udev does it, and it needs to know nothing about the hardware in advance.
+//
+// devices is called repeatedly, because discovery is not one-shot: loading a bus
+// driver makes its children appear, and only then can they be matched. A PCI
+// virtio controller yields devices whose modaliases look like
+// "virtio:d00000002v00001AF4", which is what virtio_blk actually binds to — and
+// on a kernel where the transport is a module (virtio_mmio) those do not exist
+// until it is loaded. udev sees this as a stream of events; with no udev, the
+// equivalent is to re-enumerate until a round loads nothing new.
+func LoadForDevices(l Loader, base string, devices func() ([]string, error)) (Result, error) {
+	r, err := newResolver(l, base)
+	if r == nil {
+		return Result{}, err
+	}
+	seen := r.loadDevices(devices)
+	return Result{TreeFound: true, Loaded: r.loaded, Autoloaded: r.loaded, Devices: seen}, errors.Join(r.errs...)
+}
+
+// LoadAll loads the named set and then autoloads drivers for whatever hardware is
+// present, on shared bookkeeping.
+//
+// Shared matters: with two independent passes, a driver already loaded by name is
+// handed to init_module again, comes back EEXIST — which counts as success — and
+// is then reported as autoloaded. That overstates what discovery contributes,
+// which is the one thing this number exists to measure.
+func LoadAll(l Loader, base string, names []string, devices func() ([]string, error)) (Result, error) {
+	r, err := newResolver(l, base)
+	if r == nil {
+		return Result{}, err
+	}
+	for _, name := range names {
+		r.load(name)
+	}
+	named := r.loaded
+	seen := r.loadDevices(devices)
+	return Result{
+		TreeFound:  true,
+		Loaded:     named,
+		Autoloaded: r.loaded - named,
+		Devices:    seen,
+	}, errors.Join(r.errs...)
+}
+
+// loadDevices matches devices to drivers, re-enumerating until a round loads
+// nothing new. It returns how many modaliases the last round saw.
+func (r *resolver) loadDevices(devices func() ([]string, error)) int {
+	seen := 0
+	for range maxDeviceRounds {
+		modaliases, err := devices()
+		if err != nil && len(modaliases) == 0 {
+			r.errs = append(r.errs, fmt.Errorf("enumerate devices: %w", err))
+			return seen
+		}
+		seen = len(modaliases)
+		before := r.loaded
+		for _, name := range matchDevices(r.device, modaliases) {
+			// Repeating is cheap: the resolver skips what it has already loaded,
+			// so only genuinely new devices cost anything.
+			r.load(name)
+		}
+		if r.loaded == before {
+			break
+		}
+	}
+	return seen
+}
+
+// newResolver reads the index files. It returns a nil resolver when there is no
+// modules.dep: either the kernel is monolithic or the tree belongs to a different
+// kernel, and only the caller can tell which, since only it can see whether
+// /lib/modules exists at all.
+func newResolver(l Loader, base string) (*resolver, error) {
+	deps, err := readDeps(l, base)
+	if err != nil || deps == nil {
+		return nil, err
+	}
+	exact, device := readAliases(l, base)
+	return &resolver{
+		l:      l,
+		base:   base,
+		deps:   deps,
+		soft:   readSoftdeps(l, base),
+		alias:  exact,
+		device: device,
+		done:   map[string]bool{},
+	}, nil
 }
 
 type modInfo struct {
@@ -134,7 +226,8 @@ type resolver struct {
 	base   string
 	deps   map[string]modInfo
 	soft   map[string][]string // module -> modules to load before it
-	alias  map[string]string   // alias -> module
+	alias  map[string]string   // exact alias -> module
+	device []aliasEntry        // modalias glob -> module
 	done   map[string]bool
 	loaded int
 	errs   []error
@@ -257,21 +350,68 @@ func readSoftdeps(l Loader, base string) map[string][]string {
 	return out
 }
 
-// readAliases parses modules.alias lines of the form
+// aliasEntry is a device alias: a glob to match a device's modalias against,
+// and the module that drives it.
+type aliasEntry struct {
+	pattern string
+	module  string
+}
+
+// readAliases parses modules.alias, which holds two kinds of line.
+//
+// Plain names are exact aliases, used to resolve a requested module to the one
+// that actually provides it:
 //
 //	alias crc32c crc32c_generic
-func readAliases(l Loader, base string) map[string]string {
-	out := map[string]string{}
+//
+// Patterns are device aliases, matched against a device's modalias to discover
+// which driver it needs. This is how a kernel's hardware support is indexed, and
+// what makes loading drivers for unknown hardware possible without naming any:
+//
+//	alias pci:v00001AF4d00001000sv*sd*bc*sc*i* virtio_net
+//	alias pci:v00008086d000010D3sv*sd*bc*sc*i* e1000e
+func readAliases(l Loader, base string) (map[string]string, []aliasEntry) {
+	exact := map[string]string{}
+	var device []aliasEntry
+
 	data, err := l.ReadFile(path.Join(base, "modules.alias"))
 	if err != nil {
-		return out
+		return exact, nil
 	}
 	for line := range strings.Lines(string(data)) {
 		fields := strings.Fields(line)
 		if len(fields) != 3 || fields[0] != "alias" {
 			continue
 		}
-		out[fields[1]] = fields[2]
+		if strings.ContainsAny(fields[1], "*?[") {
+			device = append(device, aliasEntry{pattern: fields[1], module: fields[2]})
+			continue
+		}
+		exact[fields[1]] = fields[2]
+	}
+	return exact, device
+}
+
+// matchDevices returns the modules driving the given device modaliases, in the
+// order first seen and without repeats.
+//
+// A device may match several patterns and a module may drive many devices, hence
+// the deduplication. Malformed patterns are skipped rather than failing the lot:
+// one bad line in a distro's modules.alias must not cost the machine its
+// storage driver.
+func matchDevices(entries []aliasEntry, modaliases []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, modalias := range modaliases {
+		for _, e := range entries {
+			if ok, err := path.Match(e.pattern, modalias); err != nil || !ok {
+				continue
+			}
+			if !seen[e.module] {
+				seen[e.module] = true
+				out = append(out, e.module)
+			}
+		}
 	}
 	return out
 }

@@ -185,7 +185,11 @@ func boot(t *testing.T, o bootOpts) *vm {
 	// hard kill corrupts the ext4 image and makes any later disk assertion lie.
 	t.Cleanup(func() {
 		v.stop()
-		if t.Failed() {
+		// Consoles are kept on failure because that is when they are evidence.
+		// K0SMOS_E2E_KEEP_CONSOLE=1 keeps them regardless, for checking what a
+		// passing boot actually printed — a conditional assertion can pass by
+		// being skipped, and the console is the only way to tell.
+		if t.Failed() || os.Getenv("K0SMOS_E2E_KEEP_CONSOLE") == "1" {
 			v.dumpConsole()
 		}
 	})
