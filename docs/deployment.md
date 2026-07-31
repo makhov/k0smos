@@ -237,14 +237,22 @@ with `debugfs`. Wiring that out properly is not done.
 
 Roughly in the order worth fixing:
 
-1. **Monolithic kernel.** Correct operation currently depends on 50 named
-   modules existing under the names Alpine uses. Compiling virtio, ext4,
-   overlayfs and netfilter into a kernel you control removes this entire class of
-   failure — and would let `ip=dhcp` work as a fallback, since you would also set
-   `CONFIG_IP_PNP`.
-2. **A/B images and upgrades.** Nothing to roll forward or back today.
-3. **Partition table and grow-on-first-boot**, so one image fits any disk.
-4. **Config-drive / IMDS**, for hostname, SSH keys and k0s join tokens.
-5. **Multi-node.** `k0s controller --single` only; no join tokens, no HA.
+1. **A/B images and upgrades.** Nothing to roll forward or back today.
+2. **Partition table and grow-on-first-boot**, so one image fits any disk.
+3. **Multi-node.** The default workload is `k0s controller --single`. Roles and
+   `--token-file` already pass through from cloud-init, but no multi-node cluster
+   has been run, so treat it as unproven rather than supported.
+
+Two entries have since been dealt with and are recorded here because the reasoning
+matters:
+
+- **Monolithic kernel** — done, and it is the default. Kata's guest kernel builds
+  in virtio, ext4, overlayfs and netfilter, so the named-module class of failure
+  does not arise. Hardware drivers on the modular path are autoloaded from
+  `modules.alias` rather than named.
+- **Config-drive / IMDS** — done for config-drive and NoCloud, including hostname
+  and join tokens. Read in userspace, so it needs no kernel filesystem support.
+  There is no IMDS client: CAPI attaches a drive, and nothing so far has needed
+  the network path.
 6. **A way to export the kubeconfig** that does not involve powering the machine
    off.

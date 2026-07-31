@@ -20,10 +20,10 @@ func TestInitOnlyBootCompletesSequence(t *testing.T) {
 	v.waitFor(`k0smos: starting as PID1`, bootTimeout)
 	for _, want := range []string{
 		`pseudo-filesystems mounted`,
-		// Either kernel is valid here: a modular one loads modules, a monolithic
-		// one (e.g. Kata's) has no tree at all. What must never appear is the
-		// version-skew warning.
-		`(loaded [0-9]+ kernel module\(s\) from /lib/modules/|no module tree; assuming a monolithic kernel)`,
+		// Either kernel is valid: a modular one loads its named set and
+		// autoloads drivers for the hardware it finds, a monolithic one (Kata's)
+		// has no tree at all. What must never appear is the version-skew warning.
+		`(loaded [0-9]+ kernel module\(s\) from /lib/modules/[^ ]+, autoloaded [0-9]+ driver\(s\) for [0-9]+ device\(s\)|no module tree; assuming a monolithic kernel)`,
 		`cgroup2 hierarchy ready`,
 		`loopback up`,
 		`supervising \[/init\]`,
