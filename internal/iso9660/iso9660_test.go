@@ -40,11 +40,11 @@ func (b *builder) pvd(rootLBA, rootSize int64) {
 	p := b.img[pvdOffset:]
 	p[pvdTypeOff] = 1
 	copy(p[pvdIDOff:], "CD001")
-	putLE16(p[pvdBlockSizeOff:], sectorLen)
+	testPutLE16(p[pvdBlockSizeOff:], sectorLen)
 	rec := make([]byte, 34)
 	rec[recLenOff] = 34
-	putLE32(rec[recExtentOff:], uint32(rootLBA))
-	putLE32(rec[recSizeOff:], uint32(rootSize))
+	testPutLE32(rec[recExtentOff:], uint32(rootLBA))
+	testPutLE32(rec[recSizeOff:], uint32(rootSize))
 	rec[recFlagsOff] = flagDirectory
 	rec[recNameLenOff] = 1
 	copy(p[pvdRootDirOff:], rec)
@@ -57,14 +57,14 @@ func (b *builder) directory(lba int64, entries []entry) int64 {
 	// Real images start with the "." and ".." records; include them so the
 	// scanner has to skip them as it would in practice.
 	for _, self := range []byte{0, 1} {
-		rec := dirRecord(entry{isoName: string([]byte{self}), dir: true, lba: lba, size: sectorLen}, "")
+		rec := testRecord(entry{isoName: string([]byte{self}), dir: true, lba: lba, size: sectorLen}, "")
 		rec[recNameLenOff] = 1
 		rec[recNameOff] = self
 		copy(b.img[cur:], rec)
 		cur += int64(len(rec))
 	}
 	for _, e := range entries {
-		rec := dirRecord(e, e.name)
+		rec := testRecord(e, e.name)
 		copy(b.img[cur:], rec)
 		cur += int64(len(rec))
 	}
@@ -77,7 +77,7 @@ func (b *builder) file(lba int64, contents string) int64 {
 	return int64(len(contents))
 }
 
-func dirRecord(e entry, rrName string) []byte {
+func testRecord(e entry, rrName string) []byte {
 	iso := e.isoName
 	if iso == "" {
 		iso = strings.ToUpper(strings.ReplaceAll(e.name, "-", "_")) + ".;1"
@@ -93,8 +93,8 @@ func dirRecord(e entry, rrName string) []byte {
 	}
 	rec := make([]byte, base+len(su))
 	rec[recLenOff] = byte(len(rec))
-	putLE32(rec[recExtentOff:], uint32(e.lba))
-	putLE32(rec[recSizeOff:], uint32(e.size))
+	testPutLE32(rec[recExtentOff:], uint32(e.lba))
+	testPutLE32(rec[recSizeOff:], uint32(e.size))
 	if e.dir {
 		rec[recFlagsOff] = flagDirectory
 	}
@@ -104,8 +104,8 @@ func dirRecord(e entry, rrName string) []byte {
 	return rec
 }
 
-func putLE16(b []byte, v uint16) { b[0] = byte(v); b[1] = byte(v >> 8) }
-func putLE32(b []byte, v uint32) {
+func testPutLE16(b []byte, v uint16) { b[0] = byte(v); b[1] = byte(v >> 8) }
+func testPutLE32(b []byte, v uint32) {
 	b[0], b[1], b[2], b[3] = byte(v), byte(v>>8), byte(v>>16), byte(v>>24)
 }
 
@@ -273,12 +273,12 @@ func TestMalformedImagesDoNotPanic(t *testing.T) {
 		}(),
 		"root directory size implausible": func() []byte {
 			c := append([]byte(nil), good...)
-			putLE32(c[pvdOffset+pvdRootDirOff+recSizeOff:], 0xFFFFFFFF)
+			testPutLE32(c[pvdOffset+pvdRootDirOff+recSizeOff:], 0xFFFFFFFF)
 			return c
 		}(),
 		"root extent past end": func() []byte {
 			c := append([]byte(nil), good...)
-			putLE32(c[pvdOffset+pvdRootDirOff+recExtentOff:], 0xFFFF)
+			testPutLE32(c[pvdOffset+pvdRootDirOff+recExtentOff:], 0xFFFF)
 			return c
 		}(),
 	}

@@ -48,38 +48,39 @@ debugging time to notice.
 
 ## Configure a node with cloud-init
 
-This is the whole configuration interface. Build a NoCloud ISO and attach it:
+This is the whole configuration interface. `k0smosctl` builds the drive — it
+writes the ISO itself, so there is no `xorriso` and no Docker involved:
 
 ```bash
-mkdir -p /tmp/cidata
-cat > /tmp/cidata/user-data <<'EOF'
-#cloud-config
-write_files:
-  - path: /etc/k0s/k0s.yaml
-    permissions: "0644"
-    content: |
-      apiVersion: k0s.k0sproject.io/v1beta1
-      kind: ClusterConfig
-      spec:
-        telemetry:
-          enabled: false
-EOF
-printf 'instance-id: demo\nlocal-hostname: demo-node\n' > /tmp/cidata/meta-data
+make ctl
 
-xorriso -as mkisofs -V cidata -r -o dist/cidata.iso /tmp/cidata
+# put files on the node, taking their permissions from the source file
+./dist/k0smosctl gen -file k0s.yaml:/etc/k0s/k0s.yaml -hostname demo-node -o dist/cidata.iso
+
 CIDATA=dist/cidata.iso make boot
 ```
 
-No `xorriso` on macOS, which is the platform this is mostly developed on. Via
-Docker instead — the same thing the e2e harness does:
+For a cloud-config you have written or rendered elsewhere, pass it whole
+(`-` reads stdin):
 
 ```bash
-docker run --rm -v /tmp/cidata:/in -v "$PWD/dist:/out" alpine:3.20 sh -c \
-  'apk add -q --no-cache xorriso && xorriso -as mkisofs -V cidata -r -o /out/cidata.iso /in'
+./dist/k0smosctl gen -user-data cloud-config.yaml -hostname demo-node -o dist/cidata.iso
 ```
 
-`-r` (Rock Ridge) is required; `-J` (Joliet) is not, and is ignored. Rock Ridge is
-what preserves the name `user-data`, whose hyphen is outside the ISO9660 charset.
+It parses what it generates before writing, so a malformed cloud-config fails here
+rather than as a warning on a console after the machine has already booted.
+
+Building the drive by hand still works if you prefer — the format is nothing
+special:
+
+```bash
+xorriso -as mkisofs -V cidata -r -o dist/cidata.iso /tmp/cidata
+```
+
+`-r` (Rock Ridge) is required; `-J` (Joliet) is not.
+
+Rock Ridge is what preserves the name `user-data`, whose hyphen is outside the
+ISO9660 charset.
 
 The drive is read **without being mounted** — k0smos parses the ISO itself — so no
 kernel filesystem support is involved. An OpenStack config-drive works too:

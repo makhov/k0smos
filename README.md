@@ -71,6 +71,7 @@ cannot run on a ramfs root, so k0smos always `switch_root`s onto the ext4 image.
 | Target | What it does |
 |---|---|
 | `make test` | unit tests — no root, no VM |
+| `make ctl` | build `k0smosctl` into `dist/` (host platform) |
 | `make vet` | vet for the host and for `GOOS=linux` |
 | `make kernel` | fetch the Kata guest kernel |
 | `make kernel-alpine` | fetch Alpine `linux-virt` + its module tree |
@@ -87,9 +88,21 @@ cannot run on a ramfs root, so k0smos always `switch_root`s onto the ext4 image.
 
 The only configuration interface. A NoCloud ISO labelled `cidata` or an OpenStack
 config-drive labelled `config-2`, read **without being mounted** — so no kernel
-filesystem support is involved. Build one with Rock Ridge (`-r`); Joliet is not
-needed. See [usage.md](docs/usage.md#configure-a-node-with-cloud-init) for worked
-examples.
+filesystem support is involved.
+
+`k0smosctl` builds the drive, writing the ISO itself so no `xorriso` (and on macOS
+no Docker) is needed:
+
+```bash
+make ctl
+./dist/k0smosctl gen -file k0s.yaml:/etc/k0s/k0s.yaml -hostname node-1 -o cidata.iso
+CIDATA=cidata.iso make boot
+```
+
+`-user-data <file>` passes a cloud-config through whole instead. Either way it is
+parsed before being written, so mistakes surface before the boot rather than as a
+console warning after it. See
+[usage.md](docs/usage.md#configure-a-node-with-cloud-init) for more.
 
 From `user-data`:
 
@@ -265,12 +278,13 @@ recognising and two failures that look like something else.
 
 ```
 cmd/k0smos/         PID1 entry point and boot sequence
+cmd/k0smosctl/      host-side CLI: builds configuration drives
 internal/sys/       every real syscall; other packages take a narrow interface
 internal/mount/     pseudo-filesystem mounts
 internal/module/    module loading: named set (dep + softdep + alias) plus
                     autoload by device modalias
 internal/blkid/     UUID=/LABEL= resolution by probing superblocks directly
-internal/iso9660/   reads cloud-init ISOs without mounting them
+internal/iso9660/   reads and writes cloud-init ISOs without mounting them
 internal/metadata/  cloud-init user-data/meta-data: parse, interpret, apply
 internal/datavol/   the data volume: find, format once, reuse
 internal/etcd/      giving up etcd membership on shutdown

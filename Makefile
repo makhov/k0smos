@@ -3,9 +3,14 @@ BIN := dist/k0smos
 # a host build on macOS would just produce the "linux only" stub.
 GO_BUILD := GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags '-extldflags "-static"'
 
-.PHONY: build test vet kernel kernel-alpine k0s initramfs disk boot smoke oci e2e e2e-full accept clean-dist
+.PHONY: build ctl test vet kernel kernel-alpine k0s initramfs disk boot smoke oci e2e e2e-full accept clean-dist
 build:
 	$(GO_BUILD) -o $(BIN) ./cmd/k0smos
+
+# k0smosctl runs on the host, not the node, so it builds for the host platform —
+# unlike k0smos itself, which is always cross-compiled for linux.
+ctl:
+	go build -o dist/k0smosctl ./cmd/k0smosctl
 
 test:
 	go test -race ./...
