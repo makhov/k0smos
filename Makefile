@@ -32,6 +32,11 @@ k0s:
 	./image/fetch-k0s.sh
 
 # Initramfs with k0smos as /init. Set K0S_BIN=dist/k0s-<arch> to bake in k0s.
+#
+# Rebuilding this ALONE is not enough after changing k0smos: switch_root re-execs
+# /sbin/k0smos from the ext4 root, so everything after the pivot — cloud-init,
+# data volume, supervise, shutdown — runs the binary in dist/k0smos.img. Rebuild
+# `disk` too, or you will be testing stale code that boots perfectly.
 initramfs:
 	./image/mkinitramfs.sh
 

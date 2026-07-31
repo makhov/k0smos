@@ -152,6 +152,20 @@ infrastructure provider attaches it as a NoCloud ISO (`cidata`) or an OpenStack
 config-drive (`config-2`). Reading it is what tells a machine whether it is a
 control plane or a worker, and with which join token.
 
+The drive is read **without being mounted**. `internal/iso9660` parses the image
+straight off the block device: primary volume descriptor at sector 16, root
+directory extent, directory records, and the Rock Ridge `NM` entries that carry
+real filenames. It is read-only and needs no kernel filesystem support, so
+`CONFIG_ISO9660_FS` is not a requirement — which is what makes monolithic guest
+kernels usable, Kata's included. Malformed images must fail rather than panic,
+because this parses a device PID1 does not control and a panic there is a boot
+failure.
+
+A vfat config-drive — Ironic's, for bare metal — falls back to `mount` and is not
+supported today, since no vfat module is shipped. That is a deliberate trade:
+KubeVirt writes ISOs exclusively, so vfat and the `nls_*` codepages it drags in
+earn nothing on the platforms k0smos targets.
+
 But cloud-init assumes a machine k0smos deliberately is not: one with a shell
 and a service manager. Rather than acquiring those, k0smos **interprets**
 user-data instead of executing it — the same stance Talos takes, which supports

@@ -26,13 +26,18 @@ var Default = []string{
 	"virtio_net", "virtio_blk", "virtio_pci",
 	"ext4", "overlay",
 
-	// Cloud-init drives carrying Cluster API bootstrap data. iso9660 only:
-	// KubeVirt builds both its NoCloud and its config-drive volumes with
-	// `xorrisofs -joliet -rock` (a single code path in pkg/cloud-init), so vfat
-	// and the NLS codepages it needs are dead weight here. An Ironic-style vfat
-	// config-drive would need them back — bare metal is unsupported for other
-	// reasons anyway.
-	"isofs",
+	// No filesystem module for cloud-init drives. Cluster API bootstrap data
+	// arrives on an ISO — KubeVirt builds both its NoCloud and its config-drive
+	// volumes with `xorrisofs -joliet -rock`, a single code path in
+	// pkg/cloud-init — and internal/iso9660 reads that in userspace instead of
+	// mounting it. So no isofs, and no vfat with the NLS codepages it drags in.
+	//
+	// The point is not the ~30 KB saved: it is that a kernel needs no filesystem
+	// support at all to take CAPI bootstrap data, which is what keeps monolithic
+	// guest kernels like Kata's usable unmodified.
+	//
+	// The consequence: an Ironic-style vfat config-drive cannot be read. Add
+	// "vfat" and the nls_* codepages here if bare metal needs it.
 
 	// nftables. k0s selects iptables-nft mode, and without these kube-proxy
 	// dies with `iptables: Failed to initialize nft: Protocol not supported`,
