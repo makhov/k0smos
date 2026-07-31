@@ -54,18 +54,50 @@ Then boot with the CLI:
 
 ```bash
 ./dist/k0smosctl boot
+guest running in the background (pid 91464)
+  console:  tail -f dist/console.log
+  cluster:  k0smosctl kubeconfig -o kubeconfig   (API on :6443)
+  stop it:  k0smosctl shutdown
 ```
 
-Give it a minute or two; `k0s controller --single` has a lot to start. The terminal
-holds the guest's console, so use another one for `kubeconfig` and `shutdown`.
+**The guest runs in the background and the command returns.** A k0smos node has no
+shell, so there is nothing to sit in front of — the console is output, and it goes
+to a file you can `tail -f`. Give it a minute or two; `k0s controller --single` has
+a lot to start.
+
+`--attach` stays in the foreground streaming the console, and there **ctrl-c shuts
+the guest down cleanly** rather than killing it. (`--interactive` hands the terminal
+to QEMU, whose only escape is `ctrl-a x` — which kills the guest. It exists for the
+rare case of wanting the QEMU monitor; prefer `--attach`.)
 
 Useful flags: `--cidata` attaches a configuration drive, `--data` a volume for
-`/var/lib/k0s`, `--console <file>` runs it headless, and `--dry-run` prints the
-QEMU command instead of running it. `--disk ''` stays on the initramfs, which is
-fine for a smoke test but not for k0s — kubelet cannot run on a ramfs root.
+`/var/lib/k0s`, `--console <file>` chooses where the console goes, and `--dry-run`
+prints the QEMU command instead of running it. `--disk ''` stays on the initramfs,
+which is fine for a smoke test but not for k0s — kubelet cannot run on a ramfs root.
 
 With a release's artifacts unpacked there is no `make` at all: `k0smosctl boot`
 takes `--kernel`, `--initramfs` and `--disk` directly.
+
+### More than one node at a time
+
+Each guest needs its own root image, control socket and forwarded port:
+
+```bash
+cp dist/k0smos.img dist/vm2.img
+./dist/k0smosctl boot --disk dist/vm2.img --socket dist/vm2.sock --api-port 7443 \
+  --console dist/vm2.log
+
+./dist/k0smosctl kubeconfig --socket dist/vm2.sock --server 127.0.0.1:7443 -o kubeconfig2
+```
+
+`--server host:port` matters: k0s writes `localhost:6443`, so without the port the
+second node's kubeconfig would point at the first node's forward.
+
+Two guests cannot share one root image — QEMU takes a write lock and the second
+refuses to start, which is the right answer, since sharing it would corrupt the
+filesystem. **Copy a freshly built image, not one that has already booted:** k0s
+generates its PKI on first boot, so a clone of a booted image gives two machines
+with the same cluster identity — same CA, same node UID.
 
 While iterating on k0smos itself, the fast path skips k0s entirely and takes about
 15 seconds:
@@ -96,16 +128,16 @@ writes the ISO itself, so there is no `xorriso` and no Docker involved:
 make ctl
 
 # put files on the node, taking their permissions from the source file
-./dist/k0smosctl gen --file k0s.yaml:/etc/k0s/k0s.yaml --hostname demo-node -o dist/cidata.iso
+k0smosctl gen --file k0s.yaml:/etc/k0s/k0s.yaml --hostname demo-node -o dist/cidata.iso
 
-./dist/k0smosctl boot --cidata dist/cidata.iso
+k0smosctl boot --cidata dist/cidata.iso
 ```
 
 For a cloud-config you have written or rendered elsewhere, pass it whole
 (`-` reads stdin):
 
 ```bash
-./dist/k0smosctl gen --user-data cloud-config.yaml --hostname demo-node -o dist/cidata.iso
+k0smosctl gen --user-data cloud-config.yaml --hostname demo-node -o dist/cidata.iso
 ```
 
 It checks what it generates with the same parser the node uses, so a drive that
@@ -159,7 +191,7 @@ k0s applies anything under `/var/lib/k0s/manifests/<stack>/`, so a manifest is j
 a file — no shell, no `kubectl apply`, nothing to run on the node:
 
 ```bash
-./dist/k0smosctl gen \
+k0smosctl gen \
   --file ns.yaml:/var/lib/k0s/manifests/demo/ns.yaml \
   --file deployment.yaml:/var/lib/k0s/manifests/demo/deployment.yaml \
   -o dist/cidata.iso
@@ -193,7 +225,7 @@ boot. With one, `/var/lib/k0s` is a separate volume that survives a guest reboot
 — which is what lets etcd survive an in-place restart and images stay cached.
 
 ```bash
-./dist/k0smosctl boot --data dist/data.img --data-size 8G
+k0smosctl boot --data dist/data.img --data-size 8G
 ```
 
 The image is created blank if it does not exist. Then on the guest side:
@@ -217,7 +249,7 @@ kubeconfig over the control port — no shell on the guest, no shutting it down
 first:
 
 ```bash
-./dist/k0smosctl kubeconfig -o kubeconfig
+k0smosctl kubeconfig -o kubeconfig
 KUBECONFIG=kubeconfig kubectl get nodes
 ```
 
@@ -237,7 +269,7 @@ Reading it off the disk still works and needs no running guest, which is
 occasionally what you want:
 
 ```bash
-./dist/k0smosctl shutdown
+k0smosctl shutdown
 docker run --rm -v "$PWD/dist:/d" alpine:3.20 sh -c \
   'apk add -q --no-cache e2fsprogs e2fsprogs-extra >/dev/null &&
    debugfs -R "cat /var/lib/k0s/pki/admin.conf" /d/k0smos.img 2>/dev/null' \
@@ -254,7 +286,7 @@ mountpoint.
 disk inspection will lie to you.
 
 ```bash
-./dist/k0smosctl shutdown        # or: k0smosctl reboot
+k0smosctl shutdown        # or: k0smosctl reboot
 ./image/poweroff.sh              # the same thing, without building the CLI
 ```
 

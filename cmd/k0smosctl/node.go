@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"strings"
+	"regexp"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -42,18 +42,26 @@ exposed anywhere the disk is not.`,
   KUBECONFIG=kubeconfig kubectl get nodes
 
   # print it instead of writing a file
-  k0smosctl kubeconfig -o -`,
+  k0smosctl kubeconfig -o -
+
+  # a guest booted with --api-port 7443
+  k0smosctl kubeconfig --socket vm2.sock --server 127.0.0.1:7443 -o kubeconfig2`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			data, err := request(socket, control.RequestKubeconfig, timeout)
 			if err != nil {
 				return err
 			}
-			// k0s writes the server as localhost, which is right on the node and
-			// wrong everywhere else. run-qemu.sh forwards 6443 to the host, so
-			// rewriting it makes the file usable as fetched.
+			// k0s writes the server as localhost:6443, which is right on the node
+			// and wrong everywhere else. The port matters as much as the host: a
+			// second guest is reached on a different forwarded port, and rewriting
+			// only the host would point its kubeconfig at the first guest.
 			if server != "" {
-				data = []byte(strings.ReplaceAll(string(data), "https://localhost:", "https://"+server+":"))
+				out, err := rewriteServer(data, server)
+				if err != nil {
+					return err
+				}
+				data = out
 			}
 			if out == "-" {
 				_, err := cmd.OutOrStdout().Write(data)
@@ -70,7 +78,8 @@ exposed anywhere the disk is not.`,
 	f := cmd.Flags()
 	f.StringVar(&socket, "socket", defaultSocket, "control socket of the running guest")
 	f.StringVarP(&out, "output", "o", "kubeconfig", `where to write it, or "-" for stdout`)
-	f.StringVar(&server, "server", "127.0.0.1", `rewrite the API server host; "" keeps what the node wrote`)
+	f.StringVar(&server, "server", "127.0.0.1",
+		`rewrite the API server as host or host:port; "" keeps what the node wrote`)
 	f.DurationVar(&timeout, "timeout", 10*time.Second, "how long to wait for the node to answer")
 	return cmd
 }
@@ -138,4 +147,27 @@ func request(socket, name string, timeout time.Duration) ([]byte, error) {
 		return nil, err
 	}
 	return control.Request(conn, name)
+}
+
+// serverField matches the API server URL k0s writes into a kubeconfig.
+var serverField = regexp.MustCompile(`(server:\s*https://)([^\s]+)`)
+
+// rewriteServer points a kubeconfig at where the API server is reachable from
+// here. server may be a host, keeping the port the node wrote, or host:port.
+func rewriteServer(data []byte, server string) ([]byte, error) {
+	if !serverField.Match(data) {
+		return nil, fmt.Errorf("no API server URL found in the kubeconfig")
+	}
+	return serverField.ReplaceAllFunc(data, func(m []byte) []byte {
+		g := serverField.FindSubmatch(m)
+		prefix, authority := string(g[1]), string(g[2])
+		host, port := server, ""
+		if h, p, err := net.SplitHostPort(server); err == nil {
+			host, port = h, ":"+p
+		} else if _, p, err := net.SplitHostPort(authority); err == nil {
+			// Keep the port the node wrote when none was asked for.
+			port = ":" + p
+		}
+		return []byte(prefix + host + port)
+	}), nil
 }

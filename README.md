@@ -29,19 +29,19 @@ Build the artifacts and the CLI once:
 make artifacts ctl   # kernel, k0s, initramfs, ext4 root, and k0smosctl
 ```
 
-Everything after that is `k0smosctl`:
+Everything after that is `k0smosctl`. The guest runs in the background — a k0smos
+node has no shell, so there is nothing to sit in front of:
 
 ```bash
-./dist/k0smosctl boot                        # holds the terminal with the console
-```
-
-In a second terminal:
-
-```bash
+./dist/k0smosctl boot                        # returns; console goes to dist/console.log
 ./dist/k0smosctl kubeconfig -o kubeconfig
 KUBECONFIG=kubeconfig kubectl get nodes      # k0smos   Ready   v1.36.3+k0s
 ./dist/k0smosctl shutdown                    # never kill QEMU: it corrupts the image
 ```
+
+`boot --attach` stays in the foreground streaming the console, where ctrl-c shuts
+the guest down cleanly. For a second node, give it its own image, socket and port:
+`boot --disk vm2.img --socket vm2.sock --api-port 7443`.
 
 `make` is for *building* — the kernel, k0s and the ext4 root need Linux tools. With
 a release's artifacts unpacked, `k0smosctl boot` needs no `make`, no repository and

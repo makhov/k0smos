@@ -20,6 +20,8 @@ func argsFor(t *testing.T, mutate func(*bootSpec)) []string {
 		}
 		return p
 	}
+	// Attached by default here, so most cases exercise the foreground path; the
+	// detached one is covered explicitly below.
 	s := bootSpec{
 		kernel:    touch("vmlinuz"),
 		initramfs: touch("initramfs.gz"),
@@ -27,6 +29,8 @@ func argsFor(t *testing.T, mutate func(*bootSpec)) []string {
 		socket:    filepath.Join(dir, "control.sock"),
 		mem:       "4096",
 		cpus:      "2",
+		apiPort:   6443,
+		attach:    true,
 	}
 	if mutate != nil {
 		mutate(&s)
@@ -153,20 +157,84 @@ func TestBootReusesAnExistingDataVolume(t *testing.T) {
 	}
 }
 
+// Three console modes, and the distinction matters for whether ctrl-c works.
 func TestBootConsoleModes(t *testing.T) {
-	interactive := strings.Join(argsFor(t, nil), " ")
+	// Attached: stdio with signal=on, so ctrl-c reaches this process as a signal
+	// instead of being swallowed by QEMU's raw mode and sent to the guest.
+	attached := strings.Join(argsFor(t, nil), " ")
+	if !strings.Contains(attached, "-chardev stdio,id=con,signal=on") {
+		t.Errorf("attached console does not keep ctrl-c on the host:\n%s", attached)
+	}
+	if strings.Contains(attached, "mon:stdio") {
+		t.Error("attached console hands the terminal to QEMU, which swallows ctrl-c")
+	}
+
+	// Interactive: QEMU owns the terminal, and ctrl-a x is the escape.
+	interactive := strings.Join(argsFor(t, func(s *bootSpec) { s.interactive = true }), " ")
 	if !strings.Contains(interactive, "-nographic -serial mon:stdio") {
 		t.Errorf("interactive console args missing:\n%s", interactive)
 	}
 
+	// Detached: a file, because there will be no terminal to write to.
 	dir := t.TempDir()
 	log := filepath.Join(dir, "logs", "console.log")
-	headless := strings.Join(argsFor(t, func(s *bootSpec) { s.console = log }), " ")
-	if !strings.Contains(headless, "-serial file:"+log) {
-		t.Errorf("headless console args missing:\n%s", headless)
+	detached := strings.Join(argsFor(t, func(s *bootSpec) {
+		s.attach, s.console = false, log
+	}), " ")
+	if !strings.Contains(detached, "-serial file:"+log) {
+		t.Errorf("detached console args missing:\n%s", detached)
 	}
-	if strings.Contains(headless, "mon:stdio") {
-		t.Error("headless boot still attaches stdio")
+	if strings.Contains(detached, "stdio") {
+		t.Error("detached boot still attaches stdio")
+	}
+}
+
+// A detached guest with nowhere to log would produce "-serial file:", which QEMU
+// accepts and then writes nowhere findable.
+func TestBootDetachedRequiresAConsolePath(t *testing.T) {
+	dir := t.TempDir()
+	touch := func(n string) string {
+		p := filepath.Join(dir, n)
+		os.WriteFile(p, []byte("x"), 0644)
+		return p
+	}
+	g, _ := guestFor(runtime.GOARCH)
+	_, err := qemuArgs(g, bootSpec{
+		kernel: touch("vmlinuz"), initramfs: touch("initramfs.gz"),
+		attach: false, console: "",
+	})
+	if err == nil {
+		t.Error("accepted a detached boot with no console path")
+	}
+}
+
+// --interactive and --console cannot both have the terminal.
+func TestBootInteractiveRejectsAConsoleFile(t *testing.T) {
+	dir := t.TempDir()
+	touch := func(n string) string {
+		p := filepath.Join(dir, n)
+		os.WriteFile(p, []byte("x"), 0644)
+		return p
+	}
+	g, _ := guestFor(runtime.GOARCH)
+	_, err := qemuArgs(g, bootSpec{
+		kernel: touch("vmlinuz"), initramfs: touch("initramfs.gz"),
+		interactive: true, console: filepath.Join(dir, "c.log"),
+	})
+	if err == nil {
+		t.Error("accepted --interactive together with --console")
+	}
+}
+
+// A second guest needs its own forwarded port, and 0 must forward nothing.
+func TestBootApiPortIsConfigurable(t *testing.T) {
+	got := strings.Join(argsFor(t, func(s *bootSpec) { s.apiPort = 7443 }), " ")
+	if !strings.Contains(got, "hostfwd=tcp::7443-:6443") {
+		t.Errorf("api port not forwarded as asked:\n%s", got)
+	}
+	none := strings.Join(argsFor(t, func(s *bootSpec) { s.apiPort = 0 }), " ")
+	if strings.Contains(none, "hostfwd") {
+		t.Errorf("--api-port 0 still forwarded a port:\n%s", none)
 	}
 }
 

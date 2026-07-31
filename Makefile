@@ -63,9 +63,10 @@ disk: kernel k0s
 artifacts: kernel k0s initramfs disk
 
 # Full local boot, through the CLI so there is one path a user can follow rather
-# than a make-only shortcut that drifts from it.
+# than a make-only shortcut that drifts from it. --attach because a contributor
+# running this wants to watch the boot; ctrl-c then stops the guest cleanly.
 boot: artifacts ctl
-	./dist/k0smosctl boot --memory 8192 --cpus 4
+	./dist/k0smosctl boot --attach --memory 8192 --cpus 4
 
 # Fast init-only check: no k0s, supervises /init (which exits 1 via the PID1
 # gate) purely to prove the mount/cgroup/net/supervise/shutdown path works.

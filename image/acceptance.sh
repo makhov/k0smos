@@ -4,7 +4,9 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 img=${1:-dist/k0smos.img}
-log=${LOG:-dist/console.log}
+# Not dist/console.log: that is where a detached `k0smosctl boot` writes, and
+# truncating a running guest's console would be unhelpful.
+log=${LOG:-dist/accept-console.log}
 timeout_s=${TIMEOUT:-900}
 
 # Taken from a real console log of a node reaching Ready (k0s v1.36.3), not

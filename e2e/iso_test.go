@@ -178,16 +178,17 @@ func requestNode(t *testing.T, v *vm, name string) ([]byte, error) {
 // later and much less clearly. This runs in the fast suite because it needs the
 // plumbing, not a cluster.
 func TestKubeconfigRequestReportsWhenAbsent(t *testing.T) {
-	requireArtifacts(t, "dist/k0smos.img", "dist/k0smos-initramfs.gz")
-	disk := cloneDisk(t, filepath.Join(repoRoot(t), "dist/k0smos.img"))
-
-	v := boot(t, bootOpts{Disk: disk, Exec: execNoop})
+	requireArtifacts(t, "dist/k0smos-initramfs.gz")
+	// No disk at all, so this cannot depend on whether the shared root image
+	// happens to carry cluster state. It did once, and the failure read as a bug
+	// in the request path rather than a dirty fixture.
+	v := boot(t, bootOpts{Exec: "/init", Mem: "1024"})
 	v.waitFor(`listening for host commands on /dev/vport`, bootTimeout)
 	v.waitFor(`supervising`, bootTimeout)
 
 	got, err := requestNode(t, v, control.RequestKubeconfig)
 	if err == nil {
-		t.Fatalf("request succeeded with %d bytes; no cluster has run on this disk", len(got))
+		t.Fatalf("request succeeded with %d bytes; there is no disk attached at all", len(got))
 	}
 	// The error must name the file, so the reason is obvious without the console.
 	if !strings.Contains(err.Error(), "admin.conf") {
