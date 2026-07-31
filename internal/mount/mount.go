@@ -3,6 +3,7 @@ package mount
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/amakhov/k0smos/internal/sys"
 )
@@ -60,6 +61,55 @@ func Ensure(m Mounter) error {
 		}
 		if err := m.Mount(s.Source, s.Target, s.FSType, s.Flags, s.Data); err != nil {
 			return fmt.Errorf("mount %s: %w", s.Target, err)
+		}
+	}
+	return nil
+}
+
+// rwScratch holds the upper and work directories for the overlays below. /run is
+// a tmpfs mounted by Ensure, so this needs no disk and vanishes on reboot.
+const rwScratch = "/run/k0smos/rw"
+
+// WritablePaths are the directories a read-only root cannot serve.
+//
+// Each is here because something observably failed without it:
+//
+//	/etc           k0s creates its containerd config directory under /etc/k0s and
+//	               chmods it, dying with "can't create containerd config dir:
+//	               chmod /etc/k0s: read-only file system". It is also where
+//	               cloud-init write_files puts a user-supplied or
+//	               k0smotron-supplied k0s.yaml, and where resolv.conf is written
+//	               from the DHCP lease.
+//	/usr/libexec   kubelet's dynamic plugin prober creates /usr/libexec/k0s.
+//
+// Two kinds of path are deliberately absent. Those that only need to *exist* are
+// created when the image is built, which costs nothing at runtime — /var/run is a
+// symlink to /run for that reason. And those that hold real data go on the data
+// volume instead of a tmpfs: /opt is a symlink to /var/opt, because containerd
+// stages plugins there and CNI binaries are tens of megabytes.
+var WritablePaths = []string{"/etc", "/usr/libexec"}
+
+// MakeWritable overlays a tmpfs on each path so it can be written on a read-only
+// root, with the root's own contents showing through underneath.
+//
+// overlayfs rather than a plain tmpfs so that what the image ships stays visible:
+// a tmpfs would hide /etc/k0s/k0s.yaml and /etc/passwd, and k0s needs both. A file
+// written at runtime lands in the upper layer and shadows the image's copy, which
+// is exactly the behaviour a user-supplied config wants.
+func MakeWritable(m Mounter, paths []string) error {
+	for _, path := range paths {
+		upper := filepath.Join(rwScratch, path, "upper")
+		work := filepath.Join(rwScratch, path, "work")
+		for _, d := range []string{upper, work} {
+			if err := m.Mkdir(d, 0755); err != nil {
+				return fmt.Errorf("mkdir %s: %w", d, err)
+			}
+		}
+		// upperdir and workdir must be on the same filesystem, which is why both
+		// live under /run.
+		data := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", path, upper, work)
+		if err := m.Mount("overlay", path, "overlay", 0, data); err != nil {
+			return fmt.Errorf("overlay %s: %w", path, err)
 		}
 	}
 	return nil

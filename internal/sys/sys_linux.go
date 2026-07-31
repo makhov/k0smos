@@ -211,3 +211,15 @@ func (s *Sys) LinkUp(name string) error {
 	ifr.SetUint16(ifr.Uint16() | unix.IFF_UP | unix.IFF_RUNNING)
 	return unix.IoctlIfreq(fd, unix.SIOCSIFFLAGS, ifr)
 }
+
+// IsReadOnly reports whether the filesystem holding path is mounted read-only.
+//
+// Used to decide whether the writable-path overlays are needed: an ext4 root
+// serves them itself, an erofs root cannot.
+func (s *Sys) IsReadOnly(path string) (bool, error) {
+	var st unix.Statfs_t
+	if err := unix.Statfs(path, &st); err != nil {
+		return false, err
+	}
+	return st.Flags&unix.ST_RDONLY != 0, nil
+}
