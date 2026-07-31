@@ -59,6 +59,19 @@ else
   echo "no modules dir at $moddir — assuming a monolithic kernel" >&2
 fi
 
+# Optional: a root filesystem carried inside the initramfs. k0smos loop-attaches it
+# and switch_roots onto it, so the kernel and the whole OS travel as one artifact —
+# no separate disk to publish, version or mismatch. Only sensible for a read-only
+# image (ROOTFS=erofs in mkrootfs.sh): an ext4 root with room to work in would make
+# the initramfs gigabytes and hold it all in RAM.
+#
+# The path must match embeddedRoot in cmd/k0smos/init_linux.go.
+if [ -n "${EMBED_ROOT:-}" ]; then
+  [ -f "$EMBED_ROOT" ] || { echo "EMBED_ROOT=$EMBED_ROOT not found" >&2; exit 1; }
+  cp "$EMBED_ROOT" "$root/k0smos-root.img"
+  echo "embedded root filesystem from $EMBED_ROOT ($(du -m "$EMBED_ROOT" | cut -f1)M)"
+fi
+
 # Optional: bake in a real k0s binary. Without it, boot with
 # k0smos.exec=... to supervise something else.
 if [ -n "${K0S_BIN:-}" ]; then

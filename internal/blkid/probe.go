@@ -44,6 +44,7 @@ type Info struct {
 // common case for the root filesystem.
 var probers = []prober{
 	{"ext4", sbOffset, sbLen, probeExt4},
+	{"erofs", erofsSBOffset, erofsSBLen, probeEROFS},
 	{"iso9660", 0, isoPVDOffset + 2048, probeISO9660},
 	{"vfat", 0, 1024, probeFAT},
 }
@@ -92,4 +93,29 @@ func probeFAT(b []byte) (uuid, label string, ok bool) {
 	uuid = fmt.Sprintf("%04X-%04X", serial>>16, serial&0xffff)
 	label = strings.TrimRight(string(b[labelOff:labelOff+11]), " \x00")
 	return uuid, label, true
+}
+
+// The erofs superblock sits 1024 bytes into the device, with its magic first.
+// Read-only by construction, which is why k0smos mounts it MS_RDONLY.
+const (
+	erofsSBOffset = 1024
+	erofsSBLen    = 128
+	erofsMagic    = 0xE0F5E1E2
+	// Offsets within the superblock, from struct erofs_super_block.
+	erofsUUIDOff  = 32 // uuid[16]
+	erofsLabelOff = 48 // volume_name[16]
+)
+
+// probeEROFS identifies an erofs image, which is what a root filesystem carried
+// inside the initramfs is. Detecting it means k0smos need not be told the type on
+// the kernel cmdline.
+func probeEROFS(b []byte) (uuid, label string, ok bool) {
+	if len(b) < erofsLabelOff+16 {
+		return "", "", false
+	}
+	if binary.LittleEndian.Uint32(b[0:]) != erofsMagic {
+		return "", "", false
+	}
+	return formatUUID(b[erofsUUIDOff : erofsUUIDOff+16]),
+		strings.TrimRight(string(b[erofsLabelOff:erofsLabelOff+16]), " \x00"), true
 }

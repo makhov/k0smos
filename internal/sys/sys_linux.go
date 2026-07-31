@@ -223,3 +223,59 @@ func (s *Sys) IsReadOnly(path string) (bool, error) {
 	}
 	return st.Flags&unix.ST_RDONLY != 0, nil
 }
+
+// loopControl is the device that hands out free loop devices.
+const loopControl = "/dev/loop-control"
+
+// LoopAttach backs a free loop device with the file at path and returns its device
+// node, e.g. "/dev/loop0".
+//
+// This is what lets the root filesystem travel inside the initramfs: an erofs image
+// there is a file, and mount(2) will not take a file — the "-o loop" that mount(8)
+// accepts is userspace work, which is why k0smos has to do it itself.
+//
+// readOnly matters for erofs, whose images are read-only by construction: attaching
+// them writable and then mounting fails with EACCES.
+func (s *Sys) LoopAttach(path string, readOnly bool) (string, error) {
+	flags := os.O_RDWR
+	if readOnly {
+		flags = os.O_RDONLY
+	}
+	backing, err := os.OpenFile(path, flags, 0)
+	if err != nil {
+		return "", err
+	}
+	defer backing.Close()
+
+	ctl, err := os.OpenFile(loopControl, os.O_RDWR, 0)
+	if err != nil {
+		return "", fmt.Errorf("open %s: %w", loopControl, err)
+	}
+	defer ctl.Close()
+
+	// The kernel allocates the device; picking a number ourselves would race with
+	// anything else doing the same.
+	n, err := unix.IoctlRetInt(int(ctl.Fd()), unix.LOOP_CTL_GET_FREE)
+	if err != nil {
+		return "", fmt.Errorf("allocate loop device: %w", err)
+	}
+	dev := fmt.Sprintf("/dev/loop%d", n)
+
+	loop, err := os.OpenFile(dev, os.O_RDWR, 0)
+	if err != nil {
+		return "", fmt.Errorf("open %s: %w", dev, err)
+	}
+	defer loop.Close()
+
+	cfg := unix.LoopConfig{Fd: uint32(backing.Fd())}
+	if readOnly {
+		cfg.Info.Flags = unix.LO_FLAGS_READ_ONLY
+	}
+	// LOOP_CONFIGURE rather than LOOP_SET_FD plus LOOP_SET_STATUS64: it sets the
+	// backing file and its flags in one call, so the device is never briefly
+	// attached with the wrong ones.
+	if err := unix.IoctlLoopConfigure(int(loop.Fd()), &cfg); err != nil {
+		return "", fmt.Errorf("configure %s: %w", dev, err)
+	}
+	return dev, nil
+}

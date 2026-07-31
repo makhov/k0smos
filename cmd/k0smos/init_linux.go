@@ -62,6 +62,11 @@ const (
 	rootProbeAttempts = 30
 	rootProbeInterval = 500 * time.Millisecond
 
+	// embeddedRoot is where mkinitramfs.sh puts a root filesystem image carried
+	// inside the initramfs. Present only for a read-only root (erofs), which is
+	// small enough to travel with the kernel rather than as a separate disk.
+	embeddedRoot = "/k0smos-root.img"
+
 	// modulesRoot holds one directory per kernel version.
 	modulesRoot = "/lib/modules"
 	// metadataMount is where a cloud-init drive is mounted while being read.
@@ -385,19 +390,56 @@ func watchPowerButton(ctx context.Context) <-chan struct{} {
 
 // pivot mounts the real root filesystem and switches into it, re-executing
 // k0smos there as PID1. It does not return on success.
+// rootDevice finds the block device holding the root filesystem.
+//
+// An image carried inside the initramfs is attached to a loop device: that is what
+// lets the root travel with the kernel instead of as a second artifact, and it is
+// how Talos ships its own root. Otherwise the root is a real disk, named by
+// UUID=/LABEL= rather than a path because on real hardware disks enumerate as
+// /dev/sda or /dev/nvme0n1 and can reorder between boots.
+func rootDevice(s *sys.Sys, cfg config.Config) (string, error) {
+	if _, err := os.Stat(embeddedRoot); err == nil {
+		// Read-only: the image is erofs, and attaching it writable makes the
+		// mount fail with EACCES.
+		dev, err := s.LoopAttach(embeddedRoot, true)
+		if err != nil {
+			return "", fmt.Errorf("attach %s to a loop device: %w", embeddedRoot, err)
+		}
+		logf("attached %s at %s", embeddedRoot, dev)
+		return dev, nil
+	}
+
+	// Retried because virtio_blk and friends probe asynchronously, so the device
+	// can appear just after its module loads.
+	dev, err := blkid.ResolveWait(s, cfg.Root, rootProbeAttempts, func() {
+		time.Sleep(rootProbeInterval)
+	})
+	if err != nil {
+		return "", fmt.Errorf("find root %s: %w", cfg.Root, err)
+	}
+	if dev != cfg.Root {
+		logf("resolved %s to %s", cfg.Root, dev)
+	}
+	return dev, nil
+}
+
 func pivot(s *sys.Sys, cfg config.Config) error {
 	// UUID=/LABEL= are resolved here rather than passed to mount(2): on real
 	// hardware disks enumerate as /dev/sda or /dev/nvme0n1 and can reorder
 	// between boots. Retried because virtio_blk and friends probe
 	// asynchronously, so the device can appear just after its module loads.
-	dev, err := blkid.ResolveWait(s, cfg.Root, rootProbeAttempts, func() {
-		time.Sleep(rootProbeInterval)
-	})
+	dev, err := rootDevice(s, cfg)
 	if err != nil {
-		return fmt.Errorf("find root %s: %w", cfg.Root, err)
+		return err
 	}
-	if dev != cfg.Root {
-		logf("resolved %s to %s", cfg.Root, dev)
+
+	// Prefer what the device actually holds over what the cmdline said. An image
+	// carried in the initramfs needs no k0smos.rootfstype=, and getting it wrong
+	// fails as an unhelpful EINVAL from mount.
+	fstype := cfg.RootFSType
+	if info, ok := blkid.Identify(s, strings.TrimPrefix(dev, "/dev/")); ok && info.FSType != fstype {
+		logf("root %s holds %s, not %s — using %s", dev, info.FSType, fstype, info.FSType)
+		fstype = info.FSType
 	}
 
 	if err := s.Mkdir(newRootDir, 0755); err != nil {
@@ -407,14 +449,14 @@ func pivot(s *sys.Sys, cfg config.Config) error {
 	// read-only filesystem (erofs) or a read-only device — which is exactly how
 	// KubeVirt attaches a containerDisk — refuses the first attempt with EACCES,
 	// and the boot has nothing useful to say about why.
-	err = s.Mount(dev, newRootDir, cfg.RootFSType, 0, cfg.RootFlags)
+	err = s.Mount(dev, newRootDir, fstype, 0, cfg.RootFlags)
 	readOnly := false
 	if errors.Is(err, unix.EACCES) || errors.Is(err, unix.EROFS) {
-		err = s.Mount(dev, newRootDir, cfg.RootFSType, msReadOnly, cfg.RootFlags)
+		err = s.Mount(dev, newRootDir, fstype, msReadOnly, cfg.RootFlags)
 		readOnly = err == nil
 	}
 	if err != nil {
-		return fmt.Errorf("mount %s (%s): %w", dev, cfg.RootFSType, err)
+		return fmt.Errorf("mount %s (%s): %w", dev, fstype, err)
 	}
 	how := "read-write"
 	if readOnly {
@@ -508,7 +550,10 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	// run on a ramfs root — cadvisor finds no filesystem info for it. Modules
 	// had to be loaded first: the kernel needs virtio_blk and ext4 before the
 	// root device is even visible. On success this execs and does not return.
-	if cfg.Root != "" && !switched {
+	// An embedded image is reason enough to switch: it needs no k0smos.root=, since
+	// there is no device to name.
+	_, embedded := os.Stat(embeddedRoot)
+	if (cfg.Root != "" || embedded == nil) && !switched {
 		if err := pivot(s, cfg); err != nil {
 			return fmt.Errorf("switch root: %w", err)
 		}
