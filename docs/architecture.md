@@ -161,10 +161,13 @@ kernels usable, Kata's included. Malformed images must fail rather than panic,
 because this parses a device PID1 does not control and a panic there is a boot
 failure.
 
-A vfat config-drive — Ironic's, for bare metal — falls back to `mount` and is not
-supported today, since no vfat module is shipped. That is a deliberate trade:
-KubeVirt writes ISOs exclusively, so vfat and the `nls_*` codepages it drags in
-earn nothing on the platforms k0smos targets.
+This covers every config-drive k0smos will realistically meet, Ironic's included.
+The spec permits ISO9660 or vfat, and the tooling only produces ISO9660: nova
+defaults to it, openstacksdk builds Ironic's config-drives with
+`genisoimage`/`mkisofs`/`xorrisofs`, and KubeVirt uses `xorrisofs`. A vfat drive
+would fall back to `mount` and fail, since no vfat module is shipped — one line in
+`internal/module` if one ever appears, as Alpine has vfat and the `nls_*`
+codepages as modules.
 
 But cloud-init assumes a machine k0smos deliberately is not: one with a shell
 and a service manager. Rather than acquiring those, k0smos **interprets**
