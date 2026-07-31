@@ -9,8 +9,21 @@
 #
 # Confirmed working: a node reaches Ready with zero modules loaded.
 #
-# The catch: this is a *guest* kernel. It has no NVME, ATA, SCSI, USB or physical
-# NIC drivers, so it cannot boot bare metal. Use fetch-kernel.sh (Alpine) there.
+# TWO CATCHES, the second disqualifying for Cluster API today:
+#
+#  1. This is a *guest* kernel: no NVME, ATA, SCSI, USB or physical NIC drivers,
+#     so it cannot boot bare metal.
+#
+#  2. It builds in NO ISO9660 and NO VFAT, so it cannot mount a cloud-init drive
+#     -- which is how CAPI delivers bootstrap data. All five cloud-init e2e tests
+#     fail on it; everything else passes. Kata guests get their config over
+#     virtio-fs and vsock, so they never needed those filesystems.
+#
+# It is therefore useful for boots that need no bootstrap drive, and as evidence
+# that the monolithic direction works (a node reaches Ready with zero modules).
+# Making it usable for CAPI means building a kernel from Kata's fragments plus
+# CONFIG_ISO9660_FS/JOLIET and CONFIG_VFAT_FS/NLS_CP437 -- a small delta on a
+# maintained base, and the trigger for owning a kernel build.
 #
 # Apple's `container` uses the same artifact, pinning url + digest + inner path.
 # This does the same, except the digest pins the kernel itself rather than the

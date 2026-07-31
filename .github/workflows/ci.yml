@@ -54,15 +54,15 @@ jobs:
               print(f, len(docs), 'documents')
           "
 
-  # Boots k0smos under QEMU. Uses the Kata kernel: pinned by digest, monolithic
-  # (so no module tree and a ~1.2MB initramfs), and quick to boot.
+  # Boots k0smos under QEMU on Alpine's kernel.
+  #
+  # Not Kata's, despite it being pinned and faster: Kata's kernel builds in no
+  # ISO9660 and no VFAT, so it cannot mount a cloud-init drive at all. Every
+  # cloud-init e2e test fails on it, which means no CAPI bootstrap data. See
+  # image/fetch-kernel-kata.sh.
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      # The Kata kernel has no modules; building with a module tree would leave
-      # a stale one and trigger the version-skew warning.
-      MODULES_DIR: /nonexistent
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -79,12 +79,6 @@ jobs:
 
       # Keyed on the fetch script, which carries the pinned version and digests:
       # bumping either invalidates the cache, and nothing else does.
-      - name: cache kernel
-        uses: actions/cache@v4
-        with:
-          path: dist/kernel
-          key: kata-kernel-${{ runner.arch }}-${{ hashFiles('image/fetch-kernel-kata.sh') }}
-
       # ~256MB per download, so worth keeping. Keyed on the pinned version.
       - name: cache k0s binary
         uses: actions/cache@v4
@@ -94,7 +88,7 @@ jobs:
 
       - name: build artifacts
         run: |
-          make kernel-kata
+          make kernel
           make k0s
           ./image/mkinitramfs.sh
           K0S_BIN=dist/k0s-$(go env GOARCH) ./image/mkrootfs.sh dist/k0smos.img
@@ -113,17 +107,12 @@ jobs:
   # The k0s boots, several minutes each, plus the modular-kernel path. Nightly
   # rather than per-push.
   #
-  # Deliberately uses Alpine's kernel: it is the only thing that exercises
-  # internal/module — dependency resolution, softdeps, alias lookup — which the
-  # Kata path skips entirely. Without this that code would stop being tested.
+  # Alpine's kernel, for the same reason as the gate: it is the only one that can
+  # mount a cloud-init drive. It also exercises internal/module.
   e2e-nightly:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        kernel: [kata, alpine]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -143,15 +132,10 @@ jobs:
           path: dist/k0s-*
           key: k0s-${{ runner.arch }}-${{ env.K0S_VERSION }}
 
-      - name: build artifacts (${{ matrix.kernel }} kernel)
+      - name: build artifacts
         run: |
           make k0s
-          if [ "${{ matrix.kernel }}" = "kata" ]; then
-            make kernel-kata
-            export MODULES_DIR=/nonexistent
-          else
-            make kernel
-          fi
+          make kernel
           ./image/mkinitramfs.sh
           K0S_BIN=dist/k0s-$(go env GOARCH) ./image/mkrootfs.sh dist/k0smos.img
 
@@ -164,6 +148,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-k0s-consoles-${{ matrix.kernel }}
+          name: e2e-k0s-consoles
           path: dist/e2e/*.console.log
           if-no-files-found: ignore
