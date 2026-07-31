@@ -1,8 +1,10 @@
 package metadata
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -72,6 +74,40 @@ func TestLoadFromUnmountedSource(t *testing.T) {
 	}
 	if len(ud.WriteFiles) != 1 || ud.WriteFiles[0].Content != "cfg" {
 		t.Errorf("write_files = %v, want one entry containing cfg", ud.WriteFiles)
+	}
+}
+
+// errFiles fails every read the way a corrupt drive does.
+type errFiles struct{ err error }
+
+func (e errFiles) ReadFile(string) ([]byte, error) { return nil, e.err }
+
+// A drive that cannot be read must say so. Silently treating it as empty would
+// bring a CAPI machine up unconfigured with nothing in the log to explain it.
+func TestLoadWarnsWhenTheDriveCannotBeRead(t *testing.T) {
+	ud, _, err := Load(errFiles{err: errors.New("read directory: i/o error")})
+	if err != nil {
+		t.Fatalf("a corrupt drive must not fail the boot: %v", err)
+	}
+	if len(ud.Warnings) == 0 {
+		t.Fatal("no warning for an unreadable drive")
+	}
+	for _, w := range ud.Warnings {
+		if !strings.Contains(w, "could not read") {
+			t.Errorf("warning %q does not name the problem", w)
+		}
+	}
+}
+
+// A file that is simply absent is normal — a drive carries one layout, not both
+// — and must not be warned about, or every boot would look broken.
+func TestLoadDoesNotWarnAboutAbsentFiles(t *testing.T) {
+	ud, _, err := Load(mapFiles{"user-data": "#cloud-config\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ud.Warnings) != 0 {
+		t.Errorf("warnings for a drive with only one layout: %v", ud.Warnings)
 	}
 }
 

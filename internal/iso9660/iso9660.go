@@ -21,6 +21,7 @@ package iso9660
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 )
 
@@ -198,7 +199,9 @@ func (r *Reader) find(lba, size int64, want string) (record, error) {
 		}
 		off += recLen
 	}
-	return record{}, fmt.Errorf("%q not found", want)
+	// Wrapping fs.ErrNotExist lets callers tell "this drive does not carry that
+	// file", which is normal, from "this drive could not be read", which is not.
+	return record{}, fmt.Errorf("%q: %w", want, fs.ErrNotExist)
 }
 
 // entryName returns a record's filename, preferring the Rock Ridge name.

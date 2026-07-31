@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -46,24 +47,43 @@ func (d Dir) ReadFile(name string) ([]byte, error) {
 // yield empty results rather than errors: a drive may carry only one, and an
 // unrelated disk carries neither.
 func Load(f Files) (UserData, MetaData, error) {
-	ud, err := ParseUserData(readFirst(f, userDataPaths))
+	userData, userWarn := readFirst(f, userDataPaths)
+	metaData, metaWarn := readFirst(f, metaDataPaths)
+
+	ud, err := ParseUserData(userData)
 	if err != nil {
 		return UserData{}, MetaData{}, err
 	}
-	md, err := ParseMetaData(readFirst(f, metaDataPaths))
+	// A drive that cannot be read is not the same as a drive carrying nothing,
+	// and the difference matters: a machine whose bootstrap data was silently
+	// dropped comes up configured as if none was supplied and never joins. Both
+	// still boot, but only one of them should look like a normal boot.
+	ud.Warnings = append(ud.Warnings, append(userWarn, metaWarn...)...)
+
+	md, err := ParseMetaData(metaData)
 	if err != nil {
 		return ud, MetaData{}, err
 	}
 	return ud, md, nil
 }
 
-func readFirst(f Files, names []string) []byte {
+// readFirst returns the first of names that exists, plus a warning for each
+// candidate that existed but could not be read. A file simply not being present
+// is normal — a drive carries one layout, not both — and is not warned about.
+func readFirst(f Files, names []string) ([]byte, []string) {
+	var warnings []string
 	for _, n := range names {
-		if b, err := f.ReadFile(n); err == nil {
-			return b
+		b, err := f.ReadFile(n)
+		if err == nil {
+			return b, warnings
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			// The error already names the file, from either the ISO reader or
+			// os.ReadFile, so this does not repeat it.
+			warnings = append(warnings, fmt.Sprintf("could not read %v", err))
 		}
 	}
-	return nil
+	return nil, warnings
 }
 
 // Apply writes the files described by user-data. mkdirAll and writeFile are

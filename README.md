@@ -325,6 +325,11 @@ booting — the cold-boot mount ordering, kubelet refusing a ramfs root, an empt
 PID1 `PATH`, missing netfilter modules, a closed channel read as a shutdown
 request. None of those were reachable from a unit test.
 
+Writing the tests finds bugs too, not just running them: the test for a corrupt
+cloud-init drive turned up that an unreadable drive was silently indistinguishable
+from an empty one, so a machine would have booted unconfigured with nothing in the
+log to say why.
+
 The fast suite avoids k0s entirely by supervising a workload that exits
 immediately, which is what keeps it usable while iterating. It asserts on console
 output and, after a clean shutdown, on the guest's filesystem via `debugfs` —
