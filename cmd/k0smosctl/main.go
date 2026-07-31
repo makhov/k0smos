@@ -52,7 +52,8 @@ port while it runs.`,
 		},
 	}
 	cmd.SetErrPrefix("k0smosctl:")
-	cmd.AddCommand(genCmd(), bootCmd(), kubeconfigCmd(), shutdownCmd("shutdown"), shutdownCmd("reboot"))
+	cmd.AddCommand(genCmd(), bootCmd(), logsCmd(), listCmd(), kubeconfigCmd(),
+		shutdownCmd("shutdown"), shutdownCmd("reboot"), rmCmd())
 	return cmd
 }
 
