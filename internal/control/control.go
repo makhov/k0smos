@@ -15,7 +15,10 @@ package control
 import (
 	"bufio"
 	"context"
+	"errors"
+	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -40,6 +43,30 @@ func (c Command) String() string {
 	return "unknown"
 }
 
+// RequestKubeconfig asks the node to send back its admin kubeconfig.
+//
+// This exists so getting at a cluster does not require reading the guest's disk
+// offline with debugfs, which needed the machine shut down first and, on macOS,
+// a Docker container to supply e2fsprogs.
+//
+// Anything able to write to this port therefore obtains cluster-admin. That is
+// not a new exposure: the port is the hypervisor's channel into the guest, and
+// whoever holds it can already stop the machine and read its disk. It does mean
+// the port must not be exposed anywhere the disk is not equally exposed.
+const RequestKubeconfig = "kubeconfig"
+
+// Reply framing. A request's answer is a status line, and for a successful data
+// reply exactly that many bytes follow it. Length-prefixed rather than delimited
+// because a kubeconfig is arbitrary text that may contain any delimiter.
+const (
+	ReplyOK    = "k0smos-ok"
+	ReplyError = "k0smos-error"
+)
+
+// Responder answers a data request. Returning an error sends that error to the
+// host instead of a payload.
+type Responder func(request string) ([]byte, error)
+
 // Parse interprets one line from the control channel. It reports false for
 // anything it does not recognise; the channel is host-facing, so unknown input
 // is ignored rather than acted on.
@@ -60,12 +87,12 @@ func Parse(line string) (Command, bool) {
 // This is what a virtio-serial port actually needs: with no host client
 // attached the port reads EOF straight away, so a single Watch would end
 // before anyone could ever send a command.
-func WatchReopen(ctx context.Context, open func() (io.ReadCloser, error), retry time.Duration) <-chan Command {
+func WatchReopen(ctx context.Context, open func() (io.ReadWriteCloser, error), retry time.Duration, respond Responder) <-chan Command {
 	out := make(chan Command)
 	go func() {
 		defer close(out)
 		for ctx.Err() == nil {
-			if !readOnce(ctx, open, out) {
+			if !readOnce(ctx, open, out, respond) {
 				// Nothing was read; pause so a permanently failing port cannot
 				// spin the CPU for the lifetime of the machine.
 				select {
@@ -81,23 +108,122 @@ func WatchReopen(ctx context.Context, open func() (io.ReadCloser, error), retry 
 
 // readOnce opens the port and forwards commands until it ends, reporting
 // whether anything was forwarded.
-func readOnce(ctx context.Context, open func() (io.ReadCloser, error), out chan<- Command) bool {
+func readOnce(ctx context.Context, open func() (io.ReadWriteCloser, error), out chan<- Command, respond Responder) bool {
 	rc, err := open()
 	if err != nil {
 		return false
 	}
 	defer rc.Close()
 
+	// Requests are answered here rather than forwarded, because the answer goes
+	// back down this same port and the caller has no handle on it.
 	forwarded := false
-	for cmd := range Watch(ctx, rc) {
+	for ev := range watchEvents(ctx, rc) {
+		if ev.request != "" {
+			serveRequest(rc, ev.request, respond)
+			forwarded = true // the port is alive; do not back off
+			continue
+		}
 		select {
-		case out <- cmd:
+		case out <- ev.command:
 			forwarded = true
 		case <-ctx.Done():
 			return forwarded
 		}
 	}
 	return forwarded
+}
+
+// serveRequest writes the reply for one request.
+func serveRequest(w io.Writer, request string, respond Responder) {
+	if respond == nil {
+		fmt.Fprintf(w, "%s unsupported request %q\n", ReplyError, request)
+		return
+	}
+	data, err := respond(request)
+	if err != nil {
+		// One line, so a multi-line error cannot be mistaken for payload.
+		fmt.Fprintf(w, "%s %s\n", ReplyError, strings.ReplaceAll(err.Error(), "\n", " "))
+		return
+	}
+	fmt.Fprintf(w, "%s %d\n", ReplyOK, len(data))
+	w.Write(data)
+}
+
+// Request performs one request over an already-connected control channel and
+// returns the payload. Used by the host side, and shared with the node so both
+// ends agree on the framing by construction.
+func Request(rw io.ReadWriter, name string) ([]byte, error) {
+	if _, err := fmt.Fprintf(rw, "%s\n", name); err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
+	}
+	r := bufio.NewReader(rw)
+	status, err := r.ReadString('\n')
+	if err != nil {
+		return nil, fmt.Errorf("read reply: %w", err)
+	}
+	status = strings.TrimRight(status, "\r\n")
+
+	kind, rest, _ := strings.Cut(status, " ")
+	switch kind {
+	case ReplyError:
+		return nil, errors.New(rest)
+	case ReplyOK:
+		n, err := strconv.Atoi(strings.TrimSpace(rest))
+		if err != nil {
+			return nil, fmt.Errorf("bad reply length %q", rest)
+		}
+		if n < 0 || n > maxReplyBytes {
+			return nil, fmt.Errorf("reply of %d bytes is out of range", n)
+		}
+		buf := make([]byte, n)
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return nil, fmt.Errorf("read %d byte reply: %w", n, err)
+		}
+		return buf, nil
+	default:
+		return nil, fmt.Errorf("unexpected reply %q", status)
+	}
+}
+
+// maxReplyBytes bounds what the host will allocate for a reply. A kubeconfig is a
+// few kilobytes; this only stops a wrong or hostile length from exhausting memory.
+const maxReplyBytes = 8 << 20
+
+// event is one line off the port: either a shutdown command or a data request.
+type event struct {
+	command Command
+	request string
+}
+
+// watchEvents reads the port until EOF or ctx is done. Requests are reported
+// alongside commands so the caller can answer them on the same connection.
+func watchEvents(ctx context.Context, r io.Reader) <-chan event {
+	out := make(chan event)
+	go func() {
+		defer close(out)
+		scanner := bufio.NewScanner(r)
+		for scanner.Scan() {
+			line := strings.ToLower(strings.TrimSpace(scanner.Text()))
+			var ev event
+			switch {
+			case line == RequestKubeconfig:
+				ev = event{request: line}
+			default:
+				cmd, ok := Parse(line)
+				if !ok {
+					continue // a stray byte must not disable shutdown
+				}
+				ev = event{command: cmd}
+			}
+			select {
+			case out <- ev:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out
 }
 
 // Watch reads commands from r until EOF or ctx is done, and closes the returned

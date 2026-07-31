@@ -55,7 +55,7 @@ writes the ISO itself, so there is no `xorriso` and no Docker involved:
 make ctl
 
 # put files on the node, taking their permissions from the source file
-./dist/k0smosctl gen -file k0s.yaml:/etc/k0s/k0s.yaml -hostname demo-node -o dist/cidata.iso
+./dist/k0smosctl gen --file k0s.yaml:/etc/k0s/k0s.yaml --hostname demo-node -o dist/cidata.iso
 
 CIDATA=dist/cidata.iso make boot
 ```
@@ -64,11 +64,14 @@ For a cloud-config you have written or rendered elsewhere, pass it whole
 (`-` reads stdin):
 
 ```bash
-./dist/k0smosctl gen -user-data cloud-config.yaml -hostname demo-node -o dist/cidata.iso
+./dist/k0smosctl gen --user-data cloud-config.yaml --hostname demo-node -o dist/cidata.iso
 ```
 
-It parses what it generates before writing, so a malformed cloud-config fails here
-rather than as a warning on a console after the machine has already booted.
+It checks what it generates with the same parser the node uses, so a drive that
+would be ignored is refused here rather than booting into a machine that comes up
+silently unconfigured. That catches malformed YAML, and also cloud-config missing
+its `#cloud-config` first line — which k0smos ignores by design, so writing one
+produces a drive with no effect. Nothing is written when it refuses.
 
 Building the drive by hand still works if you prefer — the format is nothing
 special:
@@ -156,24 +159,41 @@ changes the mountpoint, `k0smos.datafstype=` the filesystem.
 
 ## Reach the cluster from the host
 
-`run-qemu.sh` forwards 6443. Get the admin kubeconfig off the disk image without
-booting anything — no shell required on the guest, and this works after shutdown:
+`run-qemu.sh` forwards 6443, and `k0smosctl` asks the running node for its
+kubeconfig over the control port — no shell on the guest, no shutting it down
+first:
 
 ```bash
-./image/poweroff.sh                       # shut down cleanly first
+./dist/k0smosctl kubeconfig -o kubeconfig
+KUBECONFIG=kubeconfig kubectl get nodes
+```
+
+The server address is rewritten from `localhost` (right on the node, wrong
+everywhere else) to `127.0.0.1`, which is where the forward lands. `--server ''`
+keeps what the node wrote; `-o -` prints instead of writing a file. The file is
+written 0600, because it is a cluster-admin credential.
+
+If the cluster has not written its PKI yet you get a clear error naming
+`admin.conf` rather than an empty file.
+
+> Whoever can write to the control port obtains cluster-admin. That is not a new
+> exposure — the same channel stops the machine — but do not expose the port
+> anywhere the disk is not equally exposed.
+
+Reading it off the disk still works and needs no running guest, which is
+occasionally what you want:
+
+```bash
+./dist/k0smosctl shutdown
 docker run --rm -v "$PWD/dist:/d" alpine:3.20 sh -c \
   'apk add -q --no-cache e2fsprogs e2fsprogs-extra >/dev/null &&
    debugfs -R "cat /var/lib/k0s/pki/admin.conf" /d/k0smos.img 2>/dev/null' \
-  | sed 's/localhost/127.0.0.1/' > /tmp/kubeconfig
-kubectl --kubeconfig /tmp/kubeconfig get nodes
+  | sed 's/localhost/127.0.0.1/' > kubeconfig
 ```
 
-Docker because `debugfs` (from `e2fsprogs`) is not on macOS either; with it
-installed, `debugfs -R "cat …" dist/k0smos.img` is the whole command.
-
-Reading the image while the guest is running gives a stale answer at best, hence
-shutting down first. If the data volume is separate, read `/var/lib/k0s` from that
-image instead — the root image will only have the empty mountpoint.
+Docker because `debugfs` is not on macOS. If the data volume is separate, read
+`/var/lib/k0s` from that image instead — the root image will only have the empty
+mountpoint.
 
 ## Shut it down
 
@@ -181,10 +201,11 @@ image instead — the root image will only have the empty mountpoint.
 disk inspection will lie to you.
 
 ```bash
-./image/poweroff.sh              # or CMD=reboot ./image/poweroff.sh
+./dist/k0smosctl shutdown        # or: k0smosctl reboot
+./image/poweroff.sh              # the same thing, without building the CLI
 ```
 
-That writes to a virtio-serial control port. A real hypervisor or machine uses the
+Both write to a virtio-serial control port. A real hypervisor or machine uses the
 ACPI power button instead, which k0smos also watches — the control port exists
 because QEMU's arm64 `virt` machine with direct kernel boot has no ACPI at all.
 `SIGTERM`/`SIGINT` work too.

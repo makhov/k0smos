@@ -35,6 +35,16 @@ jobs:
       - name: vet e2e harness
         run: go vet -tags e2e ./e2e/
 
+      # k0smosctl pulls in cobra; the node binary must not. It runs as PID1 in an
+      # image specified to hold almost nothing, so its dependency set is a
+      # property worth enforcing rather than trusting.
+      - name: node binary stays dependency-light
+        run: |
+          if GOOS=linux go list -deps ./cmd/k0smos | grep -E 'spf13|cobra'; then
+            echo "::error::a CLI dependency reached the node binary"
+            exit 1
+          fi
+
       - name: gofmt
         run: |
           unformatted=$(gofmt -l cmd internal e2e)

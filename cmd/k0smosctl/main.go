@@ -1,217 +1,62 @@
-// Command k0smosctl builds the things a k0smos node needs, from the host.
+// Command k0smosctl drives k0smos nodes from the host.
 //
-// It exists because configuring a node used to mean assembling an ISO by hand
-// with xorriso — and on macOS, where there is no xorriso, that meant a Docker
-// invocation. k0smos already knows the format well enough to read it off a block
-// device, so it can write one too.
+// It exists because the routine tasks each needed an external tool and, on macOS,
+// Docker to supply it: xorriso to build a configuration drive, debugfs to read a
+// kubeconfig off a stopped guest's disk. k0smos already knows both formats and
+// already has a channel to the node, so neither is necessary.
 //
 // This runs on the host, not the node, so it must build for darwin as well as
-// linux: nothing here may reach for anything Linux-only.
+// linux: nothing here may reach for anything Linux-only. Cobra is a dependency of
+// this command alone — the node binary must stay as small and as dependency-free
+// as it is.
 package main
 
 import (
-	"encoding/base64"
-	"errors"
-	"flag"
 	"fmt"
-	"io"
 	"os"
-	"path/filepath"
-	"strings"
 
-	"github.com/amakhov/k0smos/internal/iso9660"
-	"github.com/amakhov/k0smos/internal/metadata"
+	"github.com/spf13/cobra"
 )
 
+// version is stamped at build time with -ldflags "-X main.version=…".
+var version = "dev"
+
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	if err := root().Execute(); err != nil {
+		// Printed here because SilenceErrors stops cobra doing it. Without this
+		// the command exited 1 with nothing on stderr, which is the worst of both
+		// — a mistyped flag looked like a crash.
 		fmt.Fprintln(os.Stderr, "k0smosctl: "+err.Error())
 		os.Exit(1)
 	}
 }
 
-const usage = `k0smosctl builds configuration drives for k0smos nodes.
+func root() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "k0smosctl",
+		Short: "Build configuration drives for k0smos nodes and talk to running ones",
+		Long: `k0smosctl drives k0smos nodes from the host.
 
-Usage:
-  k0smosctl gen [flags]     write a cloud-init drive
-
-Run a subcommand with -h for its flags.
-`
-
-func run(args []string) error {
-	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, usage)
-		return errors.New("no subcommand given")
+A k0smos node has no shell and no SSH. It is configured by a cloud-init drive
+before it boots, and answers a small set of requests over a virtio-serial control
+port while it runs.`,
+		// Errors are printed by main, once, with a consistent prefix. Usage is
+		// suppressed so a runtime failure does not bury its message under the
+		// full help text; a flag error still prints usage, because cobra treats
+		// those separately.
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		Version:       version,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
 	}
-	switch args[0] {
-	case "gen":
-		return gen(args[1:])
-	case "-h", "--help", "help":
-		fmt.Print(usage)
-		return nil
-	default:
-		fmt.Fprint(os.Stderr, usage)
-		return fmt.Errorf("unknown subcommand %q", args[0])
-	}
+	cmd.SetErrPrefix("k0smosctl:")
+	cmd.AddCommand(genCmd(), kubeconfigCmd(), shutdownCmd("shutdown"), shutdownCmd("reboot"))
+	return cmd
 }
 
-func gen(args []string) error {
-	fs := flag.NewFlagSet("gen", flag.ContinueOnError)
-	var (
-		out       = fs.String("o", "cidata.iso", "output image path")
-		userData  = fs.String("user-data", "", "path to a cloud-config file, or - for stdin")
-		hostname  = fs.String("hostname", "", "local-hostname for meta-data")
-		instance  = fs.String("instance-id", "k0smos", "instance-id for meta-data")
-		label     = fs.String("label", metadata.NoCloudLabel, "volume label; k0smos looks for "+metadata.NoCloudLabel)
-		writeFile = multiFlag{}
-	)
-	fs.Var(&writeFile, "file", "write a host file onto the node as SRC:DEST (repeatable)")
-	fs.Usage = func() {
-		fmt.Fprint(fs.Output(), `Usage: k0smosctl gen [flags]
-
-Writes a NoCloud cloud-init drive that k0smos reads at boot: user-data and
-meta-data at the image root, with Rock Ridge names.
-
-Examples:
-  # a config file rendered elsewhere
-  k0smosctl gen -user-data cloud-config.yaml -hostname node-1 -o cidata.iso
-
-  # place files on the node without writing cloud-config by hand
-  k0smosctl gen -file k0s.yaml:/etc/k0s/k0s.yaml -hostname node-1
-
-  # a manifest k0s will apply on the first reconcile
-  k0smosctl gen -file ns.yaml:/var/lib/k0s/manifests/demo/ns.yaml
-
-Then boot with the drive attached:
-  CIDATA=cidata.iso make boot
-
-Flags:
-`)
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() > 0 {
-		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
-	}
-
-	body, err := userDataBody(*userData, writeFile)
-	if err != nil {
-		return err
-	}
-
-	var meta strings.Builder
-	fmt.Fprintf(&meta, "instance-id: %s\n", *instance)
-	if *hostname != "" {
-		fmt.Fprintf(&meta, "local-hostname: %s\n", *hostname)
-	}
-
-	// Parsed before it is written, so a mistake surfaces here rather than as a
-	// warning on a console during a boot that has already happened.
-	if _, _, err := metadata.Load(inMemory{"user-data": body, "meta-data": []byte(meta.String())}); err != nil {
-		return fmt.Errorf("the generated user-data does not parse: %w", err)
-	}
-
-	f, err := os.Create(*out)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	err = iso9660.Write(f, *label, []iso9660.File{
-		{Name: "user-data", Data: body},
-		{Name: "meta-data", Data: []byte(meta.String())},
-	})
-	if err != nil {
-		return err
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	fmt.Printf("wrote %s (%d bytes, LABEL=%s)\n", *out, info.Size(), *label)
-	return nil
+// fatalf reports a problem the way a CLI should: to stderr, without a stack.
+func fatalf(format string, args ...any) error {
+	return fmt.Errorf(format, args...)
 }
-
-// userDataBody returns the cloud-config to place on the drive: either one supplied
-// wholesale, or one synthesised from -file arguments.
-func userDataBody(path string, files multiFlag) ([]byte, error) {
-	switch {
-	case path != "" && len(files) > 0:
-		return nil, errors.New("-user-data and -file cannot be combined; put the files in the cloud-config")
-	case path != "":
-		if path == "-" {
-			return readAll(os.Stdin)
-		}
-		return os.ReadFile(path)
-	case len(files) > 0:
-		return renderWriteFiles(files)
-	default:
-		return nil, errors.New("nothing to configure: pass -user-data or -file")
-	}
-}
-
-// renderWriteFiles turns SRC:DEST pairs into a write_files cloud-config.
-//
-// Content is base64 encoded rather than inlined, so that a file containing
-// anything YAML would reinterpret — tabs, colons, leading dashes — survives
-// intact. It also means no quoting or indentation rules to get wrong here.
-func renderWriteFiles(files multiFlag) ([]byte, error) {
-	var b strings.Builder
-	b.WriteString("#cloud-config\nwrite_files:\n")
-	for _, spec := range files {
-		src, dest, ok := strings.Cut(spec, ":")
-		if !ok || src == "" || dest == "" {
-			return nil, fmt.Errorf("-file %q is not SRC:DEST", spec)
-		}
-		if !strings.HasPrefix(dest, "/") {
-			return nil, fmt.Errorf("-file %q: destination must be an absolute path", spec)
-		}
-		data, err := os.ReadFile(src)
-		if err != nil {
-			return nil, err
-		}
-		mode, err := modeOf(src)
-		if err != nil {
-			return nil, err
-		}
-		fmt.Fprintf(&b, "  - path: %s\n    permissions: %q\n    encoding: b64\n    content: %s\n",
-			dest, mode, base64Of(data))
-	}
-	return []byte(b.String()), nil
-}
-
-func modeOf(path string) (string, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return "", err
-	}
-	// Keep the source file's permissions, which is what makes a token or a key
-	// land on the node no more readable than it was here.
-	return fmt.Sprintf("%04o", info.Mode().Perm()), nil
-}
-
-// multiFlag collects a repeatable string flag.
-type multiFlag []string
-
-func (m *multiFlag) String() string { return strings.Join(*m, ",") }
-
-func (m *multiFlag) Set(v string) error {
-	*m = append(*m, v)
-	return nil
-}
-
-// inMemory lets the generated pair be validated through metadata.Load without
-// touching a disk.
-type inMemory map[string][]byte
-
-func (m inMemory) ReadFile(name string) ([]byte, error) {
-	if b, ok := m[filepath.ToSlash(name)]; ok {
-		return b, nil
-	}
-	return nil, os.ErrNotExist
-}
-
-func base64Of(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
-
-func readAll(f *os.File) ([]byte, error) { return io.ReadAll(f) }

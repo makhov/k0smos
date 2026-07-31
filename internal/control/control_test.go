@@ -1,7 +1,10 @@
 package control
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -79,16 +82,19 @@ func TestWatchClosesChannelOnEOF(t *testing.T) {
 	}
 }
 
+// nopCloser is a port that discards anything written back to it, which is what a
+// host that only sends shutdown commands looks like.
 type nopCloser struct{ io.Reader }
 
-func (nopCloser) Close() error { return nil }
+func (nopCloser) Close() error                { return nil }
+func (nopCloser) Write(p []byte) (int, error) { return len(p), nil }
 
 // A virtio-serial port with no host client attached returns EOF immediately.
 // The watcher must reopen instead of giving up, or a host that connects later
 // can never ask the guest to shut down.
 func TestWatchReopenSurvivesImmediateEOF(t *testing.T) {
 	opens := 0
-	open := func() (io.ReadCloser, error) {
+	open := func() (io.ReadWriteCloser, error) {
 		opens++
 		if opens < 3 {
 			return nopCloser{strings.NewReader("")}, nil // nobody connected yet
@@ -98,7 +104,7 @@ func TestWatchReopenSurvivesImmediateEOF(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	ch := WatchReopen(ctx, open, time.Millisecond)
+	ch := WatchReopen(ctx, open, time.Millisecond, nil)
 	select {
 	case got, ok := <-ch:
 		if !ok || got != PowerOff {
@@ -111,9 +117,9 @@ func TestWatchReopenSurvivesImmediateEOF(t *testing.T) {
 
 // An open that keeps failing must not spin or panic; it just keeps retrying.
 func TestWatchReopenToleratesOpenErrors(t *testing.T) {
-	open := func() (io.ReadCloser, error) { return nil, io.ErrUnexpectedEOF }
+	open := func() (io.ReadWriteCloser, error) { return nil, io.ErrUnexpectedEOF }
 	ctx, cancel := context.WithCancel(context.Background())
-	ch := WatchReopen(ctx, open, time.Millisecond)
+	ch := WatchReopen(ctx, open, time.Millisecond, nil)
 	select {
 	case <-ch:
 		t.Fatal("received a command from a never-opening port")
@@ -146,4 +152,145 @@ func TestWatchStopsOnContextCancel(t *testing.T) {
 		t.Fatal("Watch did not stop after context cancel")
 	}
 	close(br.done)
+}
+
+// port is a bidirectional control channel for tests: what the host sent can be
+// read back, and what the node replied is captured.
+type port struct {
+	in    io.Reader
+	out   bytes.Buffer
+	close func()
+}
+
+func (p *port) Read(b []byte) (int, error)  { return p.in.Read(b) }
+func (p *port) Write(b []byte) (int, error) { return p.out.Write(b) }
+func (p *port) Close() error {
+	if p.close != nil {
+		p.close()
+	}
+	return nil
+}
+
+// A data request must be answered on the same port, not forwarded as a command:
+// the caller holding the command channel has no handle to reply through.
+func TestRequestIsAnsweredOnThePort(t *testing.T) {
+	p := &port{in: strings.NewReader(RequestKubeconfig + "\n")}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	respond := func(req string) ([]byte, error) {
+		if req != RequestKubeconfig {
+			t.Errorf("responder got %q", req)
+		}
+		return []byte("apiVersion: v1\nkind: Config\n"), nil
+	}
+
+	cmds := WatchReopen(ctx, func() (io.ReadWriteCloser, error) {
+		return p, nil
+	}, time.Millisecond, respond)
+
+	// Give the loop a moment, then check nothing arrived as a command.
+	select {
+	case cmd := <-cmds:
+		t.Fatalf("request surfaced as command %v; it must be answered in place", cmd)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	got := p.out.String()
+	want := ReplyOK + " 28\napiVersion: v1\nkind: Config\n"
+	if got != want {
+		t.Errorf("reply = %q, want %q", got, want)
+	}
+}
+
+// Round-trip through the code the host actually uses, so the two ends cannot
+// drift apart in framing.
+func TestRequestRoundTrip(t *testing.T) {
+	payload := []byte("apiVersion: v1\nkind: Config\nclusters: []\n")
+
+	// The node's side of the wire: read the request, write the reply.
+	nodeIn, hostOut := io.Pipe()
+	hostIn, nodeOut := io.Pipe()
+	go func() {
+		line, _ := bufio.NewReader(nodeIn).ReadString('\n')
+		serveRequest(nodeOut, strings.TrimSpace(line), func(string) ([]byte, error) {
+			return payload, nil
+		})
+	}()
+
+	got, err := Request(struct {
+		io.Reader
+		io.Writer
+	}{hostIn, hostOut}, RequestKubeconfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Errorf("payload = %q, want %q", got, payload)
+	}
+}
+
+// An error must reach the host as an error, not as an empty success — a node with
+// no cluster yet is the common case.
+func TestRequestSurfacesNodeErrors(t *testing.T) {
+	nodeIn, hostOut := io.Pipe()
+	hostIn, nodeOut := io.Pipe()
+	go func() {
+		line, _ := bufio.NewReader(nodeIn).ReadString('\n')
+		serveRequest(nodeOut, strings.TrimSpace(line), func(string) ([]byte, error) {
+			return nil, errors.New("open /var/lib/k0s/pki/admin.conf: no such file or directory")
+		})
+	}()
+
+	_, err := Request(struct {
+		io.Reader
+		io.Writer
+	}{hostIn, hostOut}, RequestKubeconfig)
+	if err == nil {
+		t.Fatal("no error from a failing responder")
+	}
+	if !strings.Contains(err.Error(), "no such file") {
+		t.Errorf("error = %v, want it to name the cause", err)
+	}
+}
+
+// A node built without a responder must say so rather than hang the host waiting
+// for a reply that never comes.
+func TestRequestWithoutResponderIsRefused(t *testing.T) {
+	var buf bytes.Buffer
+	serveRequest(&buf, RequestKubeconfig, nil)
+	if !strings.HasPrefix(buf.String(), ReplyError) {
+		t.Errorf("reply = %q, want an error line", buf.String())
+	}
+}
+
+// A length the host cannot have meant must be refused before it is allocated.
+func TestRequestRejectsAbsurdLength(t *testing.T) {
+	reply := strings.NewReader(ReplyOK + " 99999999999\n")
+	_, err := Request(struct {
+		io.Reader
+		io.Writer
+	}{reply, io.Discard}, RequestKubeconfig)
+	if err == nil {
+		t.Error("accepted an out-of-range reply length")
+	}
+}
+
+// Shutdown must still work on a port that also serves requests.
+func TestCommandsStillFlowAlongsideRequests(t *testing.T) {
+	p := &port{in: strings.NewReader(RequestKubeconfig + "\npoweroff\n")}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmds := WatchReopen(ctx, func() (io.ReadWriteCloser, error) { return p, nil },
+		time.Millisecond, func(string) ([]byte, error) { return []byte("x"), nil })
+
+	select {
+	case cmd := <-cmds:
+		if cmd != PowerOff {
+			t.Errorf("command = %v, want poweroff", cmd)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("poweroff never arrived after a request on the same port")
+	}
 }

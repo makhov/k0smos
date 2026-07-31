@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/amakhov/k0smos/internal/control"
 )
 
 // These boot real k0s and take several minutes each. -short skips them, so the
@@ -161,4 +164,49 @@ runcmd:
 	if !strings.Contains(text, "syncing and unmounting") {
 		t.Error("shutdown did not continue after the etcd leave")
 	}
+}
+
+// Fetching the kubeconfig from a live node, which is what k0smosctl kubeconfig
+// does. Not in the fast suite: it needs a cluster that has got as far as writing
+// its PKI, which means a real k0s boot.
+func TestK0sKubeconfigOverControlPort(t *testing.T) {
+	requireFullSuite(t)
+	requireArtifacts(t, "dist/k0smos.img", "dist/k0smos-initramfs.gz")
+	base := filepath.Join(repoRoot(t), "dist/k0smos.img")
+	requirePristineDisk(t, base)
+	disk := cloneDisk(t, base)
+
+	v := boot(t, bootOpts{Disk: disk, Net: "k0smos.ip=dhcp k0smos.dns=1.1.1.1"})
+	v.waitFor(`supervising \[`, bootTimeout)
+
+	var data []byte
+	deadline := time.Now().Add(k0sTimeout)
+	for time.Now().Before(deadline) {
+		got, err := requestNode(t, v, control.RequestKubeconfig)
+		if err == nil {
+			data = got
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if len(data) == 0 {
+		t.Fatal("never received a kubeconfig")
+	}
+
+	// It must be a kubeconfig, not merely bytes: a truncated reply would satisfy
+	// a length check and nothing else.
+	for _, want := range []string{"apiVersion:", "kind: Config", "client-certificate-data:", "server: https://"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("reply is missing %q:\n%s", want, firstLines(string(data), 12))
+		}
+	}
+	v.stop()
+}
+
+func firstLines(s string, n int) string {
+	lines := strings.SplitN(s, "\n", n+1)
+	if len(lines) > n {
+		lines = lines[:n]
+	}
+	return strings.Join(lines, "\n")
 }
