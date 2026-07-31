@@ -250,11 +250,15 @@ func loadMetadata(s *sys.Sys) (metadata.UserData, metadata.MetaData) {
 // keeps otherwise-good monolithic kernels usable — Kata's builds in no ISO9660
 // at all.
 //
-// Anything else falls back to mount, and so depends on the kernel supporting
-// that filesystem. Note what this does and does not buy: an Ironic-style vfat
-// config-drive would reach the fallback, but internal/module ships no vfat
-// module, so mounting it fails. Supporting bare metal means adding "vfat" and
-// the nls_* codepages back there — the fallback alone is not enough.
+// In practice that covers every config-drive k0smos will meet. Both formats the
+// spec permits are ISO9660 or vfat, and the tooling only produces the first:
+// nova defaults to iso9660, openstacksdk builds Ironic's with
+// genisoimage/mkisofs/xorrisofs, and KubeVirt uses xorrisofs. vfat is allowed and
+// unused.
+//
+// A vfat drive would still fall back to mount, which needs the kernel to support
+// it: internal/module ships no "vfat", so that would be one line to add there
+// (Alpine has vfat and the nls_* codepages as modules — no kernel work).
 func openMetadata(s *sys.Sys, dev, label string) (metadata.Files, func(), error) {
 	name := strings.TrimPrefix(dev, "/dev/")
 	info, _ := blkid.Identify(s, name)

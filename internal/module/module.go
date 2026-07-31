@@ -36,8 +36,11 @@ var Default = []string{
 	// support at all to take CAPI bootstrap data, which is what keeps monolithic
 	// guest kernels like Kata's usable unmodified.
 	//
-	// The consequence: an Ironic-style vfat config-drive cannot be read. Add
-	// "vfat" and the nls_* codepages here if bare metal needs it.
+	// Nothing real is given up. A config-drive may be ISO9660 or vfat, and the
+	// tooling only writes the first: nova defaults to iso9660, openstacksdk
+	// builds Ironic's with genisoimage/mkisofs/xorrisofs. If a vfat one ever
+	// turns up, add "vfat" plus nls_codepage_437 and nls_iso8859_1 here —
+	// Alpine ships all three as modules, so it needs no kernel work.
 
 	// nftables. k0s selects iptables-nft mode, and without these kube-proxy
 	// dies with `iptables: Failed to initialize nft: Protocol not supported`,

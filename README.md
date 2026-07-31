@@ -124,7 +124,7 @@ Two sources, and the choice matters more than it looks.
 | virtio, ext4, netfilter, overlayfs | **modules** | **built in** |
 | module tree in the image | ~29 MB, must match the kernel exactly | none |
 | initramfs | ~22 MB | **~1.2 MB** |
-| bare metal | works | **no** — no NVME/ATA/SCSI/USB/NIC drivers |
+| bare metal | some — see below | **no** — no NVME/ATA/SCSI/USB/NIC drivers |
 | cloud-init drive | works | works ([userspace ISO reader](internal/iso9660/iso9660.go)) |
 | pinned | no | yes, by kernel digest |
 
@@ -152,10 +152,11 @@ writes every cloud-init volume, NoCloud and config-drive alike, with
 present. `TestCloudInitNeedsOnlyRockRidge` boots a Rock-Ridge-only drive to keep
 that claim honest.
 
-A vfat config-drive, as Ironic writes for bare metal, is **not** supported: it
-falls back to `mount`, and no vfat module is shipped. Enabling it means adding
-`vfat` and the `nls_*` codepages back to `internal/module`, alongside the disk and
-NIC drivers bare metal needs anyway.
+This covers every config-drive in practice, Ironic's included. The spec allows
+ISO9660 or vfat and the tooling only writes ISO9660 — nova defaults to it,
+openstacksdk builds Ironic's with `genisoimage`/`mkisofs`/`xorrisofs`, KubeVirt
+uses `xorrisofs`. A vfat drive would fall back to `mount` and fail, since no vfat
+module is shipped; that is one line in `internal/module` if one ever shows up.
 
 ```bash
 make kernel-kata
@@ -163,14 +164,37 @@ MODULES_DIR=/nonexistent make disk        # build without a module tree
 MODULES_DIR=/nonexistent ./image/mkinitramfs.sh
 ```
 
-Use the Alpine kernel for bare metal too, where Kata's simply cannot see the
-disks or NICs.
-
 Note the fetch streams the 999 MB `kata-static` release archive and aborts as
 soon as `tar` has the 18 MB kernel — about 170 MB transferred — then caches by
 digest so it is fetched once. (Apple's `container` uses the same artifact and
 pins url + digest + inner path; this pins the digest of the kernel itself, which
 is what actually gets used.)
+
+## Bring your own kernel
+
+k0smos does not own a kernel. `image/fetch-kernel*.sh` only *fetch* one; the boot
+path takes whatever you point it at — `MODULES_DIR` for the module tree,
+`k0smos.root=` for the root device — and `internal/module` resolves whatever that
+tree contains through its own `modules.dep`, `modules.softdep` and `modules.alias`.
+A kernel with no module tree at all is fine and is reported as monolithic.
+
+So for hardware we do not cover, you supply a kernel — you do **not** build one.
+Pick a distro kernel with a module tree (Alpine's `linux-lts`, or your vendor's)
+and point k0smos at it. What it must provide:
+
+- block and NIC drivers for the hardware, or virtio for a VM
+- `ext4` — the root filesystem, which cannot be a ramfs (kubelet's cadvisor
+  finds no filesystem info for one)
+- `nf_tables` and `nft_compat` — k0s selects iptables-nft, and kube-proxy dies
+  without them
+- `overlayfs` and cgroup v2
+- **no filesystem support for the cloud-init drive** — that is read in userspace
+
+Alpine's `linux-virt` is the pragmatic middle: it does carry NVMe, ATA, SCSI,
+USB-storage, `e1000e` and `mlx5` as modules, so it boots some real machines. But
+`igb`, `ixgbe`, `i40e`, `bnxt`, `tigon3` and `megaraid_sas` are all absent, which
+rules out most server NICs and RAID controllers. That is the gap a BYO kernel
+fills — and it is a fetch script plus a module list, not a kernel build.
 
 ## The data volume
 
