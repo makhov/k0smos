@@ -364,7 +364,11 @@ This is how the real root causes in this project were found rather than guessed.
 
 Known and deliberate, as of this prototype:
 
-- **Single node only.** It runs `k0s controller --single`; no join tokens, no HA.
+- **Single node in practice.** The default workload is `k0s controller --single`.
+  Nothing structurally prevents a worker or a joining controller — cloud-init
+  supplies the role and `--token-file` path, and `translateInstall` passes both
+  through — but multi-node has never been run, so treat it as unproven rather
+  than supported.
 - **Verified on arm64.** amd64 builds and boots the initramfs, but the full
   disk/`switch_root`/k0s path has not been run there.
 - **No upgrade path.** k0s data persists in `/var/lib/k0s` across reboots, but
@@ -372,9 +376,12 @@ Known and deliberate, as of this prototype:
 - **Fixed image size.** `mkrootfs.sh` sizes the filesystem at content + 3 GB and
   writes no partition table; there is no grow-on-first-boot.
 - **Everything runs as root.** `/etc/passwd` exists only so k0s stops warning.
-- **Module fragility.** Correct operation depends on 50 named modules being
-  present. A kernel that splits them differently will fail in obscure ways; a
-  monolithic kernel would remove this class of problem.
+- **Module fragility, on the modular path.** With Alpine's kernel, correct
+  operation depends on 50 named modules being present, and a kernel that splits
+  them differently will fail in obscure ways. The monolithic path removes this
+  class of problem entirely and now works end to end — the full fast e2e suite
+  passes on Kata's kernel, and CI gates on both. Alpine remains the default only
+  for its hardware coverage.
 
 For deploying outside the local QEMU setup, see
 [docs/deployment.md](docs/deployment.md).
