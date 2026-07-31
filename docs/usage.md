@@ -1,5 +1,6 @@
 # Using k0smos
 
+- [The CLI](#the-cli)
 - [Boot a node locally](#boot-a-node-locally)
 - [Configure a node with cloud-init](#configure-a-node-with-cloud-init)
 - [Ship Kubernetes manifests](#ship-kubernetes-manifests)
@@ -13,6 +14,28 @@
 Throughout: k0smos has **no shell and no SSH**. Everything a machine needs is
 supplied before it boots, and everything it reports comes out of the console.
 That is the design, not a gap.
+
+## The CLI
+
+`k0smosctl` runs on the host and covers the routine work. Build it once:
+
+```bash
+make ctl        # -> dist/k0smosctl
+```
+
+| Command | What it does |
+|---|---|
+| `k0smosctl gen` | write a cloud-init drive for a node to boot with |
+| `k0smosctl kubeconfig` | fetch the admin kubeconfig from a running node |
+| `k0smosctl shutdown` | stop a node cleanly |
+| `k0smosctl reboot` | restart a node cleanly |
+
+Each takes `--help`. Two things it deliberately replaces: building an ISO with
+`xorriso`, and reading a kubeconfig off a stopped guest's disk with `debugfs` —
+neither of which is installed on macOS, so both meant Docker.
+
+The node has no SSH and no shell. `gen` configures it before it boots; the other
+three talk to a running one over its virtio-serial control port.
 
 ## Boot a node locally
 
@@ -114,12 +137,23 @@ will boot and tell you what it ignored. It will not half-apply it.
 
 ## Ship Kubernetes manifests
 
-k0s applies anything under `/var/lib/k0s/manifests/<name>/`, so a manifest is just
-a file — no shell, no `kubectl apply`:
+k0s applies anything under `/var/lib/k0s/manifests/<stack>/`, so a manifest is just
+a file — no shell, no `kubectl apply`, nothing to run on the node:
 
 ```bash
-gzip -c my-namespace.yaml | base64 | tr -d '\n'   # -> $CONTENT
+./dist/k0smosctl gen \
+  --file ns.yaml:/var/lib/k0s/manifests/demo/ns.yaml \
+  --file deployment.yaml:/var/lib/k0s/manifests/demo/deployment.yaml \
+  -o dist/cidata.iso
 ```
+
+The file must sit in a **subdirectory** of `manifests/`; that directory name is the
+stack. k0smos writes it before starting k0s, so it is applied on the first
+reconcile — and because nothing persists, it is rewritten and reapplied on every
+boot, which makes it idempotent by design.
+
+Writing the cloud-config yourself, which is what a Cluster API bootstrap provider
+does, the same thing is:
 
 ```yaml
 #cloud-config
@@ -127,11 +161,12 @@ write_files:
   - path: /var/lib/k0s/manifests/demo/ns.yaml
     permissions: "0644"
     encoding: gzip+base64
-    content: <CONTENT>
+    content: <gzip -c ns.yaml | base64 -w0>
 ```
 
-Compression matters here: cloud-init user-data has size limits and manifests are
-verbose.
+`gzip+base64` matters there and not here: a provider delivers user-data through a
+Secret or a metadata service with size limits, whereas a drive written locally has
+no practical limit, so `gen` uses plain base64.
 
 ## Give it a data volume
 
@@ -247,6 +282,14 @@ spec:
 Note `k0smos.data=auto` with an `emptyDisk`: that shares the VMI's lifecycle, so it
 survives a guest reboot and is discarded when the machine is replaced. Swap it for
 a PVC if you want it to outlive the machine.
+
+**`k0smosctl`'s node commands do not reach a KubeVirt VM.** `kubeconfig`,
+`shutdown` and `reboot` speak to a virtio-serial control port, which the local
+QEMU runner attaches and a KubeVirt VM does not. There, shutdown is
+`virtctl stop` (KubeVirt delivers ACPI, which k0smos watches for), and the
+kubeconfig comes from wherever the cluster API server is reachable — or from the
+disk offline. Attaching a port to a VMI spec would make them work, but nothing
+here does that yet.
 
 See [deployment.md](deployment.md) for the Cluster API manifests and the three
 things that are easy to get wrong there — including `checkStrategy: none`, without

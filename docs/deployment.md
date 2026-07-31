@@ -3,6 +3,13 @@
 What it takes to run k0smos somewhere other than the local QEMU setup, and what
 is still missing for each target.
 
+`k0smosctl`'s `kubeconfig`, `shutdown` and `reboot` are **local-only**: they use a
+virtio-serial control port that `image/run-qemu.sh` attaches and a KubeVirt VMI
+does not. On KubeVirt, stop a machine with `virtctl stop` — KubeVirt delivers ACPI
+and k0smos watches the power button — and get a kubeconfig from the cluster's own
+API server. `k0smosctl gen` is host-side and works anywhere, but Cluster API
+generates the drive itself, so it is not needed there either.
+
 Read [Limitations](../README.md#limitations) first. This is a working prototype;
 the gaps below are real. For day-to-day use — booting, configuring, shipping
 manifests, getting a kubeconfig — see [usage.md](usage.md).
