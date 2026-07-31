@@ -94,12 +94,10 @@ jobs:
 
       - name: build artifacts
         run: |
-          if [ "${{ matrix.kernel }}" = kata ]; then
-            make kernel-kata
-            # No module tree: the kernel is monolithic, and leaving a stale tree
-            # behind would trip the version-skew warning instead.
-            export MODULES_DIR=/nonexistent
+          if [ "${{ matrix.kernel }}" = alpine ]; then
+            make kernel-alpine
           else
+            # Default: Kata's monolithic kernel, which writes no module tree.
             make kernel
           fi
           make k0s
@@ -147,7 +145,7 @@ jobs:
       - name: build artifacts
         run: |
           make k0s
-          make kernel
+          make kernel-alpine
           ./image/mkinitramfs.sh
           K0S_BIN=dist/k0s-$(go env GOARCH) ./image/mkrootfs.sh dist/k0smos.img
 

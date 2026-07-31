@@ -94,7 +94,8 @@ if [ -d "$moddir" ]; then
   mkdir -p "$root/lib/modules"
   cp -R "$moddir/." "$root/lib/modules/"
 else
-  echo "warn: no modules dir at $moddir" >&2
+  # Expected with a monolithic kernel — see the same note in mkinitramfs.sh.
+  echo "no modules dir at $moddir — assuming a monolithic kernel" >&2
 fi
 
 # Headroom on top of the content. This is working space, not storage: k0s

@@ -3,7 +3,7 @@ BIN := dist/k0smos
 # a host build on macOS would just produce the "linux only" stub.
 GO_BUILD := GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags '-extldflags "-static"'
 
-.PHONY: build test vet kernel kernel-kata k0s initramfs disk boot smoke oci e2e e2e-full accept clean-dist
+.PHONY: build test vet kernel kernel-alpine k0s initramfs disk boot smoke oci e2e e2e-full accept clean-dist
 build:
 	$(GO_BUILD) -o $(BIN) ./cmd/k0smos
 
@@ -16,16 +16,23 @@ vet:
 
 # --- local VM boot (works on macOS/Apple Silicon via HVF, and on linux/KVM) ---
 
-# Alpine linux-virt kernel for the host arch. Needs docker to unpack the .apk.
+# A Kata Containers guest kernel: monolithic, so no module tree, a ~1.2MB
+# initramfs, no kernel/module version skew, and pinned by digest. This is the
+# default because the target is VMs (KubeVirt, Cluster API), where it wins on
+# every axis. Needs docker, for zstd.
+#
+# It was not always the default: it builds in no ISO9660, so it could not mount a
+# cloud-init drive. internal/iso9660 reads those in userspace now, which removed
+# the only objection.
 kernel:
-	./image/fetch-kernel.sh
-
-# A Kata Containers guest kernel instead: monolithic, so no module tree, a
-# ~1.2MB initramfs and no kernel/module version skew. Verified to reach Ready
-# with zero modules. VMs only — it has no bare-metal drivers.
-#   make kernel-kata && MODULES_DIR=/nonexistent make disk
-kernel-kata:
 	./image/fetch-kernel-kata.sh
+
+# Alpine linux-virt instead: modular, tracks Alpine rather than being pinned, and
+# needs the ~29MB module tree to match the kernel exactly. Use it for bare metal,
+# where Kata's guest kernel has no drivers at all — though note that broad
+# hardware also wants modalias autoloading, which does not exist yet.
+kernel-alpine:
+	./image/fetch-kernel.sh
 
 # Latest k0s release binary for the host arch (~240MB).
 k0s:
