@@ -12,13 +12,23 @@ import (
 	"github.com/amakhov/k0smos/internal/control"
 )
 
-// defaultSocket is where image/run-qemu.sh puts the control socket. QEMU listens
-// on it and relays to the guest's virtio-serial port, so the host connects as a
-// client.
-const defaultSocket = "dist/control.sock"
+// resolveSocket picks the control socket to talk to: an explicit path wins,
+// otherwise the named guest's. QEMU listens on it and relays to the guest's
+// virtio-serial port, so the host connects as a client.
+func resolveSocket(socket, name string) (string, error) {
+	if socket == "" {
+		_, resolved, _, err := guestPaths(name)
+		if err != nil {
+			return "", err
+		}
+		socket = resolved
+	}
+	return socket, checkSocketPath(socket)
+}
 
 func kubeconfigCmd() *cobra.Command {
 	var (
+		name    string
 		socket  string
 		out     string
 		server  string
@@ -44,10 +54,23 @@ exposed anywhere the disk is not.`,
   # print it instead of writing a file
   k0smosctl kubeconfig -o -
 
-  # a guest booted with --api-port 7443
-  k0smosctl kubeconfig --socket vm2.sock --server 127.0.0.1:7443 -o kubeconfig2`,
+  # a guest booted with --name vm2 --api-port 7443
+  k0smosctl kubeconfig --name vm2 --server 127.0.0.1:7443 -o kubeconfig2`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			socket, err := resolveSocket(socket, name)
+			if err != nil {
+				return err
+			}
+			// A guest booted with a non-default --api-port is reached on that port,
+			// and boot recorded it. Filling it in here is the difference between
+			// this working and handing back a kubeconfig that points at whichever
+			// guest happens to hold 6443.
+			if !cmd.Flags().Changed("server") && server != "" {
+				if port, err := recordedAPIPort(name); err == nil && port != 0 {
+					server = fmt.Sprintf("%s:%d", server, port)
+				}
+			}
 			data, err := request(socket, control.RequestKubeconfig, timeout)
 			if err != nil {
 				return err
@@ -76,7 +99,8 @@ exposed anywhere the disk is not.`,
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&socket, "socket", defaultSocket, "control socket of the running guest")
+	f.StringVar(&name, "name", defaultGuestName, "which guest")
+	f.StringVar(&socket, "socket", "", "control socket path, instead of resolving --name")
 	f.StringVarP(&out, "output", "o", "kubeconfig", `where to write it, or "-" for stdout`)
 	f.StringVar(&server, "server", "127.0.0.1",
 		`rewrite the API server as host or host:port; "" keeps what the node wrote`)
@@ -86,19 +110,20 @@ exposed anywhere the disk is not.`,
 
 // shutdownCmd builds the shutdown and reboot commands, which differ only in the
 // word they send.
-func shutdownCmd(name string) *cobra.Command {
+func shutdownCmd(verb string) *cobra.Command {
 	var (
+		name    string
 		socket  string
 		timeout time.Duration
 	)
 	word := control.PowerOff.String()
 	short := "Shut a running node down cleanly"
-	if name == "reboot" {
+	if verb == "reboot" {
 		word = control.Reboot.String()
 		short = "Restart a running node cleanly"
 	}
 	cmd := &cobra.Command{
-		Use:   name,
+		Use:   verb,
 		Short: short,
 		Long: short + `.
 
@@ -107,6 +132,10 @@ unreplayed journal, which loses recent writes and makes the image read as empty
 afterwards.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			socket, err := resolveSocket(socket, name)
+			if err != nil {
+				return err
+			}
 			conn, err := dial(socket, timeout)
 			if err != nil {
 				return err
@@ -120,7 +149,8 @@ afterwards.`,
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&socket, "socket", defaultSocket, "control socket of the running guest")
+	f.StringVar(&name, "name", defaultGuestName, "which guest")
+	f.StringVar(&socket, "socket", "", "control socket path, instead of resolving --name")
 	f.DurationVar(&timeout, "timeout", 5*time.Second, "how long to wait for the socket")
 	return cmd
 }
@@ -170,4 +200,17 @@ func rewriteServer(data []byte, server string) ([]byte, error) {
 		}
 		return []byte(prefix + host + port)
 	}), nil
+}
+
+// recordedAPIPort returns the host port boot forwarded for a named guest.
+func recordedAPIPort(name string) (int, error) {
+	_, _, metaPath, err := guestPaths(name)
+	if err != nil {
+		return 0, err
+	}
+	m, err := loadMeta(metaPath)
+	if err != nil {
+		return 0, err
+	}
+	return m.APIPort, nil
 }

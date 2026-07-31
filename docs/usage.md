@@ -27,9 +27,11 @@ make ctl        # -> dist/k0smosctl
 |---|---|
 | `k0smosctl gen` | write a cloud-init drive for a node to boot with |
 | `k0smosctl boot` | boot a node locally under QEMU |
+| `k0smosctl logs` | show a guest's console (`-f` to follow) |
+| `k0smosctl list` | what guests exist, and which are running |
 | `k0smosctl kubeconfig` | fetch the admin kubeconfig from a running node |
-| `k0smosctl shutdown` | stop a node cleanly |
-| `k0smosctl reboot` | restart a node cleanly |
+| `k0smosctl shutdown` / `reboot` | stop or restart a node cleanly |
+| `k0smosctl rm` | discard a stopped guest and its disk |
 
 Each takes `--help`. Two things it deliberately replaces: building an ISO with
 `xorriso`, and reading a kubeconfig off a stopped guest's disk with `debugfs` —
@@ -54,16 +56,16 @@ Then boot with the CLI:
 
 ```bash
 ./dist/k0smosctl boot
-guest running in the background (pid 91464)
-  console:  tail -f dist/console.log
+guest "default" running in the background (pid 7547)
+  console:  k0smosctl logs -f
   cluster:  k0smosctl kubeconfig -o kubeconfig   (API on :6443)
   stop it:  k0smosctl shutdown
 ```
 
 **The guest runs in the background and the command returns.** A k0smos node has no
-shell, so there is nothing to sit in front of — the console is output, and it goes
-to a file you can `tail -f`. Give it a minute or two; `k0s controller --single` has
-a lot to start.
+shell, so there is nothing to sit in front of. Its console goes to a file you read
+with `k0smosctl logs` — `-f` follows it, `-n 50` shows the last fifty lines. Give it
+a minute or two; `k0s controller --single` has a lot to start.
 
 `--attach` stays in the foreground streaming the console, and there **ctrl-c shuts
 the guest down cleanly** rather than killing it. (`--interactive` hands the terminal
@@ -71,33 +73,47 @@ to QEMU, whose only escape is `ctrl-a x` — which kills the guest. It exists fo
 rare case of wanting the QEMU monitor; prefer `--attach`.)
 
 Useful flags: `--cidata` attaches a configuration drive, `--data` a volume for
-`/var/lib/k0s`, `--console <file>` chooses where the console goes, and `--dry-run`
-prints the QEMU command instead of running it. `--disk ''` stays on the initramfs,
-which is fine for a smoke test but not for k0s — kubelet cannot run on a ramfs root.
+`/var/lib/k0s`, and `--dry-run` prints the QEMU command instead of running it.
+`--no-image` boots the initramfs alone, which is fine for a smoke test but not for
+k0s — kubelet cannot run on a ramfs root.
 
 With a release's artifacts unpacked there is no `make` at all: `k0smosctl boot`
-takes `--kernel`, `--initramfs` and `--disk` directly.
+takes `--kernel`, `--initramfs` and `--image` directly.
 
-### More than one node at a time
+### Guests, and where their state lives
 
-Each guest needs its own root image, control socket and forwarded port:
+Each guest has a `--name` (default `default`) and its own directory under
+`~/.local/state/k0smos/<name>/` — root disk, console log, control socket and a
+little metadata. Nothing runtime is written into the working tree, so
+`make clean-dist` cannot take a running machine's socket with it. `K0SMOS_STATE_DIR`
+moves it elsewhere.
+
+**The root image is a template.** `boot` clones it into the guest's directory the
+first time and never writes to the image itself, which is what makes a second guest
+one command:
 
 ```bash
-cp dist/k0smos.img dist/vm2.img
-./dist/k0smosctl boot --disk dist/vm2.img --socket dist/vm2.sock --api-port 7443 \
-  --console dist/vm2.log
-
-./dist/k0smosctl kubeconfig --socket dist/vm2.sock --server 127.0.0.1:7443 -o kubeconfig2
+./dist/k0smosctl boot --name vm2 --api-port 7443
+./dist/k0smosctl kubeconfig --name vm2 -o kubeconfig2   # port comes from the guest
 ```
 
-`--server host:port` matters: k0s writes `localhost:6443`, so without the port the
-second node's kubeconfig would point at the first node's forward.
+Every subcommand takes `--name`:
 
-Two guests cannot share one root image — QEMU takes a write lock and the second
-refuses to start, which is the right answer, since sharing it would corrupt the
-filesystem. **Copy a freshly built image, not one that has already booted:** k0s
-generates its PKI on first boot, so a clone of a booted image gives two machines
-with the same cluster identity — same CA, same node UID.
+```bash
+k0smosctl list                     # what exists, and what is running
+k0smosctl logs -f --name vm2
+k0smosctl shutdown --name vm2
+k0smosctl rm --name vm2            # discard it; the next boot re-clones the image
+```
+
+A later `boot` of the same name reuses that guest's disk, so a reboot keeps the
+cluster. `rm` throws it away, which is how these nodes are meant to be treated —
+replaced rather than repaired.
+
+This matters more than convenience. Booting the image in place would allow only one
+guest per machine, and any copy taken afterwards would inherit that guest's cluster
+identity: k0s writes its PKI on first boot, so two clones of a booted image come up
+with the same CA and the same node UID. Cloning per guest makes that impossible.
 
 While iterating on k0smos itself, the fast path skips k0s entirely and takes about
 15 seconds:
@@ -254,9 +270,11 @@ KUBECONFIG=kubeconfig kubectl get nodes
 ```
 
 The server address is rewritten from `localhost` (right on the node, wrong
-everywhere else) to `127.0.0.1`, which is where the forward lands. `--server ''`
-keeps what the node wrote; `-o -` prints instead of writing a file. The file is
-written 0600, because it is a cluster-admin credential.
+everywhere else) to `127.0.0.1` and the guest's own forwarded port, which `boot`
+recorded — so a second guest's kubeconfig points at the second guest. `--server
+host:port` overrides it, `--server ''` keeps what the node wrote, and `-o -` prints
+instead of writing a file. The file is written 0600, because it is a cluster-admin
+credential.
 
 If the cluster has not written its PKI yet you get a clear error naming
 `admin.conf` rather than an empty file.

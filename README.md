@@ -33,15 +33,17 @@ Everything after that is `k0smosctl`. The guest runs in the background — a k0s
 node has no shell, so there is nothing to sit in front of:
 
 ```bash
-./dist/k0smosctl boot                        # returns; console goes to dist/console.log
+./dist/k0smosctl boot                        # returns immediately
+./dist/k0smosctl logs -f                     # watch it come up
 ./dist/k0smosctl kubeconfig -o kubeconfig
 KUBECONFIG=kubeconfig kubectl get nodes      # k0smos   Ready   v1.36.3+k0s
 ./dist/k0smosctl shutdown                    # never kill QEMU: it corrupts the image
 ```
 
-`boot --attach` stays in the foreground streaming the console, where ctrl-c shuts
-the guest down cleanly. For a second node, give it its own image, socket and port:
-`boot --disk vm2.img --socket vm2.sock --api-port 7443`.
+A second node is one more command — `boot --name vm2 --api-port 7443` — because each
+guest gets its own disk cloned from the image, and its own state under
+`~/.local/state/k0smos/<name>/`. `list` shows what is running, `rm` discards one.
+`boot --attach` stays in the foreground, where ctrl-c stops the guest cleanly.
 
 `make` is for *building* — the kernel, k0s and the ext4 root need Linux tools. With
 a release's artifacts unpacked, `k0smosctl boot` needs no `make`, no repository and

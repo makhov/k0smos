@@ -4,8 +4,9 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 img=${1:-dist/k0smos.img}
-# Not dist/console.log: that is where a detached `k0smosctl boot` writes, and
-# truncating a running guest's console would be unhelpful.
+# Its own log rather than dist/console.log, so a run of this cannot truncate a
+# console someone is reading. (k0smosctl keeps a guest's console under its state
+# directory instead, which is out of the way of both.)
 log=${LOG:-dist/accept-console.log}
 timeout_s=${TIMEOUT:-900}
 

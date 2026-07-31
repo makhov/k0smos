@@ -34,8 +34,10 @@ const (
 
 func bootCmd() *cobra.Command {
 	var (
+		name        string
 		kernel      string
 		initramfs   string
+		image       string
 		disk        string
 		cidata      string
 		data        string
@@ -61,9 +63,14 @@ This is the same thing image/run-qemu.sh does, without needing the repository or
 shell — so a downloaded kernel, initramfs and root image are enough.
 
 The guest runs in the background and the command returns: there is no shell on a
-k0smos node, so there is nothing to sit in front of. The console is written to a
-file, port 6443 is forwarded, and a control port is attached so
-"k0smosctl kubeconfig" and "k0smosctl shutdown" can reach it.
+k0smos node, so there is nothing to sit in front of. Its console goes to a file
+readable with "k0smosctl logs", port 6443 is forwarded, and a control port is
+attached so "k0smosctl kubeconfig" and "k0smosctl shutdown" can reach it.
+
+Each guest is identified by --name and keeps its console, control socket and root
+disk under its own state directory. The disk is cloned from --image the first time,
+so the image stays a pristine template and a second guest needs only a name and its
+own --api-port. Later boots of the same name reuse its disk, keeping the cluster.
 
 Use --attach to stay and watch the console instead, where ctrl-c then shuts the
 guest down cleanly rather than killing it.`,
@@ -76,8 +83,11 @@ guest down cleanly rather than killing it.`,
   # watch the console; ctrl-c stops the guest cleanly
   k0smosctl boot --attach
 
-  # a second guest alongside the first
-  k0smosctl boot --disk second.img --socket second.sock --api-port 7443
+  # a second guest alongside the first: its own disk is cloned automatically
+  k0smosctl boot --name vm2 --api-port 7443
+
+  # throw a guest away and start again from the image
+  k0smosctl rm --name vm2 && k0smosctl boot --name vm2 --api-port 7443
 
   # print the qemu command instead of running it
   k0smosctl boot --dry-run`,
@@ -101,16 +111,49 @@ guest down cleanly rather than killing it.`,
 				return fatalf("%s is not installed", g.qemu)
 			}
 
+			// Paths come from the guest's own state directory unless overridden, so
+			// nothing runtime lands in the working tree and a second guest needs no
+			// bookkeeping from the caller.
+			if _, err := ensureGuestDir(name); err != nil {
+				return err
+			}
+			stateConsole, stateSocket, metaPath, err := guestPaths(name)
+			if err != nil {
+				return err
+			}
+
+			// A guest gets its own disk, cloned from the image once. The image is a
+			// template: booting it in place would mean one guest per machine, and
+			// every clone taken afterwards would inherit that guest's cluster
+			// identity — same CA, same node UID — because k0s writes its PKI on
+			// first boot. Both of those went wrong before this existed.
+			noImage, _ := cmd.Flags().GetBool("no-image")
+			switch {
+			case noImage:
+				disk = ""
+			case disk != "":
+				// An explicit --disk is used as given, in place.
+			default:
+				disk, err = guestDisk(name, image)
+				if err != nil {
+					return err
+				}
+			}
+			if socket == "" {
+				socket = stateSocket
+			}
+			if err := checkSocketPath(socket); err != nil {
+				return err
+			}
+			if console == "" && !attach && !interactive {
+				console = stateConsole
+			}
+
 			spec := bootSpec{
 				kernel: kernel, initramfs: initramfs, disk: disk, cidata: cidata,
 				data: data, dataSize: dataSize, socket: socket,
 				mem: mem, cpus: cpus, console: console, exec: exec_,
 				apiPort: apiPort, attach: attach, interactive: interactive,
-			}
-			// A detached guest writes its console somewhere findable rather than
-			// into a terminal that is about to be given back.
-			if !attach && !interactive && spec.console == "" {
-				spec.console = filepath.Join("dist", "console.log")
 			}
 			// Refuse to start alongside a guest already answering on this socket.
 			// Two guests sharing one root image corrupt it, and the second would
@@ -139,22 +182,27 @@ guest down cleanly rather than killing it.`,
 				q.Stdin, q.Stdout, q.Stderr = os.Stdin, cmd.OutOrStdout(), cmd.ErrOrStderr()
 				return runGuest(q, spec, cmd.ErrOrStderr())
 			}
-			return detach(q, spec, cmd.OutOrStdout())
+			return detach(q, spec, name, metaPath, cmd.OutOrStdout())
 		},
 	}
 	f := cmd.Flags()
 	f.StringVar(&kernel, "kernel", "", "kernel image (default dist/kernel/<arch>/vmlinuz)")
 	f.StringVar(&initramfs, "initramfs", filepath.Join("dist", "k0smos-initramfs.gz"), "initramfs image")
-	f.StringVar(&disk, "disk", filepath.Join("dist", "k0smos.img"), `ext4 root to switch onto; "" stays on the initramfs`)
+	f.StringVar(&image, "image", filepath.Join("dist", "k0smos.img"),
+		"root image to clone this guest's disk from, once")
+	f.StringVar(&disk, "disk", "",
+		`use this disk directly and write to it in place, instead of cloning --image; "" stays on the initramfs with --no-image`)
+	f.Bool("no-image", false, "boot the initramfs only, with no root disk (kubelet cannot run there)")
 	f.StringVar(&cidata, "cidata", "", "cloud-init drive to attach, as written by 'k0smosctl gen'")
 	f.StringVar(&data, "data", "", "data volume for /var/lib/k0s; created blank if absent")
 	f.StringVar(&dataSize, "data-size", "4G", "size for a newly created --data volume")
-	f.StringVar(&socket, "socket", defaultSocket, "where to put the control socket")
+	f.StringVar(&name, "name", defaultGuestName, "name for this guest; its console and control socket are kept under it")
+	f.StringVar(&socket, "socket", "", "control socket path (default: under the guest's state directory)")
 	f.StringVar(&mem, "memory", "4096", "guest memory in MiB")
 	f.StringVar(&cpus, "cpus", "2", "guest CPUs")
 	f.StringVar(&arch, "arch", runtime.GOARCH, "guest architecture: amd64 or arm64")
 	f.StringVar(&console, "console", "",
-		"where to write the console (default dist/console.log; with --attach it also streams to stdout)")
+		"where to write the console (default: under the guest's state directory)")
 	f.StringVar(&exec_, "exec", "", "override the supervised workload (comma-separated)")
 	f.IntVar(&apiPort, "api-port", 6443, "host port forwarded to the API server; 0 forwards nothing")
 	f.BoolVar(&attach, "attach", false,
@@ -448,7 +496,7 @@ func runGuest(q *exec.Cmd, s bootSpec, out io.Writer) error {
 // Its own session matters: without it the guest sits in this terminal's process
 // group, so a later ctrl-c there — or closing the terminal — would deliver SIGINT
 // or SIGHUP straight to QEMU and kill the machine, taking the filesystem with it.
-func detach(q *exec.Cmd, s bootSpec, out io.Writer) error {
+func detach(q *exec.Cmd, s bootSpec, name, metaPath string, out io.Writer) error {
 	log, err := os.Create(s.console)
 	if err != nil {
 		return err
@@ -478,16 +526,23 @@ func detach(q *exec.Cmd, s bootSpec, out io.Writer) error {
 		return err
 	}
 
-	fmt.Fprintf(out, "guest running in the background (pid %d)\n", pid)
-	fmt.Fprintf(out, "  console:  tail -f %s\n", s.console)
+	// Recorded so logs, kubeconfig, shutdown and list need only the name.
+	if err := saveMeta(metaPath, guestMeta{
+		Name: name, PID: pid, Disk: s.disk, APIPort: s.apiPort, Started: time.Now(),
+	}); err != nil {
+		fmt.Fprintf(out, "warn: could not record guest state: %v\n", err)
+	}
+
+	suffix := ""
+	if name != defaultGuestName {
+		suffix = " --name " + name
+	}
+	fmt.Fprintf(out, "guest %q running in the background (pid %d)\n", name, pid)
+	fmt.Fprintf(out, "  console:  k0smosctl logs -f%s\n", suffix)
 	if s.apiPort != 0 {
-		fmt.Fprintf(out, "  cluster:  k0smosctl kubeconfig -o kubeconfig   (API on :%d)\n", s.apiPort)
+		fmt.Fprintf(out, "  cluster:  k0smosctl kubeconfig%s -o kubeconfig   (API on :%d)\n", suffix, s.apiPort)
 	}
-	stop := "k0smosctl shutdown"
-	if s.socket != defaultSocket {
-		stop += " --socket " + s.socket
-	}
-	fmt.Fprintf(out, "  stop it:  %s\n", stop)
+	fmt.Fprintf(out, "  stop it:  k0smosctl shutdown%s\n", suffix)
 	return nil
 }
 
