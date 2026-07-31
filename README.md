@@ -222,6 +222,16 @@ Two things a read-only root forces:
 erofs and not squashfs because the default kernel decides it: Kata's builds in erofs
 and has no squashfs driver at all.
 
+Alpine's kernels are the mirror image — **no erofs in either `linux-virt` or
+`linux-lts`**, but `CONFIG_SQUASHFS=m` — so a read-only root there would have to be
+squashfs. Nothing builds that today, which is why an Alpine kernel boots from an ext4
+disk instead. `mkinitramfs.sh` reads the kernel's config and declines to embed a root
+it could not mount, rather than producing an initramfs that fails at `switch_root`.
+
+That matters for bare metal, which wants `linux-lts` — it carries `igb`, `ixgbe` and
+`megaraid_sas`, which `linux-virt` does not. So the read-only-root model reaches bare
+metal only once squashfs is supported alongside erofs.
+
 ext4 remains the default root for now, since it is the configuration with the most
 boots behind it. ext4 does not go away either way — the data volume needs a
 read-write filesystem, so `mkfs.ext4` stays in the image.
