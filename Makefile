@@ -3,7 +3,7 @@ BIN := dist/k0smos
 # a host build on macOS would just produce the "linux only" stub.
 GO_BUILD := GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags '-extldflags "-static"'
 
-.PHONY: build ctl test vet kernel kernel-alpine k0s initramfs disk artifacts boot smoke oci e2e e2e-full accept clean-dist
+.PHONY: build ctl test vet kernel kernel-alpine k0s initramfs rootfs disk artifacts boot smoke oci e2e e2e-full accept clean-dist
 build:
 	$(GO_BUILD) -o $(BIN) ./cmd/k0smos
 
@@ -45,22 +45,36 @@ k0s:
 
 # Initramfs with k0smos as /init. Set K0S_BIN=dist/k0s-<arch> to bake in k0s.
 #
-# Rebuilding this ALONE is not enough after changing k0smos: switch_root re-execs
-# /sbin/k0smos from the ext4 root, so everything after the pivot — cloud-init,
-# data volume, supervise, shutdown — runs the binary in dist/k0smos.img. Rebuild
-# `disk` too, or you will be testing stale code that boots perfectly.
+# Rebuilding this ALONE is not enough after changing k0smos, and with an embedded
+# root it is doubly not enough. There are two copies of the binary: /init here, and
+# /sbin/k0smos inside the root image — which switch_root re-execs, so everything
+# after the pivot runs that one. The root image is inside this initramfs, so a
+# `make initramfs` on its own refreshes /init and silently keeps the old
+# /sbin/k0smos.
+#
+# Use `make artifacts`, which rebuilds the root first and then embeds it. Getting
+# this wrong produces a boot that works perfectly while testing code that is gone —
+# it cost a whole e2e run to notice the second time.
 initramfs:
 	./image/mkinitramfs.sh
 
-# The real ext4 root that k0smos switch_roots onto. kubelet cannot run on the
-# initramfs (cadvisor finds no filesystem info for a ramfs root).
+# The root k0smos switch_roots onto. kubelet cannot run on the initramfs itself
+# (cadvisor finds no filesystem info for a ramfs root), but it is satisfied by a
+# read-only erofs image on a loop device — which is why the root can travel inside
+# the initramfs rather than as a separate disk.
+rootfs: kernel k0s
+	K0S_BIN=dist/k0s-$$(go env GOARCH) ./image/mkrootfs.sh dist/k0smos.erofs
+
+# The writable ext4 root instead, for booting from a disk. Still used by most of the
+# e2e suite, and what bare metal will want once there is an installer.
 disk: kernel k0s
-	K0S_BIN=dist/k0s-$$(go env GOARCH) ./image/mkrootfs.sh dist/k0smos.img
+	ROOTFS=ext4 K0S_BIN=dist/k0s-$$(go env GOARCH) ./image/mkrootfs.sh dist/k0smos.img
 
 # Everything k0smosctl boot needs. `disk` already pulls in the kernel and k0s;
 # initramfs is listed because it is built from the kernel's module tree and is not
 # a prerequisite of the root image.
-artifacts: kernel k0s initramfs disk
+# rootfs before initramfs: the initramfs embeds it.
+artifacts: kernel k0s rootfs initramfs
 
 # Full local boot, through the CLI so there is one path a user can follow rather
 # than a make-only shortcut that drifts from it. --attach because a contributor
@@ -84,10 +98,10 @@ oci: kernel disk
 # End-to-end tests: boot k0smos under QEMU and assert on what happens. The fast
 # suite never starts k0s (a workload that exits immediately), so each boot is
 # ~40s; e2e-full adds the k0s tests, which take minutes each.
-e2e: kernel initramfs disk
+e2e: artifacts disk
 	go test -tags e2e -short -v -timeout 30m ./e2e/
 
-e2e-full: kernel initramfs disk
+e2e-full: artifacts disk
 	go test -tags e2e -v -timeout 90m ./e2e/
 
 accept: disk

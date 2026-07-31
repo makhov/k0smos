@@ -129,6 +129,19 @@ if [ -n "$control" ]; then
   )
 fi
 
+# Host forwarding is off by default. It used to forward 6443 unconditionally, which
+# meant one leaked guest — a test run interrupted before its cleanup — made every
+# later boot fail with "Could not set up host forwarding rule". Nothing in the e2e
+# suite reaches the API server over TCP anyway: it uses the control port. Set
+# API_PORT to forward one.
+netdev_args=(-netdev user,id=n0 -device virtio-net-pci,netdev=n0)
+if [ -n "${API_PORT:-}" ]; then
+  netdev_args=(
+    -netdev "user,id=n0,hostfwd=tcp::$API_PORT-:6443"
+    -device virtio-net-pci,netdev=n0
+  )
+fi
+
 display=(-nographic -serial mon:stdio)
 if [ "$serial" != "stdio" ]; then
   mkdir -p "$(dirname "$serial")"
@@ -153,5 +166,5 @@ exec "$qemu" \
   -kernel "$kernel" -append "$append" \
   "${boot[@]}" \
   ${control_args[@]+"${control_args[@]}"} ${monitor_args[@]+"${monitor_args[@]}"} \
-  -netdev user,id=n0,hostfwd=tcp::6443-:6443 -device virtio-net-pci,netdev=n0 \
+  ${netdev_args[@]+"${netdev_args[@]}"} \
   "${display[@]}"
