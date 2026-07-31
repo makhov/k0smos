@@ -4,7 +4,8 @@ What it takes to run k0smos somewhere other than the local QEMU setup, and what
 is still missing for each target.
 
 Read [Limitations](../README.md#limitations) first. This is a working prototype;
-the gaps below are real.
+the gaps below are real. For day-to-day use — booting, configuring, shipping
+manifests, getting a kubeconfig — see [usage.md](usage.md).
 
 ## What you ship
 
@@ -12,8 +13,9 @@ Three artifacts, and a kernel cmdline. Nothing else — no package manager, no
 configuration management, no SSH.
 
 ```
-vmlinuz                  kernel (yours, or Alpine's via make kernel)
-k0smos-initramfs.gz      k0smos as /init, plus the module tree
+vmlinuz                  kernel (the Kata guest kernel via make kernel,
+                         Alpine's via make kernel-alpine, or your own)
+k0smos-initramfs.gz      k0smos as /init, plus the module tree if there is one
 k0smos.img               ext4 root: k0smos, k0s, /etc, modules
 ```
 
