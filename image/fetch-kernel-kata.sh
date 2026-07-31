@@ -102,4 +102,4 @@ fi
 rm -rf "$out/lib" "$out/config"
 
 echo "wrote $kernel ($(du -h "$kernel" | cut -f1), sha256:$got)"
-echo "monolithic: no module tree written — build images with MODULES_DIR=/nonexistent"
+echo "monolithic: no module tree written — mkinitramfs.sh and mkrootfs.sh handle that"

@@ -23,7 +23,7 @@ make smoke     # ~15s: boots the init alone, no k0s. Use this while iterating.
 make boot      # the real thing: k0smos as PID1 running single-node k0s
 ```
 
-`make boot` downloads an Alpine kernel and the latest k0s release, builds an
+`make boot` downloads the Kata guest kernel and the latest k0s release, builds an
 initramfs and a ~3.3 GB ext4 root image, and boots it. Console is interactive;
 `Ctrl-a x` quits QEMU.
 
@@ -38,7 +38,7 @@ You should see:
 ```
 k0smos: starting as PID1 (switched-root=false)
 k0smos: pseudo-filesystems mounted
-k0smos: kernel modules loaded from /lib/modules/6.6.142-0-virt
+k0smos: no module tree; assuming a monolithic kernel
 k0smos: resolved LABEL=k0smos to /dev/vda
 k0smos: mounted /dev/vda at /newroot, switching root
 k0smos: starting as PID1 (switched-root=true)
@@ -55,14 +55,17 @@ Three artifacts, in `dist/`:
 
 | Artifact | Built by | Purpose |
 |---|---|---|
-| `kernel/<arch>/vmlinuz` + `lib/modules` | `make kernel` | Alpine `linux-virt` kernel and its modules |
-| `k0smos-initramfs.gz` | `make initramfs` | k0smos as `/init`, plus the module tree |
+| `kernel/<arch>/vmlinuz` (+ `lib/modules`) | `make kernel` | Kata guest kernel, monolithic and pinned. `make kernel-alpine` fetches Alpine `linux-virt` and its module tree instead |
+| `k0smos-initramfs.gz` | `make initramfs` | k0smos as `/init`, plus the module tree if the kernel has one |
 | `k0smos.img` | `make disk` | ext4 root: k0smos, k0s, `/etc`, modules |
 
-Boot always goes through the initramfs, because a stock distro kernel ships
-`virtio_blk` and `ext4` as *modules* and therefore cannot mount a disk root
-unaided. k0smos loads those, then `switch_root`s onto the ext4 image. See
-[docs/architecture.md](docs/architecture.md) for why each step is where it is.
+Boot always goes through the initramfs, even on a monolithic kernel: the root has
+to be a real filesystem rather than the initramfs itself, because kubelet's
+cadvisor finds no filesystem info for a ramfs root. So k0smos always
+`switch_root`s onto the ext4 image. On a modular kernel it must also load
+`virtio_blk` and `ext4` first, since such a kernel cannot mount a disk root
+unaided. See [docs/architecture.md](docs/architecture.md) for why each step is
+where it is.
 
 ## Make targets
 
@@ -71,8 +74,8 @@ unaided. k0smos loads those, then `switch_root`s onto the ext4 image. See
 | `make test` | `go test -race ./...` |
 | `make vet` | vet for the host and for `GOOS=linux` |
 | `make build` | static `linux/amd64` binary into `dist/k0smos` |
-| `make kernel` | fetch Alpine `linux-virt` + its module tree |
-| `make kernel-kata` | fetch a Kata guest kernel instead — monolithic, no modules (see below) |
+| `make kernel` | fetch the Kata guest kernel — monolithic, pinned, no module tree |
+| `make kernel-alpine` | fetch Alpine `linux-virt` + its ~29MB module tree instead (see below) |
 | `make k0s` | download the latest k0s release binary (~240 MB) |
 | `make initramfs` | build the boot initramfs |
 | `make disk` | build the ext4 root image |
@@ -115,26 +118,33 @@ pieces kube-proxy needs, ipsets, veth/bridge, and the ACPI power button.
 Modules absent from the running kernel are skipped, so the same list is safe on
 a monolithic kernel.
 
+Beyond that list, drivers are **autoloaded**: k0smos reads each device's
+`modalias` from `/sys/devices` and matches it against `modules.alias`, the same
+mechanism udev uses. That is what lets a distro kernel drive hardware nobody
+listed in advance, and it is why the named list can stay small. `k0smos.modules=none`
+disables both.
+
 ## Which kernel
 
 Two sources, and the choice matters more than it looks.
 
-| | `make kernel` (Alpine `linux-virt`) | `make kernel-kata` (Kata guest kernel) |
+| | `make kernel` (Kata guest kernel, **default**) | `make kernel-alpine` (Alpine `linux-virt`) |
 |---|---|---|
-| virtio, ext4, netfilter, overlayfs | **modules** | **built in** |
-| module tree in the image | ~29 MB, must match the kernel exactly | none |
-| initramfs | ~22 MB | **~1.2 MB** |
-| bare metal | some — see below | **no** — no NVME/ATA/SCSI/USB/NIC drivers |
-| cloud-init drive | works | works ([userspace ISO reader](internal/iso9660/iso9660.go)) |
-| pinned | no | yes, by kernel digest |
+| virtio, ext4, netfilter, overlayfs | **built in** | modules |
+| module tree in the image | **none** | ~29 MB, must match the kernel exactly |
+| initramfs | **~1.2 MB** | ~22 MB |
+| the 50-name module list matters | no | yes |
+| pinned | **yes, by kernel digest** | no, tracks Alpine |
+| bare metal | **no** — no NVME/ATA/SCSI/USB/NIC drivers | some, see [Bring your own kernel](#bring-your-own-kernel) |
+| cloud-init drive | works | works — both via the [userspace ISO reader](internal/iso9660/iso9660.go) |
 
 Kata's kernel is built for VM guests and covers everything k0s itself needs —
 verified against its config fragments, then by booting: a node reaches Ready with
 **zero modules loaded**, which removes the module tree, the 50 hard-coded module
 names and the kernel/module version-skew hazard in one step.
 
-It used to be unusable with Cluster API: Kata's kernel builds in no `ISO9660` and
-no `VFAT`, so it could not mount a cloud-init drive — the way CAPI delivers
+It was not always the default. Kata's kernel builds in no `ISO9660` and no
+`VFAT`, so it could not mount a cloud-init drive — the way CAPI delivers
 bootstrap data — and all five cloud-init e2e tests failed on it. Kata guests
 receive their config over virtio-fs and vsock, so those filesystems were never
 needed there.
@@ -158,10 +168,15 @@ openstacksdk builds Ironic's with `genisoimage`/`mkisofs`/`xorrisofs`, KubeVirt
 uses `xorrisofs`. A vfat drive would fall back to `mount` and fail, since no vfat
 module is shipped; that is one line in `internal/module` if one ever shows up.
 
+Nothing special is needed to build against it — `make disk` and
+`./image/mkinitramfs.sh` work as they are, because the fetch writes no module tree
+and both scripts report a missing one as a monolithic kernel rather than an error.
+For Alpine instead:
+
 ```bash
-make kernel-kata
-MODULES_DIR=/nonexistent make disk        # build without a module tree
-MODULES_DIR=/nonexistent ./image/mkinitramfs.sh
+make kernel-alpine
+make disk
+./image/mkinitramfs.sh
 ```
 
 Note the fetch streams the 999 MB `kata-static` release archive and aborts as
@@ -381,12 +396,11 @@ Known and deliberate, as of this prototype:
 - **Fixed image size.** `mkrootfs.sh` sizes the filesystem at content + 3 GB and
   writes no partition table; there is no grow-on-first-boot.
 - **Everything runs as root.** `/etc/passwd` exists only so k0s stops warning.
-- **Module fragility, on the modular path.** With Alpine's kernel, correct
-  operation depends on 50 named modules being present, and a kernel that splits
-  them differently will fail in obscure ways. The monolithic path removes this
-  class of problem entirely and now works end to end — the full fast e2e suite
-  passes on Kata's kernel, and CI gates on both. Alpine remains the default only
-  for its hardware coverage.
+- **Module fragility, on the modular path.** Hardware drivers are no longer the
+  problem — those are autoloaded from `modules.alias`. What remains named is the
+  part no device announces: netfilter, nft, ipsets and overlayfs. A kernel that
+  splits *those* differently still fails in obscure ways. The monolithic default
+  avoids the whole class, and CI gates on both kernels.
 
 For deploying outside the local QEMU setup, see
 [docs/deployment.md](docs/deployment.md).

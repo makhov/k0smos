@@ -52,7 +52,11 @@ if [ -d "$moddir" ]; then
   cp -R "$moddir/." "$root/lib/modules/"
   echo "included kernel modules from $moddir"
 else
-  echo "warn: no modules dir at $moddir — guest will have no virtio NIC" >&2
+  # Expected with a monolithic kernel, which is the default: fetch-kernel-kata.sh
+  # deliberately writes no tree, and k0smos reports "no module tree; assuming a
+  # monolithic kernel". Only a concern if the kernel needs modules and has none,
+  # in which case it will have no virtio NIC or disk.
+  echo "no modules dir at $moddir — assuming a monolithic kernel" >&2
 fi
 
 # Optional: bake in a real k0s binary. Without it, boot with
