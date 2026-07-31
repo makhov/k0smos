@@ -127,10 +127,20 @@ Two sources, and the choice matters more than it looks.
 | bare metal | works | **no** — no NVME/ATA/SCSI/USB/NIC drivers |
 | pinned | no | yes, by kernel digest |
 
-Kata's kernel is built for VM guests and already includes everything a k0s node
-needs — verified against its config fragments, then by booting: a node reaches
-Ready with **zero modules loaded**. That removes the module tree, the 50
-hard-coded module names, and the kernel/module version-skew hazard in one step.
+Kata's kernel is built for VM guests and covers everything k0s itself needs —
+verified against its config fragments, then by booting: a node reaches Ready with
+**zero modules loaded**, which removes the module tree, the 50 hard-coded module
+names and the kernel/module version-skew hazard in one step.
+
+> **It cannot be used with Cluster API today.** Kata's kernel builds in no
+> `ISO9660` and no `VFAT`, so it cannot mount a cloud-init drive — the way CAPI
+> delivers bootstrap data. All five cloud-init e2e tests fail on it while
+> everything else passes. Kata guests receive their config over virtio-fs and
+> vsock, so those filesystems were never needed there.
+>
+> Alpine's kernel remains the default and is what CI gates on. Making the
+> monolithic route usable means building from Kata's fragments plus
+> `CONFIG_ISO9660_FS`/`JOLIET` and `CONFIG_VFAT_FS`/`NLS_CP437`.
 
 ```bash
 make kernel-kata
@@ -138,8 +148,8 @@ MODULES_DIR=/nonexistent make disk        # build without a module tree
 MODULES_DIR=/nonexistent ./image/mkinitramfs.sh
 ```
 
-Use the Alpine kernel for bare metal, where Kata's simply cannot see the disks
-or NICs.
+Use the Alpine kernel for bare metal too, where Kata's simply cannot see the
+disks or NICs.
 
 Note the fetch streams the 999 MB `kata-static` release archive and aborts as
 soon as `tar` has the 18 MB kernel — about 170 MB transferred — then caches by
