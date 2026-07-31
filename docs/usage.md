@@ -1,16 +1,13 @@
 # Using k0smos
 
-Task-oriented. Each section says up front whether the path has actually been run,
-because several have not — see [Status](../README.md#status).
-
-- [Boot a node locally](#boot-a-node-locally) — verified
-- [Configure a node with cloud-init](#configure-a-node-with-cloud-init) — verified
-- [Ship Kubernetes manifests](#ship-kubernetes-manifests) — verified
-- [Give it a data volume](#give-it-a-data-volume) — verified
-- [Reach the cluster from the host](#reach-the-cluster-from-the-host) — verified
-- [Shut it down](#shut-it-down) — verified
-- [Run it on KubeVirt](#run-it-on-kubevirt) — boots, not reconciled by CAPI
-- [Run it on bare metal](#run-it-on-bare-metal) — untested
+- [Boot a node locally](#boot-a-node-locally)
+- [Configure a node with cloud-init](#configure-a-node-with-cloud-init)
+- [Ship Kubernetes manifests](#ship-kubernetes-manifests)
+- [Give it a data volume](#give-it-a-data-volume)
+- [Reach the cluster from the host](#reach-the-cluster-from-the-host)
+- [Shut it down](#shut-it-down)
+- [Run it on KubeVirt](#run-it-on-kubevirt)
+- [Run it on bare metal](#run-it-on-bare-metal)
 - [When something goes wrong](#when-something-goes-wrong)
 
 Throughout: k0smos has **no shell and no SSH**. Everything a machine needs is
@@ -243,7 +240,7 @@ over SSH that does not exist here.
    `linux-virt` covers NVMe, ATA, SCSI, USB-storage, `e1000e` and `mlx5`, but not
    `igb`, `ixgbe`, `i40e`, `bnxt` or `megaraid_sas`. For anything else, supply a
    distro kernel with a module tree — you do not need to build one. See
-   [Bring your own kernel](../README.md#bring-your-own-kernel).
+   [Which kernel](../README.md#which-kernel).
 2. Point `MODULES_DIR` at that tree when building the images. Drivers are then
    autoloaded by matching each device's `modalias` against `modules.alias`, so you
    do not have to name them.
