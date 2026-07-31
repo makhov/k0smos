@@ -26,6 +26,7 @@ make ctl        # -> dist/k0smosctl
 | Command | What it does |
 |---|---|
 | `k0smosctl gen` | write a cloud-init drive for a node to boot with |
+| `k0smosctl boot` | boot a node locally under QEMU |
 | `k0smosctl kubeconfig` | fetch the admin kubeconfig from a running node |
 | `k0smosctl shutdown` | stop a node cleanly |
 | `k0smosctl reboot` | restart a node cleanly |
@@ -42,16 +43,32 @@ three talk to a running one over its virtio-serial control port.
 Needs Go 1.25+, QEMU, and Docker (the ext4 image and the kernel unpack both need
 Linux tools). Works on Apple Silicon via HVF and on linux/KVM.
 
+Build the artifacts once — `make` is used only for this, because the kernel, k0s
+and the ext4 root all need Linux tools:
+
 ```bash
-make boot
+make artifacts ctl
 ```
 
-That fetches the kernel and the latest k0s release, builds the initramfs and a
-~3.3 GB ext4 root, and boots a single-node controller. Give it a minute or two;
-`k0s controller --single` has a lot to start.
+Then boot with the CLI:
 
-While iterating on k0smos itself, use the fast path instead — it boots the init
-alone with no k0s at all, in about 15 seconds:
+```bash
+./dist/k0smosctl boot
+```
+
+Give it a minute or two; `k0s controller --single` has a lot to start. The terminal
+holds the guest's console, so use another one for `kubeconfig` and `shutdown`.
+
+Useful flags: `--cidata` attaches a configuration drive, `--data` a volume for
+`/var/lib/k0s`, `--console <file>` runs it headless, and `--dry-run` prints the
+QEMU command instead of running it. `--disk ''` stays on the initramfs, which is
+fine for a smoke test but not for k0s — kubelet cannot run on a ramfs root.
+
+With a release's artifacts unpacked there is no `make` at all: `k0smosctl boot`
+takes `--kernel`, `--initramfs` and `--disk` directly.
+
+While iterating on k0smos itself, the fast path skips k0s entirely and takes about
+15 seconds:
 
 ```bash
 make smoke
@@ -62,6 +79,7 @@ k0smos re-execs `/sbin/k0smos` from the ext4 root, so everything after the pivot
 runs the binary in `dist/k0smos.img`, not the one in the initramfs:
 
 ```bash
+make artifacts        # or the two scripts directly:
 ./image/mkinitramfs.sh
 K0S_BIN=dist/k0s-$(go env GOARCH) ./image/mkrootfs.sh dist/k0smos.img
 ```
@@ -80,7 +98,7 @@ make ctl
 # put files on the node, taking their permissions from the source file
 ./dist/k0smosctl gen --file k0s.yaml:/etc/k0s/k0s.yaml --hostname demo-node -o dist/cidata.iso
 
-CIDATA=dist/cidata.iso make boot
+./dist/k0smosctl boot --cidata dist/cidata.iso
 ```
 
 For a cloud-config you have written or rendered elsewhere, pass it whole
@@ -175,7 +193,7 @@ boot. With one, `/var/lib/k0s` is a separate volume that survives a guest reboot
 — which is what lets etcd survive an in-place restart and images stay cached.
 
 ```bash
-DATA=dist/data.img DATA_SIZE=8G make boot
+./dist/k0smosctl boot --data dist/data.img --data-size 8G
 ```
 
 The image is created blank if it does not exist. Then on the guest side:

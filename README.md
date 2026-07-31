@@ -23,26 +23,29 @@ Docs: **[usage.md](docs/usage.md)** (how to use it) ·
 Needs Go 1.25+, QEMU, and Docker (the ext4 image and the kernel unpack both need
 Linux tools). Works on Apple Silicon via HVF and on linux/KVM.
 
+Build the artifacts and the CLI once:
+
 ```bash
-make ctl       # build k0smosctl, which does the routine work
-make boot      # k0smos as PID1 running single-node k0s
-make smoke     # ~15s: the init alone, no k0s. Use this while iterating.
+make artifacts ctl   # kernel, k0s, initramfs, ext4 root, and k0smosctl
 ```
 
-`make boot` holds the terminal with the guest's console, so use a second one to
-reach the cluster:
+Everything after that is `k0smosctl`:
+
+```bash
+./dist/k0smosctl boot                        # holds the terminal with the console
+```
+
+In a second terminal:
 
 ```bash
 ./dist/k0smosctl kubeconfig -o kubeconfig
-KUBECONFIG=kubeconfig kubectl get nodes
+KUBECONFIG=kubeconfig kubectl get nodes      # k0smos   Ready   v1.36.3+k0s
+./dist/k0smosctl shutdown                    # never kill QEMU: it corrupts the image
 ```
 
-Stop the guest **cleanly** — killing QEMU corrupts the image:
-
-```bash
-./dist/k0smosctl shutdown    # or: k0smosctl reboot
-./image/poweroff.sh          # the same, without building the CLI
-```
+`make` is for *building* — the kernel, k0s and the ext4 root need Linux tools. With
+a release's artifacts unpacked, `k0smosctl boot` needs no `make`, no repository and
+no Go toolchain.
 
 A good boot looks like:
 
@@ -87,8 +90,9 @@ cannot run on a ramfs root, so k0smos always `switch_root`s onto the ext4 image.
 | `make kernel-alpine` | fetch Alpine `linux-virt` + its module tree |
 | `make k0s` | download the latest k0s release (~240 MB) |
 | `make initramfs` / `make disk` | build the boot initramfs / the ext4 root |
-| `make smoke` | init-only boot, no k0s |
-| `make boot` | full boot: initramfs → switch_root → k0s |
+| `make artifacts` | all of the above — everything `k0smosctl boot` needs |
+| `make smoke` | init-only boot, no k0s — the ~15s check while changing k0smos |
+| `make boot` | `k0smosctl boot` with the artifacts rebuilt first |
 | `make e2e` | QEMU boots asserting on behaviour, no k0s (~10s/boot) |
 | `make e2e-full` | adds the k0s tests: node Ready, manifests, etcd leave |
 | `make accept` | boot headless, wait for `Ready`, power off |
@@ -106,7 +110,7 @@ no Docker) is needed:
 ```bash
 make ctl
 ./dist/k0smosctl gen --file k0s.yaml:/etc/k0s/k0s.yaml --hostname node-1 -o cidata.iso
-CIDATA=cidata.iso make boot
+./dist/k0smosctl boot --cidata cidata.iso
 ```
 
 `--user-data <file>` passes a cloud-config through whole instead. Either way it is

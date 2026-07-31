@@ -3,7 +3,7 @@ BIN := dist/k0smos
 # a host build on macOS would just produce the "linux only" stub.
 GO_BUILD := GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags '-extldflags "-static"'
 
-.PHONY: build ctl test vet kernel kernel-alpine k0s initramfs disk boot smoke oci e2e e2e-full accept clean-dist
+.PHONY: build ctl test vet kernel kernel-alpine k0s initramfs disk artifacts boot smoke oci e2e e2e-full accept clean-dist
 build:
 	$(GO_BUILD) -o $(BIN) ./cmd/k0smos
 
@@ -57,11 +57,15 @@ initramfs:
 disk: kernel k0s
 	K0S_BIN=dist/k0s-$$(go env GOARCH) ./image/mkrootfs.sh dist/k0smos.img
 
-# Full local boot: initramfs -> load modules -> switch_root onto the ext4 disk
-# -> k0s. Interactive console.
-boot: kernel disk
-	./image/mkinitramfs.sh
-	IMG=dist/k0smos.img MEM=8192 CPUS=4 ./image/run-qemu.sh
+# Everything k0smosctl boot needs. `disk` already pulls in the kernel and k0s;
+# initramfs is listed because it is built from the kernel's module tree and is not
+# a prerequisite of the root image.
+artifacts: kernel k0s initramfs disk
+
+# Full local boot, through the CLI so there is one path a user can follow rather
+# than a make-only shortcut that drifts from it.
+boot: artifacts ctl
+	./dist/k0smosctl boot --memory 8192 --cpus 4
 
 # Fast init-only check: no k0s, supervises /init (which exits 1 via the PID1
 # gate) purely to prove the mount/cgroup/net/supervise/shutdown path works.
