@@ -71,7 +71,8 @@ unaided. k0smos loads those, then `switch_root`s onto the ext4 image. See
 | `make test` | `go test -race ./...` |
 | `make vet` | vet for the host and for `GOOS=linux` |
 | `make build` | static `linux/amd64` binary into `dist/k0smos` |
-| `make kernel` | fetch kernel + modules for the host arch |
+| `make kernel` | fetch Alpine `linux-virt` + its module tree |
+| `make kernel-kata` | fetch a Kata guest kernel instead — monolithic, no modules (see below) |
 | `make k0s` | download the latest k0s release binary (~240 MB) |
 | `make initramfs` | build the boot initramfs |
 | `make disk` | build the ext4 root image |
@@ -113,6 +114,38 @@ The built-in module set covers virtio, ext4, overlayfs, the netfilter and nft
 pieces kube-proxy needs, ipsets, veth/bridge, and the ACPI power button.
 Modules absent from the running kernel are skipped, so the same list is safe on
 a monolithic kernel.
+
+## Which kernel
+
+Two sources, and the choice matters more than it looks.
+
+| | `make kernel` (Alpine `linux-virt`) | `make kernel-kata` (Kata guest kernel) |
+|---|---|---|
+| virtio, ext4, netfilter, overlayfs | **modules** | **built in** |
+| module tree in the image | ~29 MB, must match the kernel exactly | none |
+| initramfs | ~22 MB | **~1.2 MB** |
+| bare metal | works | **no** — no NVME/ATA/SCSI/USB/NIC drivers |
+| pinned | no | yes, by kernel digest |
+
+Kata's kernel is built for VM guests and already includes everything a k0s node
+needs — verified against its config fragments, then by booting: a node reaches
+Ready with **zero modules loaded**. That removes the module tree, the 50
+hard-coded module names, and the kernel/module version-skew hazard in one step.
+
+```bash
+make kernel-kata
+MODULES_DIR=/nonexistent make disk        # build without a module tree
+MODULES_DIR=/nonexistent ./image/mkinitramfs.sh
+```
+
+Use the Alpine kernel for bare metal, where Kata's simply cannot see the disks
+or NICs.
+
+Note the fetch streams the 999 MB `kata-static` release archive and aborts as
+soon as `tar` has the 18 MB kernel — about 170 MB transferred — then caches by
+digest so it is fetched once. (Apple's `container` uses the same artifact and
+pins url + digest + inner path; this pins the digest of the kernel itself, which
+is what actually gets used.)
 
 ## The data volume
 
