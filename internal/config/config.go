@@ -32,6 +32,11 @@ type Config struct {
 	// everything that changes, so a machine can be disposable without being
 	// diskless. "auto" finds a volume labelled DataLabel or formats the single
 	// blank device; a path or LABEL=/UUID= names one explicitly; empty disables it.
+	//
+	// DataDir is /var rather than /var/lib/k0s because kubelet writes to
+	// /var/lib/kubelet as well, and containerd to /var/lib/containerd — one volume
+	// at /var covers all of them. With a read-only root, which is the default, a
+	// data volume is not optional: there is nowhere else for any of that to go.
 	Data       string
 	DataLabel  string
 	DataFSType string
@@ -60,7 +65,7 @@ func Parse(cmdline string) Config {
 		RootFSType: "ext4",
 		DataLabel:  "k0smos-data",
 		DataFSType: "ext4",
-		DataDir:    "/var/lib/k0s",
+		DataDir:    "/var",
 		Path:       defaultPath,
 	}
 	for _, tok := range strings.Fields(cmdline) {

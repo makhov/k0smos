@@ -74,6 +74,14 @@ var Default = []string{
 	// Pod networking: veth pairs into a bridge, with netfilter on the bridge.
 	"veth", "bridge", "br_netfilter", "ipip",
 
+	// The root carried inside the initramfs is a file, so it needs a loop device,
+	// and the filesystem on it needs its driver. Both are built into the default
+	// (Kata) kernel and so are skipped there; they are here for a modular kernel
+	// that has them. Alpine's linux-virt has neither — CONFIG_BLK_DEV_LOOP=m but
+	// CONFIG_EROFS_FS unset entirely — so an embedded root cannot work there at
+	// all, and such a kernel must boot from a disk instead.
+	"loop", "erofs",
+
 	// Graceful power-off on real hardware and hypervisors: the ACPI button
 	// driver raises the press and evdev exposes it as /dev/input/eventN. Absent
 	// these, a power button or `virsh shutdown` does nothing at all.

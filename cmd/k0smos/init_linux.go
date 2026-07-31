@@ -69,6 +69,12 @@ const (
 
 	// modulesRoot holds one directory per kernel version.
 	modulesRoot = "/lib/modules"
+	// k0sDataDir is where k0s keeps its own state, including the PKI. Fixed by k0s,
+	// and deliberately not cfg.DataDir: that names where k0smos mounts the data
+	// volume, which is /var — a volume mounted there covers /var/lib/k0s and
+	// /var/lib/kubelet both. Conflating the two put the kubeconfig at /var/pki.
+	k0sDataDir = "/var/lib/k0s"
+
 	// metadataMount is where a cloud-init drive is mounted while being read.
 	metadataMount = "/run/k0smos/metadata"
 	// msReadOnly is MS_RDONLY: a metadata drive is never written to.
@@ -154,7 +160,7 @@ func answerRequest(cfg config.Config, request string) ([]byte, error) {
 	if request != control.RequestKubeconfig {
 		return nil, fmt.Errorf("unknown request %q", request)
 	}
-	path := filepath.Join(cfg.DataDir, "pki", "admin.conf")
+	path := filepath.Join(k0sDataDir, "pki", "admin.conf")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("%s is not readable yet; the cluster may still be starting: %w", path, err)
@@ -398,15 +404,22 @@ func watchPowerButton(ctx context.Context) <-chan struct{} {
 // UUID=/LABEL= rather than a path because on real hardware disks enumerate as
 // /dev/sda or /dev/nvme0n1 and can reorder between boots.
 func rootDevice(s *sys.Sys, cfg config.Config) (string, error) {
-	if _, err := os.Stat(embeddedRoot); err == nil {
-		// Read-only: the image is erofs, and attaching it writable makes the
-		// mount fail with EACCES.
-		dev, err := s.LoopAttach(embeddedRoot, true)
-		if err != nil {
-			return "", fmt.Errorf("attach %s to a loop device: %w", embeddedRoot, err)
+	// An explicit k0smos.root= wins over an embedded image. Both can be present —
+	// the initramfs carries a root by default, and a boot may still be told to
+	// switch onto a disk — and silently ignoring what the cmdline named would be
+	// the wrong way round.
+	if cfg.Root == "" {
+		if _, err := os.Stat(embeddedRoot); err == nil {
+			// Read-only: the image is erofs, and attaching it writable makes the
+			// mount fail with EACCES.
+			dev, err := s.LoopAttach(embeddedRoot, true)
+			if err != nil {
+				return "", fmt.Errorf("attach %s to a loop device: %w", embeddedRoot, err)
+			}
+			logf("attached %s at %s", embeddedRoot, dev)
+			return dev, nil
 		}
-		logf("attached %s at %s", embeddedRoot, dev)
-		return dev, nil
+		return "", fmt.Errorf("no root: neither k0smos.root= nor %s", embeddedRoot)
 	}
 
 	// Retried because virtio_blk and friends probe asynchronously, so the device

@@ -66,7 +66,29 @@ fi
 # the initramfs gigabytes and hold it all in RAM.
 #
 # The path must match embeddedRoot in cmd/k0smos/init_linux.go.
-if [ -n "${EMBED_ROOT:-}" ]; then
+# Defaults to the erofs root if one has been built, since carrying it is the point.
+# EMBED_ROOT=none opts out, for a boot that switches onto a disk instead.
+embed=${EMBED_ROOT:-$repo/dist/k0smos.erofs}
+if [ "$embed" = none ]; then
+  embed=""
+elif [ ! -f "$embed" ] && [ -z "${EMBED_ROOT:-}" ]; then
+  # Not built: fall back quietly rather than failing a plain `make initramfs`.
+  embed=""
+fi
+
+# Only if this kernel can mount it. Alpine's linux-virt leaves CONFIG_EROFS_FS unset
+# entirely — not a module away — while the default (Kata) kernel builds it in and has
+# no squashfs at all. Embedding a root the kernel cannot mount produces an initramfs
+# that fails at switch_root with nothing pointing at the cause, so the decision is
+# made here from the kernel being built for rather than left to the caller.
+kconfig=$repo/dist/kernel/$apkarch/config
+if [ -n "$embed" ] && [ -f "$kconfig" ] && ! grep -qE '^CONFIG_EROFS_FS=[ym]' "$kconfig"; then
+  echo "kernel at $apkarch has no erofs (CONFIG_EROFS_FS unset) — not embedding a root;" >&2
+  echo "  boot from a disk instead, with ROOTFS=ext4 and k0smos.root=LABEL=k0smos" >&2
+  embed=""
+fi
+if [ -n "$embed" ]; then
+  EMBED_ROOT=$embed
   [ -f "$EMBED_ROOT" ] || { echo "EMBED_ROOT=$EMBED_ROOT not found" >&2; exit 1; }
   cp "$EMBED_ROOT" "$root/k0smos-root.img"
   echo "embedded root filesystem from $EMBED_ROOT ($(du -m "$EMBED_ROOT" | cut -f1)M)"

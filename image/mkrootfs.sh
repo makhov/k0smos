@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # Assemble the real (switch_root) root filesystem: k0smos + k0s only.
 #
-# ROOTFS=ext4 (default) writes a sparse ext4 image with room for k0s to work in.
-# ROOTFS=erofs writes a read-only image instead, small enough to live inside the
-# initramfs — which removes the separate root artifact altogether. erofs rather
-# than squashfs because the default kernel (Kata's) builds in erofs and not
-# squashfs: verified against the kernel image, which carries erofs's superblock
+# ROOTFS=erofs (default) writes a read-only image small enough to live inside the
+# initramfs, which is what makes a node one artifact. Everything mutable then lives
+# on the data volume at /var, so that volume is required rather than optional.
+#
+# erofs rather than squashfs because the default kernel (Kata's) builds in erofs and
+# not squashfs: verified against the kernel image, which carries erofs's superblock
 # error paths and kthread names and no squashfs driver at all.
+#
+# ROOTFS=ext4 writes a sparse ext4 image with room for k0s to work in, for a node
+# that boots from a disk rather than carrying its root along — bare metal, once
+# there is an installer for it.
 #
 # This is the root kubelet needs. Booting still goes through the initramfs
 # (mkinitramfs.sh) because a stock kernel cannot see this disk until k0smos has
@@ -39,7 +44,7 @@ if [ -z "${K0SMOS_BIN:-}" ]; then
   export K0SMOS_BIN
 fi
 
-rootfs=${ROOTFS:-ext4}
+rootfs=${ROOTFS:-erofs}
 case "$rootfs" in
   ext4) mkfs_tool=mkfs.ext4; apk_build=e2fsprogs ;;
   erofs) mkfs_tool=mkfs.erofs; apk_build=erofs-utils ;;
