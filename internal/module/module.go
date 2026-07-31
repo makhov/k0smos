@@ -26,10 +26,13 @@ var Default = []string{
 	"virtio_net", "virtio_blk", "virtio_pci",
 	"ext4", "overlay",
 
-	// Cloud-init drives: Cluster API bootstrap data arrives as a NoCloud ISO
-	// (iso9660) or an OpenStack config-drive (usually vfat). nls_cp437 is what
-	// vfat needs to translate filenames.
-	"isofs", "vfat", "nls_cp437", "nls_utf8",
+	// Cloud-init drives carrying Cluster API bootstrap data. iso9660 only:
+	// KubeVirt builds both its NoCloud and its config-drive volumes with
+	// `xorrisofs -joliet -rock` (a single code path in pkg/cloud-init), so vfat
+	// and the NLS codepages it needs are dead weight here. An Ironic-style vfat
+	// config-drive would need them back — bare metal is unsupported for other
+	// reasons anyway.
+	"isofs",
 
 	// nftables. k0s selects iptables-nft mode, and without these kube-proxy
 	// dies with `iptables: Failed to initialize nft: Protocol not supported`,

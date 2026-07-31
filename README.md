@@ -139,8 +139,9 @@ names and the kernel/module version-skew hazard in one step.
 > vsock, so those filesystems were never needed there.
 >
 > Alpine's kernel remains the default and is what CI gates on. Making the
-> monolithic route usable means building from Kata's fragments plus
-> `CONFIG_ISO9660_FS`/`JOLIET` and `CONFIG_VFAT_FS`/`NLS_CP437`.
+> monolithic route usable is a one-filesystem delta: Kata's fragments plus
+> `CONFIG_ISO9660_FS` and `CONFIG_JOLIET`. vfat is not needed — KubeVirt builds
+> both its NoCloud and config-drive volumes with `xorrisofs -joliet -rock`.
 
 ```bash
 make kernel-kata

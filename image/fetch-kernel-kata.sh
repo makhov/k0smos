@@ -21,8 +21,10 @@
 #
 # It is therefore useful for boots that need no bootstrap drive, and as evidence
 # that the monolithic direction works (a node reaches Ready with zero modules).
-# Making it usable for CAPI means building a kernel from Kata's fragments plus
-# CONFIG_ISO9660_FS/JOLIET and CONFIG_VFAT_FS/NLS_CP437 -- a small delta on a
+# Making it usable for CAPI is a one-filesystem delta: Kata's fragments plus
+# CONFIG_ISO9660_FS and CONFIG_JOLIET. vfat is not needed, because KubeVirt
+# builds both its NoCloud and config-drive volumes with `xorrisofs -joliet
+# -rock` (one code path in pkg/cloud-init). That is a small change on a
 # maintained base, and the trigger for owning a kernel build.
 #
 # Apple's `container` uses the same artifact, pinning url + digest + inner path.
