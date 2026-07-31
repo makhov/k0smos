@@ -24,14 +24,24 @@ Needs Go 1.25+, QEMU, and Docker (the ext4 image and the kernel unpack both need
 Linux tools). Works on Apple Silicon via HVF and on linux/KVM.
 
 ```bash
+make ctl       # build k0smosctl, which does the routine work
 make boot      # k0smos as PID1 running single-node k0s
 make smoke     # ~15s: the init alone, no k0s. Use this while iterating.
+```
+
+`make boot` holds the terminal with the guest's console, so use a second one to
+reach the cluster:
+
+```bash
+./dist/k0smosctl kubeconfig -o kubeconfig
+KUBECONFIG=kubeconfig kubectl get nodes
 ```
 
 Stop the guest **cleanly** — killing QEMU corrupts the image:
 
 ```bash
-./image/poweroff.sh          # or CMD=reboot ./image/poweroff.sh
+./dist/k0smosctl shutdown    # or: k0smosctl reboot
+./image/poweroff.sh          # the same, without building the CLI
 ```
 
 A good boot looks like:
@@ -292,6 +302,9 @@ recognising and two failures that look like something else.
   grow-on-first-boot, so the image must be written to a disk it fits.
 - **amd64 is unverified past the initramfs.** Verified on arm64 under QEMU/HVF.
 - **CI has never executed** — the repository has no remote.
+- **`k0smosctl` talks to local guests only.** `kubeconfig`, `shutdown` and `reboot`
+  use a virtio-serial control port that the QEMU runner attaches and a KubeVirt VMI
+  does not. `gen` is host-side and works anywhere.
 - **No upgrade path.** Rebuilding the disk image wipes the cluster. No A/B images.
 - **Everything runs as root.** `/etc/passwd` exists only so k0s stops warning.
 
