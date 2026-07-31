@@ -4,76 +4,78 @@ package e2e
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
 
-// buildEmbeddedRoot builds a read-only erofs root and an initramfs carrying it,
-// returning the initramfs path.
+// requireEROFSKernel skips unless the kernel in dist can mount erofs.
 //
-// Built here rather than by the Makefile because this is the only test that wants
-// it: the artifacts the rest of the suite shares are the ext4 ones, and a 165MB
-// initramfs is not something to make every other boot pay for.
-func buildEmbeddedRoot(t *testing.T) string {
+// Not every kernel can, and it is not a module away: Alpine's linux-virt leaves
+// CONFIG_EROFS_FS unset entirely, while the default (Kata) kernel builds it in and
+// has no squashfs at all. So a read-only root carried in the initramfs works on one
+// and cannot work on the other, and this test has to say which it is looking at
+// rather than time out waiting for a loop device that will never appear.
+func requireEROFSKernel(t *testing.T) {
 	t.Helper()
-	root := repoRoot(t)
-	goarch := runtime.GOARCH
-	k0s := filepath.Join(root, "dist", "k0s-"+goarch)
-	if _, err := os.Stat(k0s); err != nil {
-		t.Skipf("missing %s — run 'make k0s' first", k0s)
-	}
+	arch := map[string]string{"arm64": "aarch64", "amd64": "x86_64"}[runtime.GOARCH]
+	kdir := filepath.Join(repoRoot(t), "dist", "kernel", arch)
 
-	out := filepath.Join(root, "dist", "e2e")
-	if err := os.MkdirAll(out, 0755); err != nil {
-		t.Fatal(err)
+	// Alpine ships its config beside the kernel; grep it when present.
+	if cfg, err := os.ReadFile(filepath.Join(kdir, "config")); err == nil {
+		if !strings.Contains(string(cfg), "CONFIG_EROFS_FS=y") &&
+			!strings.Contains(string(cfg), "CONFIG_EROFS_FS=m") {
+			t.Skip("this kernel has no erofs (CONFIG_EROFS_FS unset) — an embedded root cannot work on it")
+		}
+		return
 	}
-	erofs := filepath.Join(out, "erofs-root.img")
-	initramfs := filepath.Join(out, "erofs-initramfs.gz")
-	t.Cleanup(func() { os.Remove(erofs); os.Remove(initramfs) })
+	// No config file means the monolithic kernel, which builds erofs in. Verified
+	// against the image: it carries erofs's superblock error paths and kthreads.
+}
 
-	mkroot := exec.Command("./image/mkrootfs.sh", erofs)
-	mkroot.Dir = root
-	mkroot.Env = append(os.Environ(), "ROOTFS=erofs", "K0S_BIN=dist/k0s-"+goarch)
-	if o, err := mkroot.CombinedOutput(); err != nil {
-		t.Fatalf("build erofs root: %v\n%s", err, o)
+// requireEmbeddedRoot skips unless the initramfs carries a root image.
+//
+// The artifacts are built by `make artifacts`, not by this test: building a 178MB
+// erofs image and a 165MB initramfs per run cost more than the boot it was testing.
+func requireEmbeddedRoot(t *testing.T) {
+	t.Helper()
+	requireArtifacts(t, "dist/k0smos-initramfs.gz")
+	info, err := os.Stat(filepath.Join(repoRoot(t), "dist", "k0smos-initramfs.gz"))
+	if err != nil {
+		t.Skip("no initramfs")
 	}
-
-	mkinit := exec.Command("./image/mkinitramfs.sh", "dist/e2e/erofs-initramfs.gz")
-	mkinit.Dir = root
-	mkinit.Env = append(os.Environ(), "EMBED_ROOT="+erofs)
-	if o, err := mkinit.CombinedOutput(); err != nil {
-		t.Fatalf("build initramfs with embedded root: %v\n%s", err, o)
+	// An initramfs with a root inside is two orders of magnitude larger than one
+	// without: ~165MB against ~1.3MB. Cheaper and more honest than unpacking it.
+	const withRoot = 50 << 20
+	if info.Size() < withRoot {
+		t.Skipf("initramfs is %dMB, so it carries no root — build it with `make artifacts`",
+			info.Size()>>20)
 	}
-	return initramfs
 }
 
 // The whole point of the erofs root: the kernel and the OS travel as one artifact,
 // with no root disk attached at all. k0smos loop-attaches the image out of the
 // initramfs, detects that it is erofs, and switch_roots onto it read-only.
 //
-// This is the configuration a KubeVirt VM would use with only a kernelBoot
-// container — no containerDisk — so it needs to keep working before the ext4 root
-// can be retired.
+// This is the configuration a KubeVirt VM uses with only a kernelBoot container and
+// no containerDisk, which is the default this repository now builds.
 func TestEmbeddedEROFSRootBoots(t *testing.T) {
-	initramfs := buildEmbeddedRoot(t)
+	requireEROFSKernel(t)
+	requireEmbeddedRoot(t)
 	data := blankVolume(t, "erofs-data")
 
-	// No Disk: the root comes out of the initramfs. Data at /var rather than
-	// /var/lib/k0s because kubelet writes to /var/lib/kubelet, which a read-only
-	// root cannot serve.
+	// No Disk and no Root: with neither named, k0smos uses the image it carries.
+	// Data at /var rather than /var/lib/k0s because kubelet writes /var/lib/kubelet,
+	// which a read-only root cannot serve.
 	v := boot(t, bootOpts{
-		Initramfs: initramfs,
-		Data:      data,
-		Net:       "k0smos.ip=dhcp k0smos.dns=1.1.1.1 k0smos.data=auto k0smos.datadir=/var",
-		Exec:      execNoop,
+		Data: data,
+		Net:  "k0smos.ip=dhcp k0smos.dns=1.1.1.1 k0smos.data=auto",
+		Exec: execNoop,
 	})
 
 	v.waitFor(`attached /k0smos-root\.img at /dev/loop\d+`, bootTimeout)
-	// The filesystem is detected, not taken from the cmdline: nothing passed
-	// k0smos.rootfstype here.
+	// Detected, not taken from the cmdline: nothing passed k0smos.rootfstype here.
 	v.waitFor(`holds erofs`, bootTimeout)
 	v.waitFor(`mounted /dev/loop\d+ at /newroot read-only, switching root`, bootTimeout)
 	v.waitFor(`starting as PID1 \(switched-root=true\)`, bootTimeout)
@@ -82,9 +84,9 @@ func TestEmbeddedEROFSRootBoots(t *testing.T) {
 	v.waitFor(`formatted and mounted data volume /dev/vd\w+ at /var`, bootTimeout)
 	v.waitFor(`supervising`, bootTimeout)
 
-	// Nothing may have tried and failed to write to the root. Every one of these
-	// was a real failure while this was being built, so a regression would show up
-	// here rather than as a node that mysteriously never goes Ready.
+	// Nothing may have tried and failed to write to the root. Every one of these was
+	// a real failure while this was being built, so a regression shows up here rather
+	// than as a node that mysteriously never goes Ready.
 	if text := v.consoleText(); strings.Contains(text, "read-only file system") {
 		t.Errorf("something failed writing to the read-only root:\n%s",
 			extractLines(text, "read-only file system", 5))

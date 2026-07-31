@@ -3,17 +3,17 @@
 #
 #   <repo>/k0smos:<tag>   /boot/vmlinuz         kernelBoot.container.kernelPath
 #                         /boot/initramfs.gz    kernelBoot.container.initrdPath
-#                         /disk/k0smos.img      the containerDisk convention
 #
-# One image, referenced twice in a VM spec — once as the kernelBoot container and
-# once as the containerDisk volume. KubeVirt supports exactly this and documents it.
+# Two files, and they are the whole node: the initramfs carries the read-only erofs
+# root, so there is no containerDisk. A VM needs only the kernelBoot container plus
+# somewhere writable for /var — an emptyDisk or a PVC.
 #
-# It was two images, and that was a mistake worth not repeating: the kernel and the
-# root are not independently versionable. The root carries the module tree, so
-# pairing k0smos:v1's kernel with a v2 root gives the version skew k0smos warns
-# about at boot ("kernel and modules are out of step, so NO modules were loaded").
-# One image makes that pairing unrepresentable, and the node is pulled once instead
-# of twice.
+# It was two images once, one of them a 3.3GB-apparent containerDisk, and the kernel
+# and root could be paired at mismatched versions — the skew k0smos reports at boot
+# as "kernel and modules are out of step". Neither is expressible now.
+#
+# IMG= still adds a root disk at /disk/k0smos.img, for booting from a disk rather
+# than carrying the root along.
 #
 # FROM scratch: it carries data, not a runtime. Set PUSH=1 to push.
 set -euo pipefail
@@ -32,10 +32,15 @@ esac
 
 kernel=${KERNEL:-dist/kernel/$apkarch/vmlinuz}
 initramfs=${INITRAMFS:-dist/k0smos-initramfs.gz}
-img=${IMG:-dist/k0smos.img}
-for f in "$kernel" "$initramfs" "$img"; do
-  [ -f "$f" ] || { echo "missing $f — run 'make kernel initramfs disk'" >&2; exit 1; }
+# Optional: only for an image that boots from a disk.
+img=${IMG:-}
+for f in "$kernel" "$initramfs"; do
+  [ -f "$f" ] || { echo "missing $f — run 'make artifacts'" >&2; exit 1; }
 done
+if [ -n "$img" ] && [ ! -f "$img" ]; then
+  echo "missing $img — run 'make disk'" >&2
+  exit 1
+fi
 
 ctx=$(mktemp -d)
 trap 'rm -rf "$ctx"' EXIT
@@ -43,16 +48,18 @@ trap 'rm -rf "$ctx"' EXIT
 mkdir -p "$ctx/node/boot"
 cp "$kernel" "$ctx/node/boot/vmlinuz"
 cp "$initramfs" "$ctx/node/boot/initramfs.gz"
-mkdir -p "$ctx/node/disk"
-cp "$img" "$ctx/node/disk/k0smos.img"
 cat > "$ctx/node/Dockerfile" <<'EOF'
 FROM scratch
 # /boot paths are what the VM spec references as kernelPath and initrdPath.
 ADD boot/vmlinuz /boot/vmlinuz
 ADD boot/initramfs.gz /boot/initramfs.gz
-# /disk is where KubeVirt looks for a containerDisk's image.
-ADD disk/k0smos.img /disk/k0smos.img
 EOF
+if [ -n "$img" ]; then
+  mkdir -p "$ctx/node/disk"
+  cp "$img" "$ctx/node/disk/k0smos.img"
+  # /disk is where KubeVirt looks for a containerDisk's image.
+  printf 'ADD disk/k0smos.img /disk/k0smos.img\n' >> "$ctx/node/Dockerfile"
+fi
 
 ref="$registry/k0smos:$tag"
 echo "building $ref ($platform)"
@@ -65,7 +72,7 @@ fi
 
 cat <<EOF
 
-Built $ref. Reference it twice in a KubeVirt VM — once to boot, once as the disk:
+Built $ref. It is the whole node — the initramfs carries the root:
 
   firmware:
     kernelBoot:
@@ -73,11 +80,12 @@ Built $ref. Reference it twice in a KubeVirt VM — once to boot, once as the di
         image: $ref
         kernelPath: /boot/vmlinuz
         initrdPath: /boot/initramfs.gz
-      # kernelArgs go here; see image/kubevirt-vm.yaml
+      kernelArgs: "console=ttyS0 k0smos.ip=dhcp k0smos.data=auto"
   volumes:
-    - name: root
-      containerDisk:
-        image: $ref
+    # Writable /var. Required: the root is read-only.
+    - name: data
+      emptyDisk:
+        capacity: 20Gi
 
 See image/kubevirt-vm.yaml for a complete example.
 EOF

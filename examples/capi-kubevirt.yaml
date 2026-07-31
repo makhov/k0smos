@@ -117,21 +117,18 @@ spec:
                 memory:
                   guest: 8Gi
                 firmware:
-                  # Direct kernel boot. The initramfs is k0smos: it loads the
-                  # storage modules, then switch_roots onto the containerDisk
-                  # below, because a stock kernel cannot mount that ext4 root
-                  # unaided.
+                  # Direct kernel boot, and the whole node: the initramfs is k0smos
+                  # plus a read-only erofs root, which it loop-attaches and
+                  # switch_roots onto. kubelet needs a block-backed root, which that
+                  # satisfies, and there is no separate disk to keep in step.
                   kernelBoot:
-                    kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.data=auto"
+                    kernelArgs: "console=ttyS0 k0smos.ip=dhcp k0smos.data=auto"
                     container:
                       image: REGISTRY/k0smos:TAG
                       kernelPath: /boot/vmlinuz
                       initrdPath: /boot/initramfs.gz
                 devices:
                   disks:
-                    - name: root
-                      disk:
-                        bus: virtio
                     - name: data
                       disk:
                         bus: virtio
@@ -142,11 +139,12 @@ spec:
                 - name: default
                   pod: {}
               volumes:
-                - name: root
-                  containerDisk:
-                    image: REGISTRY/k0smos:TAG
-                # The mutable data volume, mounted by k0smos at /var/lib/k0s:
-                # etcd, containerd, kubelet and pulled images. emptyDisk shares
+                # No root volume: the initramfs carries the read-only erofs root, so
+                # the kernelBoot container above is the whole node. What is required
+                # instead is somewhere writable for /var.
+                # The mutable data volume, mounted by k0smos at /var: k0s's state,
+                # kubelet's, containerd's images. Required with a read-only root,
+                # not an optimisation. emptyDisk shares
                 # the VMI's lifecycle, so it survives a guest reboot and is
                 # discarded when the machine is replaced — which is what makes
                 # these nodes disposable without being diskless.
@@ -225,16 +223,13 @@ spec:
                   guest: 4Gi
                 firmware:
                   kernelBoot:
-                    kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.data=auto"
+                    kernelArgs: "console=ttyS0 k0smos.ip=dhcp k0smos.data=auto"
                     container:
                       image: REGISTRY/k0smos:TAG
                       kernelPath: /boot/vmlinuz
                       initrdPath: /boot/initramfs.gz
                 devices:
                   disks:
-                    - name: root
-                      disk:
-                        bus: virtio
                     - name: data
                       disk:
                         bus: virtio
@@ -245,11 +240,12 @@ spec:
                 - name: default
                   pod: {}
               volumes:
-                - name: root
-                  containerDisk:
-                    image: REGISTRY/k0smos:TAG
-                # The mutable data volume, mounted by k0smos at /var/lib/k0s:
-                # etcd, containerd, kubelet and pulled images. emptyDisk shares
+                # No root volume: the initramfs carries the read-only erofs root, so
+                # the kernelBoot container above is the whole node. What is required
+                # instead is somewhere writable for /var.
+                # The mutable data volume, mounted by k0smos at /var: k0s's state,
+                # kubelet's, containerd's images. Required with a read-only root,
+                # not an optimisation. emptyDisk shares
                 # the VMI's lifecycle, so it survives a guest reboot and is
                 # discarded when the machine is replaced — which is what makes
                 # these nodes disposable without being diskless.

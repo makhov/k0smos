@@ -20,7 +20,7 @@ func TestDataVolumeFormatsOnceThenReuses(t *testing.T) {
 	// First boot: the volume is blank, so k0smos formats and mounts it.
 	first := cloneDisk(t, filepath.Join(repoRoot(t), "dist/k0smos.img"))
 	v1 := boot(t, bootOpts{Disk: first, Data: data, Net: "k0smos.ip=dhcp k0smos.data=auto", Exec: execNoop})
-	v1.waitFor(`formatted and mounted data volume /dev/vd\w+ at /var/lib/k0s`, bootTimeout)
+	v1.waitFor(`formatted and mounted data volume /dev/vd\w+ at /var`, bootTimeout)
 	v1.waitFor(`supervising`, bootTimeout)
 	v1.stop()
 

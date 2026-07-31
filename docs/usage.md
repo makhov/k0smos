@@ -127,10 +127,14 @@ k0smos re-execs `/sbin/k0smos` from the ext4 root, so everything after the pivot
 runs the binary in `dist/k0smos.img`, not the one in the initramfs:
 
 ```bash
-make artifacts        # or the two scripts directly:
-./image/mkinitramfs.sh
-K0S_BIN=dist/k0s-$(go env GOARCH) ./image/mkrootfs.sh dist/k0smos.img
+make artifacts
 ```
+
+Use the target rather than the scripts. With the root carried inside the initramfs
+there are two copies of the k0smos binary — `/init`, and `/sbin/k0smos` inside the
+root image, which is the one `switch_root` re-execs — and `mkinitramfs.sh` on its own
+refreshes only the first. `make artifacts` rebuilds the root and then embeds it, in
+that order.
 
 Rebuilding only the initramfs tests stale code that boots perfectly. It cost real
 debugging time to notice.

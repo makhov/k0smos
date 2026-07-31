@@ -283,6 +283,7 @@ k0smos never formats a device that already has a filesystem.
 | `CIDATA` | run-qemu | cloud-init drive (ISO) to attach |
 | `DATA`, `DATA_SIZE` | run-qemu | data volume to attach; created blank at `DATA_SIZE` (default `4G`) if absent |
 | `NET_ARGS` | run-qemu | replaces the default `k0smos.ip=…` cmdline fragment |
+| `API_PORT` | run-qemu | host port forwarded to the guest's 6443; unset forwards nothing |
 | `ROOT` | run-qemu | overrides `k0smos.root=` (default `LABEL=k0smos`) |
 | `EXEC` | run-qemu | sets `k0smos.exec=` |
 | `K0S_BIN` | mkrootfs, mkinitramfs | k0s binary to bake in |

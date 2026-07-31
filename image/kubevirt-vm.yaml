@@ -20,20 +20,18 @@ spec:
         firmware:
           kernelBoot:
             # Direct kernel boot: the initramfs is k0smos, which loads the
-            # storage modules and then switch_roots onto the disk below. A stock
-            # kernel cannot mount that ext4 root by itself.
-            kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.data=auto"
-            # The same image as the containerDisk below: it holds the kernel,
-            # the initramfs and the root, so the three cannot be mismatched.
+            # storage modules, loop-attaches the read-only erofs root it carries,
+            # and switch_roots onto it. No k0smos.root= is needed: there is no
+            # device to name, and the filesystem is detected from its superblock.
+            kernelArgs: "console=ttyS0 k0smos.ip=dhcp k0smos.data=auto"
+            # This image is the whole node — kernel and initramfs, nothing else to
+            # keep in step.
             container:
               image: ghcr.io/amakhov/k0smos:dev
               kernelPath: /boot/vmlinuz
               initrdPath: /boot/initramfs.gz
         devices:
           disks:
-            - name: root
-              disk:
-                bus: virtio
             - name: bootstrap
               disk:
                 bus: virtio
@@ -47,10 +45,12 @@ spec:
         - name: default
           pod: {}
       volumes:
-        - name: root
-          containerDisk:
-            image: ghcr.io/amakhov/k0smos:dev
-        # Mutable data at /var/lib/k0s. emptyDisk shares the VMI lifecycle:
+        # No root volume: the initramfs carries the read-only erofs root, so the
+        # kernelBoot container above is the whole node.
+        #
+        # Mutable /var. Required, not optional — with a read-only root there is
+        # nowhere else for k0s's state, kubelet's or containerd's images to go.
+        # emptyDisk shares the VMI lifecycle:
         # kept across a guest reboot, gone when the VM is deleted.
         - name: data
           emptyDisk:

@@ -127,14 +127,29 @@ guest down cleanly rather than killing it.`,
 			// every clone taken afterwards would inherit that guest's cluster
 			// identity — same CA, same node UID — because k0s writes its PKI on
 			// first boot. Both of those went wrong before this existed.
+			// The root normally travels inside the initramfs, so a guest gets no
+			// root disk at all — only a data volume. --from-disk switches onto a
+			// clone of --image instead, which is what an ext4 root wants.
 			noImage, _ := cmd.Flags().GetBool("no-image")
+			fromDisk, _ := cmd.Flags().GetBool("from-disk")
 			switch {
 			case noImage:
 				disk = ""
 			case disk != "":
 				// An explicit --disk is used as given, in place.
-			default:
+			case fromDisk:
 				disk, err = guestDisk(name, image)
+				if err != nil {
+					return err
+				}
+			default:
+				disk = ""
+			}
+
+			// A read-only root leaves nowhere for /var, so every guest gets a data
+			// volume unless it was told otherwise.
+			if data == "" && !noImage {
+				data, err = guestData(name, dataSize)
 				if err != nil {
 					return err
 				}
@@ -189,12 +204,14 @@ guest down cleanly rather than killing it.`,
 	f.StringVar(&kernel, "kernel", "", "kernel image (default dist/kernel/<arch>/vmlinuz)")
 	f.StringVar(&initramfs, "initramfs", filepath.Join("dist", "k0smos-initramfs.gz"), "initramfs image")
 	f.StringVar(&image, "image", filepath.Join("dist", "k0smos.img"),
-		"root image to clone this guest's disk from, once")
+		"root image to clone this guest's disk from, once — only with --from-disk")
 	f.StringVar(&disk, "disk", "",
 		`use this disk directly and write to it in place, instead of cloning --image; "" stays on the initramfs with --no-image`)
-	f.Bool("no-image", false, "boot the initramfs only, with no root disk (kubelet cannot run there)")
+	f.Bool("from-disk", false,
+		"switch onto a root disk cloned from --image, instead of the root carried in the initramfs")
+	f.Bool("no-image", false, "boot the initramfs only, with no root at all (kubelet cannot run there)")
 	f.StringVar(&cidata, "cidata", "", "cloud-init drive to attach, as written by 'k0smosctl gen'")
-	f.StringVar(&data, "data", "", "data volume for /var/lib/k0s; created blank if absent")
+	f.StringVar(&data, "data", "", "data volume for /var (default: the guest's own, created blank)")
 	f.StringVar(&dataSize, "data-size", "4G", "size for a newly created --data volume")
 	f.StringVar(&name, "name", defaultGuestName, "name for this guest; its console and control socket are kept under it")
 	f.StringVar(&socket, "socket", "", "control socket path (default: under the guest's state directory)")
@@ -287,6 +304,10 @@ func qemuArgs(g guest, s bootSpec) ([]string, error) {
 			return nil, err
 		}
 		args = append(args, "-drive", "file="+s.data+",if=virtio,format=raw")
+		// Attaching the volume is not enough; k0smos has to be told to use it.
+		// "auto" rather than a device path because a cloud-init drive shifts the
+		// names, and k0smos refuses to guess when more than one device is blank.
+		append_ += " k0smos.data=auto"
 	}
 	if s.disk != "" {
 		if _, err := os.Stat(s.disk); err != nil {

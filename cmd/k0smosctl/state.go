@@ -170,8 +170,29 @@ func listGuests() ([]guestMeta, error) {
 	return out, nil
 }
 
-// rootFile is a guest's own copy of the root image.
-const rootFile = "root.img"
+// A guest's own images. The root is a copy only when booting from a disk; with the
+// root carried in the initramfs, which is the default, only the data volume exists.
+const (
+	rootFile = "root.img"
+	dataFile = "data.img"
+)
+
+// guestData returns the guest's data volume, creating it sparse if absent.
+//
+// Every guest needs one: the root is read-only, so /var — k0s's state, kubelet's,
+// containerd's images — has nowhere else to live. It is per-guest and persists
+// across reboots of that guest, and `k0smosctl rm` discards it.
+func guestData(name, size string) (string, error) {
+	dir, err := guestDir(name)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, dataFile)
+	if err := ensureDataVolume(path, size); err != nil {
+		return "", err
+	}
+	return path, nil
+}
 
 // guestDisk returns the guest's root disk, cloning it from the image on first use.
 //
