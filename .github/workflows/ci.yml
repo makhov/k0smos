@@ -64,14 +64,28 @@ jobs:
               print(f, len(docs), 'documents')
           "
 
-  # Boots k0smos under QEMU on both kernels.
+  # Boots k0smos under QEMU on both kernels. They cover different configurations
+  # rather than the same one twice, and neither is redundant.
   #
-  # Both, because they exercise different halves: Alpine's is modular, so it is
-  # the only leg that runs internal/module (dep, softdep and alias resolution);
-  # Kata's is monolithic with no module tree at all, and is the leg that would
-  # catch a re-introduced kernel filesystem dependency — cloud-init drives are
-  # read in userspace precisely so it works. The legs run in parallel, so
-  # covering both costs no wall-clock.
+  # kata — the default, and the only leg that boots what this repository actually
+  #   ships: a read-only erofs root carried inside the initramfs, loop-attached,
+  #   with the data volume at /var. Monolithic, so it also proves no kernel
+  #   filesystem support is needed to read a cloud-init drive.
+  #
+  # alpine — a modular kernel booting from an ext4 disk. The only leg that runs
+  #   internal/module for real: modules.dep, softdep and alias resolution, ~63
+  #   modules, plus modalias autoloading, all of which are a no-op on a monolithic
+  #   kernel. It is also the only leg exercising switch_root from a named disk
+  #   (LABEL=), which is what bare metal will need. This is the leg that catches
+  #   "works only where everything is built in" — loop being a module was found
+  #   exactly here.
+  #
+  #   It does not run the erofs tests, and cannot: Alpine builds no erofs in either
+  #   linux-virt or linux-lts (CONFIG_EROFS_FS unset, CONFIG_SQUASHFS=m). The
+  #   initramfs build detects that and embeds no root, and the erofs test skips with
+  #   a reason. A read-only root on an Alpine kernel would have to be squashfs.
+  #
+  # The legs run in parallel, so covering both costs no wall-clock.
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 45
