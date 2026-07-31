@@ -139,9 +139,16 @@ names and the kernel/module version-skew hazard in one step.
 > vsock, so those filesystems were never needed there.
 >
 > Alpine's kernel remains the default and is what CI gates on. Making the
-> monolithic route usable is a one-filesystem delta: Kata's fragments plus
-> `CONFIG_ISO9660_FS` and `CONFIG_JOLIET`. vfat is not needed — KubeVirt builds
-> both its NoCloud and config-drive volumes with `xorrisofs -joliet -rock`.
+> monolithic route usable is a **one-symbol** delta: Kata's fragments plus
+> `CONFIG_ISO9660_FS`.
+>
+> Not `CONFIG_JOLIET`, and not vfat. Rock Ridge is compiled into
+> `CONFIG_ISO9660_FS` unconditionally and is what preserves names like
+> `user-data`; Joliet is optional and additionally needs `CONFIG_NLS`. KubeVirt
+> writes every cloud-init volume, NoCloud and config-drive alike, with
+> `xorrisofs -joliet -rock`, and Linux prefers Rock Ridge when both are present.
+> `TestCloudInitNeedsOnlyRockRidge` boots a Rock-Ridge-only drive to keep that
+> claim honest.
 
 ```bash
 make kernel-kata
