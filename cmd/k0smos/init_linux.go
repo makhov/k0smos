@@ -60,6 +60,8 @@ const (
 	rootProbeAttempts = 30
 	rootProbeInterval = 500 * time.Millisecond
 
+	// modulesRoot holds one directory per kernel version.
+	modulesRoot = "/lib/modules"
 	// metadataMount is where a cloud-init drive is mounted while being read.
 	metadataMount = "/run/k0smos/metadata"
 	// msReadOnly is MS_RDONLY: a metadata drive is never written to.
@@ -367,10 +369,30 @@ func loadModules(s *sys.Sys, cfg config.Config) error {
 		return fmt.Errorf("uname: %w", err)
 	}
 	base := "/lib/modules/" + release
-	if err := module.Load(s, base, names); err != nil {
+	res, err := module.Load(s, base, names)
+	if err != nil {
 		return err
 	}
-	logf("kernel modules loaded from %s", base)
+	if res.TreeFound {
+		logf("loaded %d kernel module(s) from %s", res.Loaded, base)
+		return nil
+	}
+
+	// No modules.dep under the running kernel's directory. That is expected on a
+	// monolithic kernel and a serious problem otherwise, and the two used to be
+	// indistinguishable — k0smos reported success either way, so a kernel/module
+	// version skew showed up later as a baffling "cannot find root".
+	if entries, derr := os.ReadDir(modulesRoot); derr == nil && len(entries) > 0 {
+		have := make([]string, 0, len(entries))
+		for _, e := range entries {
+			have = append(have, e.Name())
+		}
+		logf("warn: %s has module trees %v but none for the running kernel %q — "+
+			"kernel and modules are out of step, so NO modules were loaded",
+			modulesRoot, have, release)
+		return nil
+	}
+	logf("no module tree; assuming a monolithic kernel")
 	return nil
 }
 

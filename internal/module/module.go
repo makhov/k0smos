@@ -69,6 +69,15 @@ var Default = []string{
 	"button", "evdev",
 }
 
+// Result reports what Load did, so the caller can tell a monolithic kernel from
+// a module tree that does not match the running one.
+type Result struct {
+	// TreeFound is true when base held a modules.dep.
+	TreeFound bool
+	// Loaded counts the modules actually handed to init_module.
+	Loaded int
+}
+
 // Load loads each named module along with its dependencies, dependencies first.
 //
 // base is a kernel module directory such as /lib/modules/6.6.142-0-virt. If it
@@ -79,13 +88,16 @@ var Default = []string{
 // A module that fails to load does not stop the others — an init that gives up
 // on the first bad module silently costs you storage and networking. Every
 // failure is collected and returned together.
-func Load(l Loader, base string, names []string) error {
+func Load(l Loader, base string, names []string) (Result, error) {
 	deps, err := readDeps(l, base)
 	if err != nil {
-		return err
+		return Result{}, err
 	}
 	if deps == nil {
-		return nil // monolithic kernel
+		// No modules.dep. Either the kernel is monolithic or the tree belongs to
+		// a different kernel; the caller decides which, since only it can see
+		// whether /lib/modules exists at all.
+		return Result{}, nil
 	}
 	r := &resolver{
 		l:     l,
@@ -98,7 +110,7 @@ func Load(l Loader, base string, names []string) error {
 	for _, name := range names {
 		r.load(name)
 	}
-	return errors.Join(r.errs...)
+	return Result{TreeFound: true, Loaded: r.loaded}, errors.Join(r.errs...)
 }
 
 type modInfo struct {
@@ -107,13 +119,14 @@ type modInfo struct {
 }
 
 type resolver struct {
-	l     Loader
-	base  string
-	deps  map[string]modInfo
-	soft  map[string][]string // module -> modules to load before it
-	alias map[string]string   // alias -> module
-	done  map[string]bool
-	errs  []error
+	l      Loader
+	base   string
+	deps   map[string]modInfo
+	soft   map[string][]string // module -> modules to load before it
+	alias  map[string]string   // alias -> module
+	done   map[string]bool
+	loaded int
+	errs   []error
 }
 
 // load loads name after everything it depends on, hard and soft.
@@ -148,7 +161,9 @@ func (r *resolver) load(name string) {
 	// EEXIST means the kernel already has it — the desired end state either way.
 	if err := r.l.InitModule(image, ""); err != nil && !errors.Is(err, syscall.EEXIST) {
 		r.errs = append(r.errs, fmt.Errorf("load module %s: %w", key, err))
+		return
 	}
+	r.loaded++
 }
 
 // resolve maps a name to a loadable module, following modules.alias when the

@@ -77,7 +77,7 @@ func TestLoadHonoursSoftDependencies(t *testing.T) {
 		depFile + "kernel/crypto/crc32c_generic.ko.gz:\n")
 	f.files["/lib/modules/test/kernel/crypto/crc32c_generic.ko.gz"] = gz(t, "crc32c_generic")
 
-	if err := Load(f, "/lib/modules/test", []string{"ext4"}); err != nil {
+	if _, err := Load(f, "/lib/modules/test", []string{"ext4"}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"crc32c_generic", "ext4"}
@@ -91,7 +91,7 @@ func TestLoadHonoursSoftDependencies(t *testing.T) {
 func TestLoadContinuesAfterAFailureAndReportsAll(t *testing.T) {
 	f := newFake(t)
 	f.errs = map[string]error{"virtio_blk": syscall.ENOENT}
-	err := Load(f, "/lib/modules/test", []string{"virtio_blk", "ext4"})
+	_, err := Load(f, "/lib/modules/test", []string{"virtio_blk", "ext4"})
 	if err == nil {
 		t.Fatal("Load = nil, want the failure reported")
 	}
@@ -102,7 +102,7 @@ func TestLoadContinuesAfterAFailureAndReportsAll(t *testing.T) {
 
 func TestLoadResolvesDependenciesFirst(t *testing.T) {
 	f := newFake(t)
-	if err := Load(f, "/lib/modules/test", []string{"virtio_net"}); err != nil {
+	if _, err := Load(f, "/lib/modules/test", []string{"virtio_net"}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"failover", "net_failover", "virtio_net"}
@@ -114,7 +114,7 @@ func TestLoadResolvesDependenciesFirst(t *testing.T) {
 func TestLoadDecompressesAndLoadsEachModuleOnce(t *testing.T) {
 	f := newFake(t)
 	// virtio_net and net_failover share the failover dependency.
-	if err := Load(f, "/lib/modules/test", []string{"virtio_net", "net_failover", "ext4"}); err != nil {
+	if _, err := Load(f, "/lib/modules/test", []string{"virtio_net", "net_failover", "ext4"}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"failover", "net_failover", "virtio_net", "ext4"}
@@ -127,7 +127,7 @@ func TestLoadDecompressesAndLoadsEachModuleOnce(t *testing.T) {
 // an error — the functionality is already present.
 func TestLoadSkipsUnknownModules(t *testing.T) {
 	f := newFake(t)
-	if err := Load(f, "/lib/modules/test", []string{"builtin_thing", "ext4"}); err != nil {
+	if _, err := Load(f, "/lib/modules/test", []string{"builtin_thing", "ext4"}); err != nil {
 		t.Fatalf("Load = %v, want nil for a module absent from modules.dep", err)
 	}
 	if !slices.Equal(f.loaded, []string{"ext4"}) {
@@ -139,7 +139,7 @@ func TestLoadSkipsUnknownModules(t *testing.T) {
 func TestLoadTreatsAlreadyLoadedAsSuccess(t *testing.T) {
 	f := newFake(t)
 	f.errs = map[string]error{"ext4": syscall.EEXIST}
-	if err := Load(f, "/lib/modules/test", []string{"ext4"}); err != nil {
+	if _, err := Load(f, "/lib/modules/test", []string{"ext4"}); err != nil {
 		t.Fatalf("Load = %v, want nil when module is already loaded", err)
 	}
 }
@@ -147,7 +147,7 @@ func TestLoadTreatsAlreadyLoadedAsSuccess(t *testing.T) {
 func TestLoadReportsRealFailures(t *testing.T) {
 	f := newFake(t)
 	f.errs = map[string]error{"ext4": syscall.EINVAL}
-	err := Load(f, "/lib/modules/test", []string{"ext4"})
+	_, err := Load(f, "/lib/modules/test", []string{"ext4"})
 	if err == nil {
 		t.Fatal("Load = nil, want error when init_module fails")
 	}
@@ -159,7 +159,7 @@ func TestLoadReportsRealFailures(t *testing.T) {
 // No modules directory at all means a monolithic kernel: nothing to do.
 func TestLoadWithNoModulesDepIsNoOp(t *testing.T) {
 	f := &fakeLoader{files: map[string][]byte{}}
-	if err := Load(f, "/lib/modules/none", []string{"virtio_net"}); err != nil {
+	if _, err := Load(f, "/lib/modules/none", []string{"virtio_net"}); err != nil {
 		t.Fatalf("Load = %v, want nil when modules.dep is absent", err)
 	}
 	if len(f.loaded) != 0 {
@@ -173,7 +173,7 @@ func TestLoadHandlesUncompressedModules(t *testing.T) {
 		"/lib/modules/test/modules.dep":            []byte("kernel/fs/ext4/ext4.ko:\n"),
 		"/lib/modules/test/kernel/fs/ext4/ext4.ko": []byte("ext4-raw"),
 	}}
-	if err := Load(f, "/lib/modules/test", []string{"ext4"}); err != nil {
+	if _, err := Load(f, "/lib/modules/test", []string{"ext4"}); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(f.loaded, []string{"ext4-raw"}) {
