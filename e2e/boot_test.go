@@ -19,16 +19,22 @@ func TestInitOnlyBootCompletesSequence(t *testing.T) {
 	v.waitFor(`k0smos: starting as PID1`, bootTimeout)
 	for _, want := range []string{
 		`pseudo-filesystems mounted`,
-		`kernel modules loaded from /lib/modules/`,
+		// Either kernel is valid here: a modular one loads modules, a monolithic
+		// one (e.g. Kata's) has no tree at all. What must never appear is the
+		// version-skew warning.
+		`(loaded [0-9]+ kernel module\(s\) from /lib/modules/|no module tree; assuming a monolithic kernel)`,
 		`cgroup2 hierarchy ready`,
 		`loopback up`,
 		`supervising \[/init\]`,
 	} {
 		v.waitFor(want, bootTimeout)
 	}
-	// A module that fails to load is logged; none should here.
-	if strings.Contains(v.k0smosLines(), "warn: modules:") {
-		t.Errorf("module loading reported a problem:\n%s", v.k0smosLines())
+	// A module that fails to load is logged; none should here. Nor should the
+	// kernel and its module tree ever be out of step.
+	for _, bad := range []string{"warn: modules:", "out of step"} {
+		if strings.Contains(v.k0smosLines(), bad) {
+			t.Errorf("module handling reported %q:\n%s", bad, v.k0smosLines())
+		}
 	}
 }
 
