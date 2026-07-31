@@ -46,12 +46,18 @@ case "$rootfs" in
   *) echo "unsupported ROOTFS=$rootfs (ext4 or erofs)" >&2; exit 1 ;;
 esac
 
-if ! command -v "$mkfs_tool" >/dev/null 2>&1; then
+# Both tools are needed, not just the mkfs: apk populates the userspace helpers
+# below. A host with mkfs.ext4 but no apk — any Ubuntu, so every CI runner — used
+# to build natively and then skip those helpers silently, producing an image with
+# no mount(8), no e2fsprogs and no CA bundle. That surfaced only at runtime, as
+# "mkfs.ext4: executable file not found in $PATH" while formatting a data volume,
+# and would equally have broken kubelet and every image pull.
+if ! command -v "$mkfs_tool" >/dev/null 2>&1 || ! command -v apk >/dev/null 2>&1; then
   command -v docker >/dev/null || {
-    echo "need either $mkfs_tool (Linux) or docker to build the root image" >&2
+    echo "need docker, or both $mkfs_tool and apk, to build the root image" >&2
     exit 1
   }
-  echo "no $mkfs_tool on this host — assembling inside $platform container"
+  echo "assembling inside $platform container (need $mkfs_tool and apk)"
   # Every knob has to be forwarded explicitly: the container stage re-runs this
   # script, and anything not listed here is silently lost on a macOS host.
   exec docker run --rm --platform "$platform" -v "$repo:/repo" -w /repo \
@@ -99,7 +105,13 @@ mkdir -p "$root/lib/modules"
 # Deliberately the narrow subpackages, not the "util-linux" meta package: that
 # one pulls in busybox and /bin/sh, and this image is specified to have no shell.
 apk_pkgs=${APK_PKGS:-mount umount ca-certificates-bundle e2fsprogs}
-if [ -n "$apk_pkgs" ] && command -v apk >/dev/null 2>&1; then
+if [ -n "$apk_pkgs" ] && ! command -v apk >/dev/null 2>&1; then
+  # Never skip these quietly: the image boots and then fails in ways that point
+  # nowhere near the build.
+  echo "apk not available but APK_PKGS is set — cannot install $apk_pkgs" >&2
+  exit 1
+fi
+if [ -n "$apk_pkgs" ]; then
   # --keys-dir and --repositories-file are required because --initdb creates an
   # empty root with no signing keys or repository list of its own.
   apk add -q --no-cache --root "$root" --initdb \
