@@ -1,0 +1,145 @@
+name: release
+
+# Publishes ready-to-use artifacts so nobody has to build anything to try k0smos.
+#
+# Tag-driven: `git tag v0.1.0 && git push origin v0.1.0`. Can also be run by hand
+# from the Actions tab against a branch, which produces the artifacts without
+# creating a release — useful for checking this workflow itself.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the release and upload assets
+  packages: write # push the OCI images to GHCR
+
+env:
+  # Pinned so a given tag always builds the same node. Bumping k0s is a commit,
+  # not a side effect of when the release happened to be cut.
+  K0S_VERSION: v1.36.3+k0s.0
+
+jobs:
+  # One job per architecture, on a native runner. Cross-building the ext4 root
+  # would mean emulating mkfs and apk under qemu-user; a native runner per arch
+  # is simpler and faster.
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+            goarch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: install zstd
+        run: sudo apt-get update && sudo apt-get install -y zstd
+
+      - name: build artifacts
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          make kernel        # Kata guest kernel, pinned by digest
+          make k0s
+          ./image/mkinitramfs.sh
+          K0S_BIN=dist/k0s-${{ matrix.goarch }} ./image/mkrootfs.sh dist/k0smos.img
+
+      # The root image is sparse — ~240MB allocated under a 3.3GB apparent size —
+      # so it must be compressed for transport, not uploaded raw. Measured: 157MB
+      # in about 4 seconds, and `zstd -d` restores the holes, so the decompressed
+      # file occupies its allocated size rather than 3.3GB.
+      - name: package
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          out=release
+          mkdir -p "$out"
+          cp "dist/kernel/${{ matrix.arch }}/vmlinuz" "$out/vmlinuz-${{ matrix.arch }}"
+          cp dist/k0smos-initramfs.gz "$out/k0smos-initramfs-${{ matrix.arch }}.gz"
+          # -T0 uses every core. Level 12 rather than 19: the bulk of the input is
+          # the sparse image's zero padding, which compresses to nothing at any
+          # level, so the extra minutes buy almost no size.
+          zstd -12 -T0 -o "$out/k0smos-${{ matrix.arch }}.img.zst" dist/k0smos.img
+          ( cd "$out" && sha256sum -- * > "SHA256SUMS-${{ matrix.arch }}.txt" )
+          ls -l "$out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: release/
+          if-no-files-found: error
+
+      # OCI images for KubeVirt: a kernelBoot image and a containerDisk. Tags are
+      # arch-suffixed because each runner pushes its own; there is no manifest
+      # list yet, so a VM spec must name the arch it wants.
+      - name: push OCI images
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          ARCH: ${{ matrix.arch }}
+          PUSH: "1"
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+          TAG: ${{ github.ref_name }}-${{ matrix.goarch }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
+            -u "${{ github.actor }}" --password-stdin
+          ./image/mkoci.sh
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release
+
+      - name: create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat > notes.md <<'EOF'
+          ## Artifacts
+
+          | File | What it is |
+          |---|---|
+          | `vmlinuz-<arch>` | Kata guest kernel, monolithic and pinned. VMs only — no bare-metal drivers |
+          | `k0smos-initramfs-<arch>.gz` | k0smos as `/init` |
+          | `k0smos-<arch>.img.zst` | ext4 root: k0smos + k0s, ~157MB. `zstd -d` before use — it restores the file's holes, so it occupies ~240MB not 3.3GB |
+
+          Also pushed to GHCR for KubeVirt, arch-suffixed:
+          `k0smos-boot:<tag>-<goarch>` (kernel at `/boot/vmlinuz`, initrd at
+          `/boot/initramfs.gz`) and `k0smos-disk:<tag>-<goarch>` (root at
+          `/disk/k0smos.img`).
+
+          ## Booting one
+
+          ```
+          zstd -d k0smos-x86_64.img.zst
+          qemu-system-x86_64 -m 4096 -smp 2 \
+            -kernel vmlinuz-x86_64 -initrd k0smos-initramfs-x86_64.gz \
+            -append "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.dns=1.1.1.1" \
+            -drive file=k0smos.img,if=virtio,format=raw -nographic
+          ```
+
+          Configuration is a cloud-init drive; see docs/usage.md.
+
+          Verify with `SHA256SUMS-<arch>.txt`.
+          EOF
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file notes.md \
+            release/*
