@@ -33,11 +33,11 @@ Everything after that is `k0smosctl`. The guest runs in the background — a k0s
 node has no shell, so there is nothing to sit in front of:
 
 ```bash
-./dist/k0smosctl boot                        # returns immediately
-./dist/k0smosctl logs -f                     # watch it come up
-./dist/k0smosctl kubeconfig -o kubeconfig
+k0smosctl boot                        # returns immediately
+k0smosctl logs -f                     # watch it come up
+k0smosctl kubeconfig -o kubeconfig
 KUBECONFIG=kubeconfig kubectl get nodes      # k0smos   Ready   v1.36.3+k0s
-./dist/k0smosctl shutdown                    # never kill QEMU: it corrupts the image
+k0smosctl shutdown                    # never kill QEMU: it corrupts the image
 ```
 
 A second node is one more command — `boot --name vm2 --api-port 7443` — because each
@@ -111,8 +111,8 @@ no Docker) is needed:
 
 ```bash
 make ctl
-./dist/k0smosctl gen --file k0s.yaml:/etc/k0s/k0s.yaml --hostname node-1 -o cidata.iso
-./dist/k0smosctl boot --cidata cidata.iso
+k0smosctl gen --file k0s.yaml:/etc/k0s/k0s.yaml --hostname node-1 -o cidata.iso
+k0smosctl boot --cidata cidata.iso
 ```
 
 `--user-data <file>` passes a cloud-config through whole instead. Either way it is
@@ -127,8 +127,8 @@ A node has no SSH and no shell. It answers a small set of requests on a
 virtio-serial control port instead:
 
 ```bash
-./dist/k0smosctl kubeconfig -o kubeconfig   # then KUBECONFIG=kubeconfig kubectl get nodes
-./dist/k0smosctl shutdown                   # or reboot — never kill QEMU
+k0smosctl kubeconfig -o kubeconfig   # then KUBECONFIG=kubeconfig kubectl get nodes
+k0smosctl shutdown                   # or reboot — never kill QEMU
 ```
 
 The kubeconfig comes off the node's filesystem, so it works whether or not k0s is
@@ -254,7 +254,7 @@ k0smos never formats a device that already has a filesystem.
 | `K0S_VERSION` | fetch-k0s | release tag; defaults to latest |
 | `FSLABEL`, `APK_PKGS` | mkrootfs | filesystem label (default `k0smos`), extra userspace packages |
 | `MODULES_DIR` | mkrootfs, mkinitramfs | module tree to bundle |
-| `PUSH`, `REGISTRY`, `TAG` | mkoci | push the OCI artifacts, and where to |
+| `PUSH`, `REGISTRY`, `TAG` | mkoci | push the OCI image, and where to |
 | `MARKER`, `TIMEOUT`, `LOG` | acceptance | readiness pattern, deadline, log path |
 | `K0SMOS_E2E_KEEP_CONSOLE` | e2e | `1` keeps guest consoles for passing tests too |
 
