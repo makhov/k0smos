@@ -142,6 +142,29 @@ if [ -n "${API_PORT:-}" ]; then
   )
 fi
 
+# A second NIC on a shared L2 segment, so guests on this host can reach each
+# other. User-mode networking cannot do that: every guest gets the same
+# 10.0.2.15 behind its own NAT and sees nothing but the host. A cluster needs
+# node-to-node traffic (etcd peers on 2380, the join API on 9443, kubelet on
+# 10250), hence this.
+#
+# CLUSTER_NET is the host:port of an Ethernet hub every guest connects to —
+# internal/nethub is one, and the e2e suite runs it in-process. QEMU's own
+# backends do not cover this: tap and vmnet want root, and its multicast backend
+# is silently broken on macOS, where QEMU binds the socket to the multicast group
+# address and BSD delivers nothing to it. That produced guests with an interface
+# that carried no traffic and no indication of why, which is the reason this is a
+# hub rather than a group.
+#
+# The hub must already be listening: connect mode fails at startup, it does not
+# retry. Give each guest its own CLUSTER_MAC — on a shared segment QEMU's stock
+# 52:54:00:12:34:56 would be the same address on every node.
+if [ -n "${CLUSTER_NET:-}" ]; then
+  dev="virtio-net-pci,netdev=n1"
+  [ -n "${CLUSTER_MAC:-}" ] && dev="$dev,mac=$CLUSTER_MAC"
+  netdev_args+=(-netdev "socket,id=n1,connect=$CLUSTER_NET" -device "$dev")
+fi
+
 display=(-nographic -serial mon:stdio)
 if [ "$serial" != "stdio" ]; then
   mkdir -p "$(dirname "$serial")"

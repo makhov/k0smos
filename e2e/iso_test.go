@@ -161,13 +161,20 @@ write_files:
 // requestNode performs a control-port request against a running guest, using the
 // same code path k0smosctl does.
 func requestNode(t *testing.T, v *vm, name string) ([]byte, error) {
+	return requestNodeWithin(t, v, name, 20*time.Second)
+}
+
+// requestNodeWithin is requestNode with an explicit deadline, for a request the
+// node answers slowly. Minting a join token runs `k0s token create`, which waits
+// on the API server and takes far longer than reading a file off the disk.
+func requestNodeWithin(t *testing.T, v *vm, name string, timeout time.Duration) ([]byte, error) {
 	t.Helper()
 	conn, err := net.DialTimeout("unix", v.control, 5*time.Second)
 	if err != nil {
 		t.Fatalf("dial control socket: %v", err)
 	}
 	defer conn.Close()
-	if err := conn.SetDeadline(time.Now().Add(20 * time.Second)); err != nil {
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
 		t.Fatal(err)
 	}
 	return control.Request(conn, name)

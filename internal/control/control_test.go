@@ -203,6 +203,60 @@ func TestRequestIsAnsweredOnThePort(t *testing.T) {
 	}
 }
 
+// A request with an argument reaches the responder whole, so it can read the
+// role off it. Everything on the line after the verb belongs to the request.
+func TestRequestWithArgumentReachesTheResponder(t *testing.T) {
+	p := &port{in: strings.NewReader(RequestToken + " controller\n")}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	got := make(chan string, 1)
+	cmds := WatchReopen(ctx, func() (io.ReadWriteCloser, error) { return p, nil },
+		time.Millisecond, func(req string) ([]byte, error) {
+			select {
+			case got <- req:
+			default:
+			}
+			return []byte("tok"), nil
+		})
+
+	select {
+	case cmd := <-cmds:
+		t.Fatalf("request surfaced as command %v; it must be answered in place", cmd)
+	case req := <-got:
+		if want := RequestToken + " controller"; req != want {
+			t.Errorf("responder got %q, want %q", req, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("responder was never called")
+	}
+}
+
+// An unknown verb must not be treated as a request: the port is host-facing, and
+// answering anything at all to arbitrary input widens what it does.
+func TestUnknownVerbIsNeitherRequestNorCommand(t *testing.T) {
+	p := &port{in: strings.NewReader("tokens controller\nkubeconfigx\npoweroff\n")}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmds := WatchReopen(ctx, func() (io.ReadWriteCloser, error) { return p, nil },
+		time.Millisecond, func(req string) ([]byte, error) {
+			t.Errorf("responder called for %q", req)
+			return nil, nil
+		})
+
+	// The poweroff behind them still arrives, so the stray lines were skipped
+	// rather than having stopped the reader.
+	select {
+	case cmd := <-cmds:
+		if cmd != PowerOff {
+			t.Errorf("got %v, want PowerOff", cmd)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("poweroff never arrived")
+	}
+}
+
 // Round-trip through the code the host actually uses, so the two ends cannot
 // drift apart in framing.
 func TestRequestRoundTrip(t *testing.T) {

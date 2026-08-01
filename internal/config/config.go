@@ -11,12 +11,15 @@ type Config struct {
 	// default set"; empty (via k0smos.modules=none) disables module loading.
 	Modules []string
 
-	// Iface, IP, Gateway and DNS statically configure the primary NIC. IP
-	// empty means leave networking alone (loopback only). The kernel's own ip=
-	// autoconfiguration cannot be used because it runs before /init, i.e.
-	// before the virtio_net module is loaded.
+	// Iface, IP, Gateway and DNS configure networking. IP empty means leave
+	// networking alone (loopback only). The kernel's own ip= autoconfiguration
+	// cannot be used because it runs before /init, i.e. before the virtio_net
+	// module is loaded.
+	//
+	// IP is either one address for the interface named by Iface ("dhcp" or a
+	// CIDR) or a per-interface list; see NICs. Gateway applies to Iface only.
 	Iface   string
-	IP      string // CIDR, e.g. 10.0.2.15/24
+	IP      string // "dhcp", a CIDR like 10.0.2.15/24, or a per-interface list
 	Gateway string
 	DNS     string
 
@@ -47,6 +50,59 @@ type Config struct {
 	// iptables binaries k0s stages into /var/lib/k0s/bin, and kubelet reports
 	// "No iptables support on this system".
 	Path string
+}
+
+// NIC is one interface's address configuration.
+type NIC struct {
+	Name string
+	// Addr is "dhcp" or a CIDR.
+	Addr string
+	// Gateway is the default route to install via this NIC, if any. At most one
+	// NIC carries one: a machine has a single default route.
+	Gateway string
+}
+
+// DHCP reports whether this NIC is configured by DHCP.
+func (n NIC) DHCP() bool { return n.Addr == "dhcp" }
+
+// NICs expands IP into per-interface configuration.
+//
+// A bare value ("dhcp" or a CIDR) configures the interface named by Iface, which
+// is the single-homed case and how every k0smos.ip= written so far reads. A
+// comma-separated list of name:addr pairs configures several:
+//
+//	k0smos.ip=eth0:dhcp,eth1:10.10.0.11/24
+//
+// More than one NIC matters as soon as a node has a management network separate
+// from the one the cluster talks over — which is the normal shape on real
+// hardware, and the only way several QEMU guests on one host can reach each
+// other, since user-mode networking isolates them.
+//
+// Gateway attaches to Iface, because there is one default route. An extra NIC on
+// a segment with no router therefore needs no gateway, which is the usual case.
+func (c Config) NICs() []NIC {
+	if c.IP == "" {
+		return nil
+	}
+	if !strings.Contains(c.IP, ":") || strings.Contains(c.IP, "::") {
+		// Bare address. The "::" check keeps an IPv6 CIDR from being mistaken for
+		// a name:addr pair; IPv6 is not configured today, but silently reading
+		// such a value as an interface name would be worse than ignoring it.
+		return []NIC{{Name: c.Iface, Addr: c.IP, Gateway: c.Gateway}}
+	}
+	var out []NIC
+	for _, spec := range strings.Split(c.IP, ",") {
+		name, addr, ok := strings.Cut(spec, ":")
+		if !ok || name == "" || addr == "" {
+			continue // malformed; a bad entry must not take the others down
+		}
+		nic := NIC{Name: name, Addr: addr}
+		if name == c.Iface {
+			nic.Gateway = c.Gateway
+		}
+		out = append(out, nic)
+	}
+	return out
 }
 
 // defaultExec is the workload k0smos exists to run.

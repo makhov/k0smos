@@ -90,6 +90,69 @@ func TestParseDefaultsIfaceAndNoStaticIP(t *testing.T) {
 	}
 }
 
+func TestNICsBareAddressConfiguresTheNamedInterface(t *testing.T) {
+	for _, addr := range []string{"dhcp", "10.0.2.15/24"} {
+		c := Parse("k0smos.iface=enp0s1 k0smos.gw=10.0.2.2 k0smos.ip=" + addr)
+		want := []NIC{{Name: "enp0s1", Addr: addr, Gateway: "10.0.2.2"}}
+		if got := c.NICs(); !slices.Equal(got, want) {
+			t.Errorf("NICs() for ip=%s = %+v, want %+v", addr, got, want)
+		}
+	}
+}
+
+func TestNICsNoAddressLeavesNetworkingAlone(t *testing.T) {
+	if got := Parse("root=/dev/vda").NICs(); got != nil {
+		t.Errorf("NICs() = %+v, want nil", got)
+	}
+}
+
+// The shape a multi-homed node uses: a management NIC on DHCP and a cluster NIC
+// with a static address on a segment that has no router.
+func TestNICsPerInterfaceList(t *testing.T) {
+	c := Parse("k0smos.ip=eth0:dhcp,eth1:10.10.0.11/24 k0smos.gw=10.0.2.2")
+	want := []NIC{
+		{Name: "eth0", Addr: "dhcp", Gateway: "10.0.2.2"},
+		{Name: "eth1", Addr: "10.10.0.11/24"},
+	}
+	if got := c.NICs(); !slices.Equal(got, want) {
+		t.Errorf("NICs() = %+v, want %+v", got, want)
+	}
+}
+
+// One default route, so the gateway follows k0smos.iface rather than being
+// applied to every static NIC — which would install conflicting routes.
+func TestNICsGatewayFollowsTheNamedInterface(t *testing.T) {
+	c := Parse("k0smos.iface=eth1 k0smos.gw=10.10.0.1 k0smos.ip=eth0:10.0.2.15/24,eth1:10.10.0.11/24")
+	got := c.NICs()
+	if len(got) != 2 {
+		t.Fatalf("NICs() = %+v, want 2", got)
+	}
+	if got[0].Gateway != "" {
+		t.Errorf("eth0 gateway = %q, want none", got[0].Gateway)
+	}
+	if got[1].Gateway != "10.10.0.1" {
+		t.Errorf("eth1 gateway = %q, want 10.10.0.1", got[1].Gateway)
+	}
+}
+
+func TestNICsSkipsMalformedEntriesWithoutLosingTheRest(t *testing.T) {
+	c := Parse("k0smos.ip=eth0:dhcp,garbage,:10.0.0.1/24,eth1:10.10.0.11/24")
+	want := []NIC{{Name: "eth0", Addr: "dhcp"}, {Name: "eth1", Addr: "10.10.0.11/24"}}
+	if got := c.NICs(); !slices.Equal(got, want) {
+		t.Errorf("NICs() = %+v, want %+v", got, want)
+	}
+}
+
+// An IPv6 CIDR is full of colons and must not be read as interface:address.
+// Nothing configures IPv6 yet; this only keeps it from being misparsed.
+func TestNICsDoesNotMistakeIPv6ForAnInterfaceName(t *testing.T) {
+	c := Parse("k0smos.ip=fd00::5/64")
+	want := []NIC{{Name: "eth0", Addr: "fd00::5/64"}}
+	if got := c.NICs(); !slices.Equal(got, want) {
+		t.Errorf("NICs() = %+v, want %+v", got, want)
+	}
+}
+
 func TestParseModulesDefaultsToNilMeaningBuiltInSet(t *testing.T) {
 	if c := Parse("root=/dev/vda"); c.Modules != nil {
 		t.Errorf("modules = %v, want nil (use default set)", c.Modules)
