@@ -249,12 +249,12 @@ func TestCloudInitNeedsOnlyRockRidge(t *testing.T) {
 	disk := cloneDisk(t, filepath.Join(repoRoot(t), "dist/k0smos.img"))
 
 	// -r only: no -J, so the drive carries no Joliet records at all.
-	iso := makeCidataOpts(t, `#cloud-config
+	iso := makeCidataOpts(t, "", `#cloud-config
 write_files:
   - path: /etc/k0s/rock-ridge-only
     content: |
       read without Joliet
-`, "instance-id: i-rr\nlocal-hostname: rr-node\n", "-r")
+`, "instance-id: i-rr\nlocal-hostname: rr-node\n", []string{"-r"})
 
 	v := boot(t, bootOpts{Disk: disk, Cidata: iso, Exec: execNoop})
 	v.waitFor(`reading /dev/vd\w+ \(iso9660, LABEL=cidata\) directly, no mount`, bootTimeout)

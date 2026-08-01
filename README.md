@@ -128,6 +128,7 @@ virtio-serial control port instead:
 
 ```bash
 k0smosctl kubeconfig -o kubeconfig   # then KUBECONFIG=kubeconfig kubectl get nodes
+k0smosctl token --role controller    # a join token, so another machine can join
 k0smosctl shutdown                   # or reboot — never kill QEMU
 ```
 
@@ -136,9 +137,15 @@ still running, and says so plainly when the cluster has not written its PKI yet.
 The API server address is rewritten to `127.0.0.1`, which is where `run-qemu.sh`
 forwards 6443.
 
-Whoever can write to that port obtains cluster-admin. That is not a new exposure —
-the same channel stops the machine — but do not expose the port anywhere the disk
-is not equally exposed.
+A join token is signed with the cluster CA, so only a machine already in the
+cluster can produce one — the node runs `k0s token create` and sends the result
+back. That is what lets a machine with no shell be joined to; see
+[docs/usage.md](docs/usage.md#more-than-one-node) for the whole flow.
+
+Whoever can write to that port obtains cluster-admin, and a controller token
+confers control-plane membership. That is not a new exposure — the same channel
+stops the machine — but do not expose the port anywhere the disk is not equally
+exposed.
 
 From `user-data`:
 
@@ -170,10 +177,10 @@ All optional; k0smos boots with defaults if none are given.
 | `k0smos.datalabel=` | `k0smos-data` | Label applied when formatting, and searched for by `auto` |
 | `k0smos.datafstype=` | `ext4` | Filesystem created and mounted |
 | `k0smos.datadir=` | `/var/lib/k0s` | Where it is mounted |
-| `k0smos.ip=` | *(none)* | `dhcp`, or a static CIDR like `10.0.0.20/24`. Unset leaves loopback only |
-| `k0smos.gw=` | *(none)* | Default gateway (static addressing only) |
+| `k0smos.ip=` | *(none)* | `dhcp`, a static CIDR like `10.0.0.20/24`, or a per-interface list (below). Unset leaves loopback only |
+| `k0smos.gw=` | *(none)* | Default gateway. Applies to `k0smos.iface` only — a machine has one default route |
 | `k0smos.dns=` | *(none)* | Resolver for `/etc/resolv.conf`. **Overrides the DHCP lease** |
-| `k0smos.iface=` | `eth0` | Interface to configure |
+| `k0smos.iface=` | `eth0` | Interface a bare `k0smos.ip=` configures, and the one `k0smos.gw=` attaches to |
 | `k0smos.hostname=` | `k0smos` | Hostname, also sent as the DHCP hostname |
 | `k0smos.exec=` | `/usr/local/bin/k0s,controller,--single` | Supervised child, comma-separated (a cmdline value cannot contain spaces) |
 | `k0smos.modules=` | *(built-in set)* | Comma-separated module list, or `none` to disable module loading entirely |
@@ -183,6 +190,25 @@ All optional; k0smos boots with defaults if none are given.
 `/var/lib/k0s/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin`.
 `/var/lib/k0s/bin` matters: k0s stages containerd, runc, kubelet and iptables
 there at runtime.
+
+### More than one interface
+
+`k0smos.ip=` also takes a list of `interface:address` pairs, for a machine whose
+management network is not the one the cluster talks over:
+
+```
+k0smos.ip=eth0:dhcp,eth1:10.10.0.11/24 k0smos.gw=10.0.2.2
+```
+
+Each entry is `dhcp` or a CIDR, applied in order. The gateway attaches to
+`k0smos.iface` (`eth0` by default), so a second NIC on a segment with no router
+needs nothing further. Tell kubelet which address is the node's — otherwise it
+picks the one behind the default route, and every node in the cluster claims the
+same one:
+
+```
+k0smos.exec=/usr/local/bin/k0s,controller,--enable-worker,--kubelet-extra-args=--node-ip=10.10.0.11
+```
 
 The built-in module set covers virtio, ext4, overlayfs, the netfilter and nft
 pieces kube-proxy needs, ipsets, veth/bridge and the ACPI power button. Beyond it,
@@ -294,6 +320,7 @@ k0smos never formats a device that already has a filesystem.
 | `DATA`, `DATA_SIZE` | run-qemu | data volume to attach; created blank at `DATA_SIZE` (default `4G`) if absent |
 | `NET_ARGS` | run-qemu | replaces the default `k0smos.ip=…` cmdline fragment |
 | `API_PORT` | run-qemu | host port forwarded to the guest's 6443; unset forwards nothing |
+| `CLUSTER_NET`, `CLUSTER_MAC` | run-qemu | second NIC on a shared Ethernet segment: `host:port` of a hub (`internal/nethub`) and this guest's address on it. How several guests on one host reach each other |
 | `ROOT` | run-qemu | overrides `k0smos.root=` (default `LABEL=k0smos`) |
 | `EXEC` | run-qemu | sets `k0smos.exec=` |
 | `K0S_BIN` | mkrootfs, mkinitramfs | k0s binary to bake in |
@@ -316,6 +343,12 @@ The e2e suite asserts on console output and, after a clean shutdown, on the
 guest's filesystem via `debugfs` — file contents, modes, symlinks, and that
 `e2fsck` finds nothing to repair. Consoles from failures land in
 `dist/e2e/<test>.console.log`.
+
+`e2e-full` includes a three-node cluster: three `k0s controller --enable-worker`
+guests on a shared Ethernet segment, joined with a token minted by the first, and
+checked by querying the API for three Ready nodes. Fetch the k0s airgap bundle
+first with `./image/fetch-airgap.sh` — without it every node pulls its images over
+QEMU's user-mode network and the run takes tens of minutes instead of a few.
 
 ## Debugging
 
