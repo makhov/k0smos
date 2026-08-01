@@ -231,10 +231,10 @@ it and it fails on rate limits more often than on real breakage.
 not exist and the repository has one release — so the cost is close to zero, but
 it is only zero if it happens now.
 
-**The dev container is untested.** Docker's image store on the development
-machine is damaged, so `Dockerfile.serve-dev` cannot be built or run locally.
-CI builds it, following k0smotron's `dev-container` job, which is where it will
-first be exercised.
+**The dev container needs to be exercised, not just built.** An image that
+builds but cannot serve looks healthy in CI. Implementation verifies it by
+serving the site from the container and fetching a page, and CI builds it on
+every docs PR following k0smotron's `dev-container` job.
 
 **Generated flag tables need regenerating.** A `k0smosctl` reference built from
 `--help` goes stale when a flag changes. Accepted for now: the alternative is
