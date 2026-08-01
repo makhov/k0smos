@@ -120,3 +120,12 @@ accept: disk
 
 clean-dist:
 	rm -rf dist
+
+# Documentation. The real targets live in docs/Makefile, matching how k0s and
+# k0smotron lay this out; these delegate so the root stays the entry point.
+.PHONY: docs docs-serve
+docs:
+	$(MAKE) -C docs docs
+
+docs-serve:
+	$(MAKE) -C docs serve
