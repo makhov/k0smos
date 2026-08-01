@@ -156,7 +156,7 @@ repo_url: https://github.com/makhov/k0smos
 edit_uri: ""
 
 nav:
-  - Overview: README.md
+  - Overview: index.md
   - Usage: usage.md
   - Architecture: architecture.md
   - Deployment: deployment.md
@@ -208,7 +208,26 @@ extra:
   generator: false
 ```
 
-`README.md` is the nav's Overview only until Task 10 introduces `index.md`. It is here so the site builds now.
+Create `docs/index.md` as a one-line stub now — Task 10 writes the real page:
+
+```markdown
+# k0smos
+
+Placeholder. Replaced in Task 10.
+```
+
+It cannot be `README.md`. MkDocs only serves files under `docs_dir`, and
+k0smos's README is at the repository root; k0s and k0smotron nav theirs because
+theirs live at `docs/README.md`. The spec already calls for a separate Overview
+file, so `index.md` is what the nav points at from the start.
+
+Two link classes under `docs/` also point outside `docs_dir` and fail `--strict`:
+`../README.md#...` in `usage.md` and `deployment.md`, and
+`../examples/capi-kubevirt.yaml` in `deployment.md`. The example file does exist;
+being outside the site is the problem, not being missing. Repoint all of them at
+absolute `https://github.com/makhov/k0smos/blob/main/...` URLs, which `--strict`
+does not follow. Later tasks repoint the README ones at real site pages as those
+pages appear.
 
 - [ ] **Step 3: Write `docs/Makefile`**
 
@@ -1135,7 +1154,7 @@ Keep the prose. The diagram is a summary, not a replacement — the prose says w
 
 - [ ] **Step 4: Update the nav**
 
-Replace `- Overview: README.md` with `- Overview: index.md`. The README is no longer part of the site.
+`- Overview: index.md` is already the nav entry as of Task 1; this task replaces the stub's contents. No nav change is needed.
 
 ```bash
 git rm docs/architecture.md
