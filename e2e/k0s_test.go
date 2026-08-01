@@ -44,7 +44,14 @@ runcmd:
   - /usr/local/bin/k0s start
 `, "instance-id: i-ready\nlocal-hostname: e2e-ready\n")
 
-	v := boot(t, bootOpts{Disk: disk, Cidata: iso, Mem: "8192", CPUs: "4"})
+	// A data volume carrying k0s's airgap bundle, so containerd imports the images
+	// instead of pulling them over slirp — the difference between a couple of
+	// minutes and up to thirteen.
+	v := boot(t, bootOpts{
+		Disk: disk, Cidata: iso, Data: seededVolume(t, 4096),
+		Net: "k0smos.ip=dhcp k0smos.dns=1.1.1.1 k0smos.data=auto",
+		Mem: "8192", CPUs: "4",
+	})
 
 	// --force and --env are install-only; k0s rejects them on the foreground
 	// command, so the translation must have stripped them.
