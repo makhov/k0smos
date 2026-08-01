@@ -164,11 +164,21 @@ jobs:
           sudo apt-get install -y qemu-system-x86 qemu-utils xorriso e2fsprogs
           ls -l /dev/kvm || echo "::warning::no /dev/kvm — boots will be slow"
 
-      - name: cache k0s binary
+      # Both are cached on the same key: the airgap bundle is ~350MB and pinned to
+      # the same k0s release as the binary, so they go stale together.
+      - name: cache k0s binary and airgap bundle
         uses: actions/cache@v4
         with:
           path: dist/k0s-*
           key: k0s-${{ runner.arch }}-${{ env.K0S_VERSION }}
+
+      # Without this every node pulls its images over QEMU's user-mode network,
+      # observed between 5 and 13 minutes per node. With it they are imported from
+      # the volume and nothing is pulled at all. The three-node test skips outright
+      # when the bundle is absent, because three nodes pulling is not worth waiting
+      # for.
+      - name: fetch the k0s airgap bundle
+        run: ./image/fetch-airgap.sh
 
       - name: build artifacts
         run: |
@@ -180,12 +190,14 @@ jobs:
       # -failfast for the same reason as the gate, and it matters more here: a k0s
       # boot waits up to 25 minutes, so two broken ones exceed the whole timeout.
       #
-      # 110m is not a budget, it is a backstop, and it is this large only because the
-      # k0s boots are slow for a fixable reason: the first one pulls every image over
-      # QEMU's user-mode network, observed between 5 and 13 minutes. Seeding the data
-      # volume with k0s's airgap bundle would remove the pulls and let both this and
-      # k0sTimeout drop by an order of magnitude.
+      # 110m is a backstop, not a budget. The three-node cluster test is the long
+      # pole now that the airgap bundle has removed the image pulls.
+      #
+      # 3GB a node: a 16GB runner cannot give three guests the 4GB they get locally,
+      # and the test skips itself rather than being OOM-killed halfway through.
       - name: e2e (with k0s)
+        env:
+          K0SMOS_E2E_CLUSTER_MEM: "3072"
         run: go test -tags e2e -failfast -v -timeout 110m ./e2e/
 
       - name: keep consoles from failures

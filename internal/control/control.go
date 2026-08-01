@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -54,6 +55,31 @@ func (c Command) String() string {
 // whoever holds it can already stop the machine and read its disk. It does mean
 // the port must not be exposed anywhere the disk is not equally exposed.
 const RequestKubeconfig = "kubeconfig"
+
+// RequestToken asks the node to mint a k0s join token, so another machine can
+// join the cluster this one started. It takes a role: "token controller" or
+// "token worker".
+//
+// A join token is how every k0s cluster grows, and it can only be produced by a
+// machine that already has the cluster's CA — so it has to come from inside the
+// guest. Cluster API providers do the same thing over SSH; here the control port
+// stands in for that, which is what lets a node with no shell still be joined
+// to.
+//
+// It carries the same exposure as RequestKubeconfig: a controller token confers
+// control-plane membership. The port is already the channel that can stop the
+// machine and read its disk, so this grants nothing new to whoever holds it.
+const RequestToken = "token"
+
+// requests are the data requests a node answers. The verb is the first field of
+// the line; anything after it is an argument.
+var requests = []string{RequestKubeconfig, RequestToken}
+
+// isRequest reports whether a line asks for data rather than a power command.
+func isRequest(line string) bool {
+	verb, _, _ := strings.Cut(line, " ")
+	return slices.Contains(requests, verb)
+}
 
 // Reply framing. A request's answer is a status line, and for a successful data
 // reply exactly that many bytes follow it. Length-prefixed rather than delimited
@@ -207,7 +233,7 @@ func watchEvents(ctx context.Context, r io.Reader) <-chan event {
 			line := strings.ToLower(strings.TrimSpace(scanner.Text()))
 			var ev event
 			switch {
-			case line == RequestKubeconfig:
+			case isRequest(line):
 				ev = event{request: line}
 			default:
 				cmd, ok := Parse(line)
