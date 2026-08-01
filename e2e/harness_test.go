@@ -390,7 +390,7 @@ func (v *vm) k0smosLines() string {
 // attach one. xorriso runs in a container so the test needs no host tooling.
 func makeCidata(t *testing.T, userData, metaData string) string {
 	// -J -r matches what KubeVirt produces (xorrisofs -joliet -rock).
-	return makeCidataOpts(t, "", userData, metaData, "-J", "-r")
+	return makeCidataOpts(t, "", userData, metaData, []string{"-J", "-r"})
 }
 
 // makeCidataNamed is makeCidata for a test that builds more than one drive, as a
@@ -430,7 +430,13 @@ func makeCidataNamed(t *testing.T, name, userData, metaData string) string {
 
 // makeCidataOpts builds the drive with explicit xorriso extension flags, so a
 // test can pin which ISO9660 extensions k0smos actually depends on.
-func makeCidataOpts(t *testing.T, name, userData, metaData string, isoFlags ...string) string {
+// isoFlags is a slice rather than variadic on purpose. It used to be variadic,
+// and when the name parameter was added in front of it every caller still
+// compiled: one of them passed its cloud-config as the name and its "-r" as the
+// meta-data, which built an ISO with no Rock Ridge under a filename containing
+// the whole YAML document. That reached CI as "exit status 127" from a shell
+// command the newlines had torn in half.
+func makeCidataOpts(t *testing.T, name, userData, metaData string, isoFlags []string) string {
 	t.Helper()
 	root := repoRoot(t)
 	src := t.TempDir()
@@ -451,7 +457,7 @@ func makeCidataOpts(t *testing.T, name, userData, metaData string, isoFlags ...s
 	}
 	stem := sanitise(t.Name())
 	if name != "" {
-		stem += "-" + name
+		stem += "-" + sanitise(name)
 	}
 	iso := filepath.Join(outDir, stem+".iso")
 	t.Cleanup(func() { os.Remove(iso) })
@@ -523,8 +529,14 @@ func makeConfigDrive(t *testing.T, userData, metaDataJSON string) string {
 	return iso
 }
 
+// sanitise turns a test or guest name into something usable as a filename.
+//
+// Newlines and tabs are in here because a name is not always what the caller
+// meant to pass: a wrong argument produced a path containing a whole YAML
+// document, and the shell command built around it failed with nothing to say.
+// A wrong name should give a strange filename, not a broken command.
 func sanitise(s string) string {
-	return strings.NewReplacer("/", "_", " ", "_").Replace(s)
+	return strings.NewReplacer("/", "_", " ", "_", "\n", "_", "\t", "_").Replace(s)
 }
 
 // --- disk assertions ---
