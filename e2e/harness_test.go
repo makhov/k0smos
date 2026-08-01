@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -96,8 +97,11 @@ func requirePristineDisk(t *testing.T, img string) {
 
 // vm is a running guest.
 type vm struct {
-	t       *testing.T
-	root    string
+	t    *testing.T
+	root string
+	// name distinguishes guests within one test, so several of them do not save
+	// their consoles over each other. Empty for a test that boots only one.
+	name    string
 	console string
 	control string
 	cmd     *exec.Cmd
@@ -124,6 +128,15 @@ type bootOpts struct {
 	Mem, CPUs string
 	// Extra is appended to the kernel cmdline via NET_ARGS.
 	Root string
+	// ClusterNet is the host:port of an Ethernet hub (internal/nethub), giving the
+	// guest a second NIC on a segment shared with every other guest connected to
+	// it. ClusterMAC must then be unique per guest.
+	ClusterNet, ClusterMAC string
+	// APIPort forwards a host port to the guest's 6443.
+	APIPort string
+	// Name distinguishes this guest from others in the same test. Needed only
+	// when a test boots more than one, so their consoles are told apart.
+	Name string
 }
 
 // execNoop is k0smos itself: as a child it fails the PID1 gate and exits 1, so
@@ -147,6 +160,7 @@ func boot(t *testing.T, o bootOpts) *vm {
 	v := &vm{
 		t:       t,
 		root:    root,
+		name:    o.Name,
 		console: filepath.Join(dir, "console.log"),
 		control: filepath.Join(sockDir, "c.sock"),
 		done:    make(chan struct{}),
@@ -159,13 +173,16 @@ func boot(t *testing.T, o bootOpts) *vm {
 		"CPUS="+orDefault(o.CPUs, "2"),
 	)
 	for k, val := range map[string]string{
-		"IMG":       o.Disk,
-		"INITRAMFS": o.Initramfs,
-		"CIDATA":    o.Cidata,
-		"EXEC":      o.Exec,
-		"DATA":      o.Data,
-		"NET_ARGS":  o.Net,
-		"ROOT":      o.Root,
+		"IMG":         o.Disk,
+		"INITRAMFS":   o.Initramfs,
+		"CIDATA":      o.Cidata,
+		"EXEC":        o.Exec,
+		"DATA":        o.Data,
+		"NET_ARGS":    o.Net,
+		"ROOT":        o.Root,
+		"CLUSTER_NET": o.ClusterNet,
+		"CLUSTER_MAC": o.ClusterMAC,
+		"API_PORT":    o.APIPort,
 	} {
 		if val != "" {
 			env = append(env, k+"="+val)
@@ -242,6 +259,36 @@ func (v *vm) waitFor(pattern string, timeout time.Duration) string {
 	}
 }
 
+// waitForAny blocks until any of the patterns matches, and returns the match, or
+// "" if none did before the timeout.
+//
+// Unlike waitFor it does not fail the test: it is for a step that can be reached
+// several ways, where the caller has a better failure to report than "none of
+// these strings appeared".
+func (v *vm) waitForAny(timeout time.Duration, patterns ...string) string {
+	v.t.Helper()
+	res := make([]*regexp.Regexp, len(patterns))
+	for i, p := range patterns {
+		res[i] = regexp.MustCompile(p)
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		text := v.consoleText()
+		for _, re := range res {
+			if m := re.FindString(text); m != "" {
+				return m
+			}
+		}
+		select {
+		case <-v.done:
+			return "" // the guest is gone; nothing more will be printed
+		default:
+		}
+		time.Sleep(pollEvery)
+	}
+	return ""
+}
+
 // lastConsoleLines returns the tail of the console, so a failure says what the
 // guest was doing rather than only what it failed to say.
 func lastConsoleLines(text string, n int) string {
@@ -300,7 +347,11 @@ func (v *vm) dumpConsole() {
 	// Keep the full console somewhere durable: t.TempDir() is deleted when the
 	// test ends, which threw away the evidence for the first failure this suite
 	// produced.
-	if saved := filepath.Join(v.root, "dist", "e2e", sanitise(v.t.Name())+".console.log"); true {
+	stem := sanitise(v.t.Name())
+	if v.name != "" {
+		stem += "-" + v.name
+	}
+	if saved := filepath.Join(v.root, "dist", "e2e", stem+".console.log"); true {
 		if err := os.MkdirAll(filepath.Dir(saved), 0755); err == nil {
 			if b, err := os.ReadFile(v.console); err == nil {
 				if os.WriteFile(saved, b, 0644) == nil {
@@ -336,12 +387,18 @@ func (v *vm) k0smosLines() string {
 // attach one. xorriso runs in a container so the test needs no host tooling.
 func makeCidata(t *testing.T, userData, metaData string) string {
 	// -J -r matches what KubeVirt produces (xorrisofs -joliet -rock).
-	return makeCidataOpts(t, userData, metaData, "-J", "-r")
+	return makeCidataOpts(t, "", userData, metaData, "-J", "-r")
+}
+
+// makeCidataNamed is makeCidata for a test that builds more than one drive, as a
+// cluster does: one per node, each with its own hostname and configuration.
+func makeCidataNamed(t *testing.T, name, userData, metaData string) string {
+	return makeCidataOpts(t, name, userData, metaData, "-J", "-r")
 }
 
 // makeCidataOpts builds the drive with explicit xorriso extension flags, so a
 // test can pin which ISO9660 extensions k0smos actually depends on.
-func makeCidataOpts(t *testing.T, userData, metaData string, isoFlags ...string) string {
+func makeCidataOpts(t *testing.T, name, userData, metaData string, isoFlags ...string) string {
 	t.Helper()
 	root := repoRoot(t)
 	src := t.TempDir()
@@ -360,7 +417,11 @@ func makeCidataOpts(t *testing.T, userData, metaData string, isoFlags ...string)
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	iso := filepath.Join(outDir, sanitise(t.Name())+".iso")
+	stem := sanitise(t.Name())
+	if name != "" {
+		stem += "-" + name
+	}
+	iso := filepath.Join(outDir, stem+".iso")
 	t.Cleanup(func() { os.Remove(iso) })
 
 	cmd := exec.Command("docker", "run", "--rm",
@@ -520,3 +581,99 @@ func requireFsckClean(t *testing.T, img string) {
 		}
 	}
 }
+
+// seededVolume builds a data volume that already contains k0s's airgap image
+// bundle, and skips the test when the bundle has not been fetched.
+//
+// This is the difference between a k0s boot taking a couple of minutes and taking
+// five to thirteen: without it the first boot pulls every image over QEMU's
+// user-mode network, which is the only reason k0sTimeout is 25 minutes.
+//
+// The volume is formatted here rather than by k0smos, and labelled so k0smos mounts
+// it as-is: formatting is exactly what would erase the bundle. It is mounted at
+// /var, so the bundle belongs at lib/k0s/images/ within it — <data-dir>/images is
+// where k0s looks, and k0s's data directory is /var/lib/k0s.
+func seededVolume(t *testing.T, sizeMB int) string {
+	return seededVolumeNamed(t, "seeded", sizeMB)
+}
+
+// seededVolumeNamed is seededVolume for a test that needs more than one, as a
+// cluster does: every node wants its own copy of the bundle.
+//
+// The formatted image is built once and kept in dist, then cloned per volume.
+// Building it costs a container, a 350MB copy and an mkfs; three nodes paying
+// that each, on every run, came to more than the boots they were speeding up.
+func seededVolumeNamed(t *testing.T, name string, sizeMB int) string {
+	t.Helper()
+	src := airgapSeed(t, sizeMB)
+	dst := filepath.Join(repoRoot(t), "dist", "e2e", sanitise(t.Name())+"-"+name+".img")
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(dst)
+	t.Cleanup(func() { os.Remove(dst) })
+	// -c clones on APFS, which is instant; fall back to a plain copy elsewhere.
+	if err := exec.Command("cp", "-c", src, dst).Run(); err != nil {
+		if out, err := exec.Command("cp", src, dst).CombinedOutput(); err != nil {
+			t.Fatalf("clone seeded volume: %v\n%s", err, out)
+		}
+	}
+	return dst
+}
+
+// airgapSeed returns a formatted data volume holding the airgap bundle, building
+// it if it is missing or older than the bundle. Shared by every test and kept
+// between runs; the per-test copies are clones of it.
+func airgapSeed(t *testing.T, sizeMB int) string {
+	t.Helper()
+	root := repoRoot(t)
+	dist := filepath.Join(root, "dist")
+	bundle := filepath.Join(dist, "k0s-airgap-"+runtime.GOARCH+".tar")
+	bundleInfo, err := os.Stat(bundle)
+	if err != nil {
+		t.Skipf("missing %s — run './image/fetch-airgap.sh' to make the k0s boots fast", bundle)
+	}
+
+	seed := filepath.Join(dist, fmt.Sprintf("k0s-airgap-%s-seed-%dM.img", runtime.GOARCH, sizeMB))
+	// Rebuilt when the bundle is newer, so fetching a new k0s version is enough
+	// to invalidate it. Not cleaned up: it is a cache, and rebuilding costs a
+	// container plus a 350MB copy.
+	if info, err := os.Stat(seed); err == nil && info.ModTime().After(bundleInfo.ModTime()) {
+		return seed
+	}
+	os.Remove(seed)
+
+	// Paths inside the container, relative to the bind-mounted dist. Getting this
+	// wrong is silent: run-qemu.sh creates a blank volume for a DATA path that does
+	// not exist, so the guest boots, formats it, and pulls every image anyway.
+	inBundle := "/d/" + filepath.Base(bundle)
+	inImg := "/d/" + filepath.Base(seed)
+
+	// -d takes a directory tree; -L is what stops k0smos treating it as blank.
+	script := fmt.Sprintf(`apk add -q --no-cache e2fsprogs >/dev/null
+mkdir -p /w/lib/k0s/images
+cp %s /w/lib/k0s/images/bundle.tar
+truncate -s %dM %s
+mkfs.ext4 -q -L %s -d /w %s`,
+		inBundle, sizeMB, inImg, dataVolumeLabel, inImg)
+
+	cmd := exec.Command("docker", "run", "--rm",
+		"-v", dist+":/d", "alpine:3.20", "sh", "-c", "mkdir -p /w && "+script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build seeded data volume: %v\n%s", err, out)
+	}
+	// The whole point is that QEMU gets a volume with the bundle in it. A missing
+	// or blank file here means the guest silently falls back to pulling.
+	info, err := os.Stat(seed)
+	if err != nil {
+		t.Fatalf("seeded volume was not written to %s: %v", seed, err)
+	}
+	if info.Size() < int64(sizeMB)<<20 {
+		t.Fatalf("seeded volume %s is %dMB, want %dMB", seed, info.Size()>>20, sizeMB)
+	}
+	return seed
+}
+
+// dataVolumeLabel must match config.Config's DataLabel default, which is what
+// k0smos looks for before deciding a device is blank and formatting it.
+const dataVolumeLabel = "k0smos-data"
