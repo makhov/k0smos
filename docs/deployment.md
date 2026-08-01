@@ -10,7 +10,7 @@ and k0smos watches the power button — and get a kubeconfig from the cluster's 
 API server. `k0smosctl gen` is host-side and works anywhere, but Cluster API
 generates the drive itself, so it is not needed there either.
 
-Read [Limitations](../README.md#limitations) first. This is a working prototype;
+Read [Limitations](https://github.com/makhov/k0smos/blob/main/README.md#limitations) first. This is a working prototype;
 the gaps below are real. For day-to-day use — booting, configuring, shipping
 manifests, getting a kubeconfig — see [usage.md](usage.md).
 
@@ -109,7 +109,7 @@ skew k0smos reports at boot as "kernel and modules are out of step". It is also
 pulled once instead of twice.
 
 A complete Cluster API manifest set is in
-[`examples/capi-kubevirt.yaml`](../examples/capi-kubevirt.yaml): `Cluster`,
+[`examples/capi-kubevirt.yaml`](https://github.com/makhov/k0smos/blob/main/examples/capi-kubevirt.yaml): `Cluster`,
 `KubevirtCluster`, `K0sControlPlane`, `MachineDeployment`,
 `K0sWorkerConfigTemplate` and both `KubevirtMachineTemplate`s. Field names come
 from the providers' Go types, but the set has not yet been reconciled by a real
@@ -196,7 +196,7 @@ Feasible but the least exercised path.
 ## Per-machine configuration
 
 Everything is on the kernel cmdline; see the
-[options table](../README.md#kernel-cmdline-options). A typical fleet line:
+[options table](https://github.com/makhov/k0smos/blob/main/README.md#kernel-cmdline-options). A typical fleet line:
 
 ```
 console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.hostname=node-07
@@ -217,7 +217,7 @@ k0smos.ip=10.0.0.20/24 k0smos.gw=10.0.0.1 k0smos.dns=10.0.0.53
 
 **Diagnosis is offline.** Container logs never reach the console. Power the
 machine down cleanly, then read the disk with `debugfs`; see
-[Debugging](../README.md#debugging).
+[Debugging](https://github.com/makhov/k0smos/blob/main/README.md#debugging).
 
 **Data — treat every machine as disposable.** k0s state lives in `/var/lib/k0s`
 on the root filesystem, and nothing is designed to outlive the machine:
