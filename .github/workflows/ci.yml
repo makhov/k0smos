@@ -6,7 +6,7 @@ on:
   pull_request:
   schedule:
     # Nightly, for the slow k0s boots and the modular-kernel path.
-    - cron: "0 3 * * *"
+    - cron: "0 0 * * *"
 
 env:
   # Pinned so the k0s download is cacheable. fetch-k0s.sh otherwise resolves
@@ -116,6 +116,12 @@ jobs:
           path: dist/k0s-*
           key: k0s-${{ runner.arch }}-${{ env.K0S_VERSION }}
 
+      # `make e2e-artifacts` rather than the individual scripts: the kernel is
+      # chosen above, and everything after it — which root formats, in which order,
+      # and which one the initramfs embeds — is the Makefile's business. Spelling it
+      # out here is what let CI drift into building an erofs image named
+      # k0smos.img, after which every test that boots it by LABEL waited out its
+      # three-minute timeout.
       - name: build artifacts
         run: |
           if [ "${{ matrix.kernel }}" = alpine ]; then
@@ -124,12 +130,10 @@ jobs:
             # Default: Kata's monolithic kernel, which writes no module tree.
             make kernel
           fi
-          make k0s
-          ./image/mkinitramfs.sh
-          K0S_BIN=dist/k0s-$(go env GOARCH) ./image/mkrootfs.sh dist/k0smos.img
+          make e2e-artifacts
 
       - name: e2e (fast)
-        run: go test -tags e2e -short -v -timeout 40m ./e2e/
+        run: go test -tags e2e -short -failfast -v -timeout 40m ./e2e/
 
       - name: keep consoles from failures
         if: failure()
@@ -168,15 +172,21 @@ jobs:
 
       - name: build artifacts
         run: |
-          make k0s
           make kernel-alpine
-          ./image/mkinitramfs.sh
-          K0S_BIN=dist/k0s-$(go env GOARCH) ./image/mkrootfs.sh dist/k0smos.img
+          make e2e-artifacts
 
       # make disk is not used here, so the root image is freshly built and
       # therefore pristine — the k0s tests skip against one holding cluster state.
+      # -failfast for the same reason as the gate, and it matters more here: a k0s
+      # boot waits up to 25 minutes, so two broken ones exceed the whole timeout.
+      #
+      # 110m is not a budget, it is a backstop, and it is this large only because the
+      # k0s boots are slow for a fixable reason: the first one pulls every image over
+      # QEMU's user-mode network, observed between 5 and 13 minutes. Seeding the data
+      # volume with k0s's airgap bundle would remove the pulls and let both this and
+      # k0sTimeout drop by an order of magnitude.
       - name: e2e (with k0s)
-        run: go test -tags e2e -v -timeout 110m ./e2e/
+        run: go test -tags e2e -failfast -v -timeout 110m ./e2e/
 
       - name: keep consoles from failures
         if: failure()

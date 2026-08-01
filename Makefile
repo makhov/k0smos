@@ -3,7 +3,7 @@ BIN := dist/k0smos
 # a host build on macOS would just produce the "linux only" stub.
 GO_BUILD := GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags '-extldflags "-static"'
 
-.PHONY: build ctl test vet kernel kernel-alpine k0s initramfs rootfs disk artifacts boot smoke oci e2e e2e-full accept clean-dist
+.PHONY: build ctl test vet kernel kernel-alpine k0s initramfs rootfs disk artifacts e2e-artifacts boot smoke oci e2e e2e-full accept clean-dist
 build:
 	$(GO_BUILD) -o $(BIN) ./cmd/k0smos
 
@@ -62,12 +62,15 @@ initramfs:
 # (cadvisor finds no filesystem info for a ramfs root), but it is satisfied by a
 # read-only erofs image on a loop device — which is why the root can travel inside
 # the initramfs rather than as a separate disk.
-rootfs: kernel k0s
+# No kernel prerequisite: the root only needs a kernel for its module tree, and
+# which kernel that is belongs to the caller — `artifacts` fetches the default,
+# while CI picks per matrix leg. mkrootfs.sh reports a missing tree as monolithic.
+rootfs: k0s
 	K0S_BIN=dist/k0s-$$(go env GOARCH) ./image/mkrootfs.sh dist/k0smos.erofs
 
 # The writable ext4 root instead, for booting from a disk. Still used by most of the
 # e2e suite, and what bare metal will want once there is an installer.
-disk: kernel k0s
+disk: k0s
 	ROOTFS=ext4 K0S_BIN=dist/k0s-$$(go env GOARCH) ./image/mkrootfs.sh dist/k0smos.img
 
 # Everything k0smosctl boot needs. `disk` already pulls in the kernel and k0s;
@@ -75,6 +78,13 @@ disk: kernel k0s
 # a prerequisite of the root image.
 # rootfs before initramfs: the initramfs embeds it.
 artifacts: kernel k0s rootfs initramfs
+
+# Everything the e2e suite boots: the default node, plus the ext4 disk most of the
+# tests switch onto. No kernel prerequisite, so a caller can choose one first — CI
+# does, per matrix leg. Defined here rather than spelled out in the workflow,
+# because the last time those two drifted CI built an erofs image named
+# k0smos.img and every test that boots it by LABEL waited out its timeout.
+e2e-artifacts: k0s rootfs initramfs disk
 
 # Full local boot, through the CLI so there is one path a user can follow rather
 # than a make-only shortcut that drifts from it. --attach because a contributor
@@ -98,10 +108,10 @@ oci: kernel disk
 # End-to-end tests: boot k0smos under QEMU and assert on what happens. The fast
 # suite never starts k0s (a workload that exits immediately), so each boot is
 # ~40s; e2e-full adds the k0s tests, which take minutes each.
-e2e: artifacts disk
+e2e: kernel e2e-artifacts
 	go test -tags e2e -short -v -timeout 30m ./e2e/
 
-e2e-full: artifacts disk
+e2e-full: kernel e2e-artifacts
 	go test -tags e2e -v -timeout 90m ./e2e/
 
 accept: disk

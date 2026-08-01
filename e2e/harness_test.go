@@ -29,8 +29,12 @@ import (
 )
 
 const (
-	// bootTimeout bounds a boot that never reaches its marker.
-	bootTimeout = 3 * time.Minute
+	// bootTimeout bounds a boot that never reaches its marker. The fast tests never
+	// start k0s and reach their markers in 10-25s locally and 16-24s on CI, so a
+	// minute is already four times the observed worst case. It was three minutes,
+	// which meant one wrong assumption cost 18 tests x 3 minutes and blew a CI job's
+	// whole timeout.
+	bootTimeout = time.Minute
 	// k0sTimeout bounds the slow tests. Generous on purpose: the first boot pulls
 	// every image over QEMU's user-mode network, so convergence has been observed
 	// anywhere between 5 and 13 minutes on the same machine. A tight bound here
@@ -203,8 +207,14 @@ func orDefault(v, def string) string {
 	return v
 }
 
-// waitFor blocks until the console matches pattern, and fails the test if the
-// deadline passes or QEMU exits first.
+// waitFor blocks until the console matches pattern, and fails the test if QEMU
+// exits or the deadline passes.
+//
+// An idle-console check was tried here and removed: it never fired on the case that
+// motivated it. A guest whose assertion is wrong is not quiet — the supervisor
+// restarts the exiting workload forever, so the console scrolls continuously while
+// the awaited line never comes. Bounding a broken run is done with a shorter
+// bootTimeout and -failfast in CI instead, which are blunt but actually work.
 func (v *vm) waitFor(pattern string, timeout time.Duration) string {
 	v.t.Helper()
 	re := regexp.MustCompile(pattern)
@@ -225,10 +235,21 @@ func (v *vm) waitFor(pattern string, timeout time.Duration) string {
 		default:
 		}
 		if time.Now().After(deadline) {
-			v.t.Fatalf("timed out after %s waiting for %q", timeout, pattern)
+			v.t.Fatalf("timed out after %s waiting for %q\nlast lines:\n%s",
+				timeout, pattern, lastConsoleLines(text, 15))
 		}
 		time.Sleep(pollEvery)
 	}
+}
+
+// lastConsoleLines returns the tail of the console, so a failure says what the
+// guest was doing rather than only what it failed to say.
+func lastConsoleLines(text string, n int) string {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // refute fails if pattern ever appears before the guest reaches settled.
