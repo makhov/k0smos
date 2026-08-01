@@ -27,6 +27,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/amakhov/k0smos/internal/iso9660"
+	"github.com/amakhov/k0smos/internal/metadata"
 )
 
 const (
@@ -392,8 +395,37 @@ func makeCidata(t *testing.T, userData, metaData string) string {
 
 // makeCidataNamed is makeCidata for a test that builds more than one drive, as a
 // cluster does: one per node, each with its own hostname and configuration.
+//
+// Written with the ISO writer this repository ships rather than xorriso in a
+// container. It needs no Docker, which a test that already boots three VMs has
+// enough dependencies without, and it is the drive `k0smosctl gen` produces — so
+// the cluster test follows the path the documentation tells a user to follow.
+// Compatibility with what a real provider emits is xorriso's job, and iso_test.go
+// covers it against drives built both ways.
 func makeCidataNamed(t *testing.T, name, userData, metaData string) string {
-	return makeCidataOpts(t, name, userData, metaData, "-J", "-r")
+	t.Helper()
+	outDir := filepath.Join(repoRoot(t), "dist", "e2e")
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	iso := filepath.Join(outDir, sanitise(t.Name())+"-"+name+".iso")
+	t.Cleanup(func() { os.Remove(iso) })
+
+	f, err := os.Create(iso)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if metaData == "" {
+		metaData = "instance-id: e2e\n"
+	}
+	if err := iso9660.Write(f, metadata.NoCloudLabel, []iso9660.File{
+		{Name: "user-data", Data: []byte(userData)},
+		{Name: "meta-data", Data: []byte(metaData)},
+	}); err != nil {
+		t.Fatalf("write cidata iso: %v", err)
+	}
+	return iso
 }
 
 // makeCidataOpts builds the drive with explicit xorriso extension flags, so a
