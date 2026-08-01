@@ -3,3 +3,5 @@
 *.img
 *.qcow2
 vmlinuz*
+/site/
+/.venv-docs/

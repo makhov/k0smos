@@ -1,0 +1,59 @@
+site_name: k0smos
+site_description: A minimal Go PID1 that boots k0s Kubernetes nodes.
+site_url: https://makhov.github.io/k0smos/
+docs_dir: docs/
+repo_name: GitHub
+repo_url: https://github.com/makhov/k0smos
+edit_uri: ""
+
+nav:
+  - Overview: README.md
+  - Usage: usage.md
+  - Architecture: architecture.md
+  - Deployment: deployment.md
+
+theme:
+  name: "material"
+  highlightjs: true
+  language: "en"
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/toggle-switch
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/toggle-switch-off-outline
+        name: Switch to light mode
+  features:
+    - toc.autohide
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+plugins:
+  - search
+  - exclude:
+      glob:
+        - superpowers/*
+        - superpowers/**/*
+        - requirements*.txt
+        - Makefile*
+        - Dockerfile.serve-dev
+        - mkdocs_modules/*
+
+markdown_extensions:
+  - pymdownx.highlight: {}
+  - pymdownx.superfences: {}
+  - pymdownx.inlinehilite: {}
+  - mdx_truly_sane_lists:
+      nested_indent: 2
+      truly_sane: true
+  - toc:
+      permalink: "#"
+      toc_depth: 3
+  - admonition
+  - footnotes
+
+extra:
+  generator: false
