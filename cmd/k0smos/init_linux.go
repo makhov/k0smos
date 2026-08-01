@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -151,15 +152,24 @@ func watchControlPort(ctx context.Context, cfg config.Config) <-chan control.Com
 }
 
 // answerRequest serves a host request for data from the node.
-//
-// Only the kubeconfig, which exists so that reaching a cluster does not mean
-// shutting the machine down and reading its disk with debugfs. It comes off the
-// filesystem rather than from k0s, so it works whether or not k0s is still
-// running — and reports plainly when the cluster has not got that far.
 func answerRequest(cfg config.Config, request string) ([]byte, error) {
-	if request != control.RequestKubeconfig {
-		return nil, fmt.Errorf("unknown request %q", request)
+	verb, arg, _ := strings.Cut(request, " ")
+	switch verb {
+	case control.RequestKubeconfig:
+		return readKubeconfig()
+	case control.RequestToken:
+		return createJoinToken(cfg, strings.TrimSpace(arg))
 	}
+	return nil, fmt.Errorf("unknown request %q", request)
+}
+
+// readKubeconfig returns the admin kubeconfig off the filesystem.
+//
+// This exists so that reaching a cluster does not mean shutting the machine down
+// and reading its disk with debugfs. Off the filesystem rather than from k0s, so
+// it works whether or not k0s is still running — and reports plainly when the
+// cluster has not got that far.
+func readKubeconfig() ([]byte, error) {
 	path := filepath.Join(k0sDataDir, "pki", "admin.conf")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -169,21 +179,75 @@ func answerRequest(cfg config.Config, request string) ([]byte, error) {
 	return data, nil
 }
 
+// joinRoles are the roles a token may be minted for. The request arrives from
+// outside, so the role is matched against this list rather than passed through
+// into an argument vector.
+var joinRoles = []string{"controller", "worker"}
+
+// tokenTimeout bounds `k0s token create`. It contacts the API server, so asking
+// too early blocks rather than failing; the host gets a clear error instead of a
+// request that never returns.
+const tokenTimeout = 2 * time.Minute
+
+// createJoinToken mints a k0s join token for another machine.
+//
+// It has to run inside the guest: a token is signed with the cluster CA, which
+// only a machine that is already a member holds. The binary is the one being
+// supervised, so a node told to run something else — or a smoke-test workload —
+// reports that rather than executing an unrelated /usr/local/bin/k0s.
+func createJoinToken(cfg config.Config, role string) ([]byte, error) {
+	if !slices.Contains(joinRoles, role) {
+		return nil, fmt.Errorf("role must be one of %v, got %q", joinRoles, role)
+	}
+	if len(cfg.Exec) == 0 || filepath.Base(cfg.Exec[0]) != "k0s" {
+		return nil, fmt.Errorf("this node is not running k0s (%v), so it cannot mint a join token", cfg.Exec)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), tokenTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, cfg.Exec[0], "token", "create", "--role="+role)
+	// PID1 inherits no environment, and k0s looks for its staged binaries on PATH.
+	cmd.Env = []string{"PATH=" + cfg.Path, "HOME=/root"}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		// k0s writes its progress to stderr, so the tail of it says why.
+		return nil, fmt.Errorf("k0s token create --role=%s: %w: %s",
+			role, err, lastLine(stderr.String()))
+	}
+	logf("minted a %s join token for the host", role)
+	// k0s prints the token with a trailing newline; a token file must not carry
+	// one, because k0s reads the file verbatim.
+	return bytes.TrimSpace(out), nil
+}
+
+// lastLine returns the final non-empty line of s, for a one-line error.
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" {
+			return l
+		}
+	}
+	return "no output"
+}
+
 // configureDHCP brings the interface up, acquires a lease, applies it, and keeps
 // renewing in the background. It returns the lease's first DNS server, if any.
 //
 // The link must be up before DHCP runs: with the interface down the kernel has
 // nothing to send through, whereas static configuration can set an address
 // first and bring the link up afterwards.
-func configureDHCP(ctx context.Context, s *sys.Sys, cfg config.Config) (string, error) {
-	if err := s.LinkUp(cfg.Iface); err != nil {
+func configureDHCP(ctx context.Context, s *sys.Sys, cfg config.Config, iface string) (string, error) {
+	if err := s.LinkUp(iface); err != nil {
 		return "", fmt.Errorf("link up: %w", err)
 	}
-	mac, err := s.InterfaceMAC(cfg.Iface)
+	mac, err := s.InterfaceMAC(iface)
 	if err != nil {
 		return "", fmt.Errorf("read MAC: %w", err)
 	}
-	conn, err := s.DHCPConn(cfg.Iface)
+	conn, err := s.DHCPConn(iface)
 	if err != nil {
 		return "", fmt.Errorf("open socket: %w", err)
 	}
@@ -200,10 +264,10 @@ func configureDHCP(ctx context.Context, s *sys.Sys, cfg config.Config) (string, 
 		if l.Router != nil {
 			gw = l.Router.String()
 		}
-		if err := knet.Configure(s, cfg.Iface, l.CIDR(), gw); err != nil {
+		if err := knet.Configure(s, iface, l.CIDR(), gw); err != nil {
 			return err
 		}
-		logf("%s configured %s gw %s (lease %s)", cfg.Iface, l.CIDR(), gw, l.LeaseTime)
+		logf("%s configured %s gw %s (lease %s)", iface, l.CIDR(), gw, l.LeaseTime)
 		return nil
 	}
 	if err := apply(lease); err != nil {
@@ -626,21 +690,22 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	// Not fatal: a node with only loopback still boots, it just cannot pull
 	// images. Better a degraded node with a console message than a panic.
 	dns := cfg.DNS
-	switch {
-	case cfg.IP == "dhcp":
-		leaseDNS, err := configureDHCP(runCtx, s, cfg)
-		if err != nil {
-			logf("warn: dhcp on %s: %v", cfg.Iface, err)
-		} else if dns == "" {
-			// An explicit k0smos.dns= wins: the lease's resolver is not always
-			// usable (QEMU's slirp hands out one that never answers).
-			dns = leaseDNS
+	for _, nic := range cfg.NICs() {
+		if nic.DHCP() {
+			leaseDNS, err := configureDHCP(runCtx, s, cfg, nic.Name)
+			if err != nil {
+				logf("warn: dhcp on %s: %v", nic.Name, err)
+			} else if dns == "" {
+				// An explicit k0smos.dns= wins: the lease's resolver is not always
+				// usable (QEMU's slirp hands out one that never answers).
+				dns = leaseDNS
+			}
+			continue
 		}
-	case cfg.IP != "":
-		if err := knet.Configure(s, cfg.Iface, cfg.IP, cfg.Gateway); err != nil {
-			logf("warn: configure %s: %v", cfg.Iface, err)
+		if err := knet.Configure(s, nic.Name, nic.Addr, nic.Gateway); err != nil {
+			logf("warn: configure %s: %v", nic.Name, err)
 		} else {
-			logf("%s configured %s gw %s", cfg.Iface, cfg.IP, cfg.Gateway)
+			logf("%s configured %s gw %s", nic.Name, nic.Addr, nic.Gateway)
 		}
 	}
 	if dns != "" {
