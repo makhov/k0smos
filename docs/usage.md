@@ -456,7 +456,7 @@ over SSH that does not exist here.
    `linux-virt` covers NVMe, ATA, SCSI, USB-storage, `e1000e` and `mlx5`, but not
    `igb`, `ixgbe`, `i40e`, `bnxt` or `megaraid_sas`. For anything else, supply a
    distro kernel with a module tree — you do not need to build one. See
-   [Which kernel](../README.md#which-kernel).
+   [Which kernel](https://github.com/makhov/k0smos/blob/main/README.md#which-kernel).
 2. Point `MODULES_DIR` at that tree when building the images. Drivers are then
    autoloaded by matching each device's `modalias` against `modules.alias`, so you
    do not have to name them.
