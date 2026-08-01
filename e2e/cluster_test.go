@@ -370,12 +370,14 @@ func TestThreeControllerWorkerCluster(t *testing.T) {
 
 	// The real assertion: node 0's API lists three nodes, all Ready, each with its
 	// own cluster address.
-	waitForNodes(t, apiClient(t, nodes[0]), nodes[0].apiPort, n, k0sTimeout)
+	creds := clusterCreds(t, nodes[0])
+	waitForNodes(t, creds.clientFor(t, nodes[0]), nodes[0].apiPort, n, k0sTimeout)
 
 	// Three control planes, not one control plane and two workers: each node
-	// answers on its own API server.
+	// answers on its own API server, with a certificate valid for its own address
+	// and the same CA as the rest of the cluster.
 	for _, node := range nodes {
-		if err := checkReadyz(node); err != nil {
+		if err := checkReadyz(creds.clientFor(t, node), node); err != nil {
 			t.Errorf("%s is not serving the API: %v", node.name, err)
 		}
 	}
@@ -464,13 +466,21 @@ func isTimeout(err error) bool {
 
 // --- talking to the cluster ---
 
-// apiClient builds an HTTPS client for a node's API server from the kubeconfig it
-// hands back over the control port.
+// creds is the cluster's CA and an admin client certificate, taken from a
+// kubeconfig. One set covers every node: they share a CA, so the same credential
+// authenticates against all three.
+type creds struct {
+	pool *x509.CertPool
+	pair tls.Certificate
+}
+
+// clusterCreds fetches the cluster's credentials from a node's kubeconfig, over
+// the control port.
 //
 // Direct rather than through kubectl or client-go: the credentials are all in the
-// kubeconfig, the two calls this makes are plain GETs, and neither a binary on the
+// kubeconfig, the calls made with them are plain GETs, and neither a binary on the
 // host nor a large dependency is worth it.
-func apiClient(t *testing.T, node *clusterNode) *http.Client {
+func clusterCreds(t *testing.T, node *clusterNode) creds {
 	t.Helper()
 	data, err := requestNode(t, node.vm, control.RequestKubeconfig)
 	if err != nil {
@@ -509,15 +519,24 @@ func apiClient(t *testing.T, node *clusterNode) *http.Client {
 	if !pool.AppendCertsFromPEM(ca) {
 		t.Fatal("kubeconfig CA is not a certificate")
 	}
+	return creds{pool: pool, pair: pair}
+}
+
+// clientFor builds an HTTPS client for one node's API server.
+//
+// Verification is left on. The connection goes to a forwarded port on 127.0.0.1
+// while the server's certificate is issued for the node's cluster address, so the
+// name is set to the latter — which also checks that each node presents a
+// certificate for its own address, signed by the one cluster CA. That is a real
+// property of an HA control plane and the SAN list exists to make it hold.
+func (c creds) clientFor(t *testing.T, node *clusterNode) *http.Client {
+	t.Helper()
 	return &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{
-			RootCAs:      pool,
-			Certificates: []tls.Certificate{pair},
-			// The certificate is issued for the node's cluster address, and the
-			// connection goes to a forwarded port on 127.0.0.1. Checking it against
-			// the name it was issued for is what the SAN list is for.
-			ServerName: node.ip,
+			RootCAs:      c.pool,
+			Certificates: []tls.Certificate{c.pair},
+			ServerName:   node.ip,
 		}},
 	}
 }
@@ -612,16 +631,11 @@ func getNodes(api *http.Client, url string) (nodeList, error) {
 	return list, nil
 }
 
-// checkReadyz asks a node's own API server whether it is serving. It skips
-// verification: the point is that this node answers at all, and its certificate
-// has already been checked through the client that talks to node 0.
-func checkReadyz(node *clusterNode) error {
-	c := &http.Client{
-		Timeout:   15 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
-	}
-	// /readyz is unauthenticated for the liveness case, and returns 200 "ok" once
-	// the server has finished starting.
+// checkReadyz asks a node's own API server whether it is serving.
+//
+// Authenticated: k0s does not allow anonymous requests, so an unauthenticated
+// /readyz answers 401 rather than saying anything about readiness.
+func checkReadyz(c *http.Client, node *clusterNode) error {
 	resp, err := c.Get(fmt.Sprintf("https://127.0.0.1:%d/readyz", node.apiPort))
 	if err != nil {
 		return err
