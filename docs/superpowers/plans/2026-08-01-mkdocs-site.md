@@ -898,6 +898,7 @@ git commit -m "docs: move installation into the site"
 |---|---|
 | `docs/usage/cli.md` | `usage.md` "The CLI" + README "Talking to a running node" |
 | `docs/usage/boot.md` | `usage.md` "Boot a node locally" |
+| `docs/usage/cluster.md` | `usage.md` "Create a local cluster" |
 | `docs/usage/cloud-init.md` | `usage.md` "Configure a node with cloud-init" |
 | `docs/usage/manifests.md` | `usage.md` "Ship Kubernetes manifests" |
 | `docs/usage/data-volume.md` | `usage.md` "Give it a data volume" + README "The data volume" |
@@ -921,6 +922,7 @@ Delete them from `docs/usage.md` and `README.md`. `docs/usage.md` should be left
   - Usage:
       - The CLI: usage/cli.md
       - Boot a node locally: usage/boot.md
+      - Create a local cluster: usage/cluster.md
       - Configure with cloud-init: usage/cloud-init.md
       - Ship Kubernetes manifests: usage/manifests.md
       - The data volume: usage/data-volume.md
@@ -1313,9 +1315,15 @@ Expected: no output. The spec and this plan reference the old names as history a
 - [ ] **Step 3: Confirm every source heading found a home**
 
 ```bash
-git show main:README.md | grep "^## " | sed 's/^## //' > /tmp/old-headings
+# NOT `main`. A platform-artifacts commit landed on this branch after the plan
+# was written, adding usage.md "Create a local cluster" and a `k0smos:` row to
+# the README's user-data table. Diffing against main hides both, and the first
+# attempt at Task 7 deleted them as presumed duplicates. Use the commit this
+# branch was at before Task 6 began.
+BEFORE=06f8ce6
+git show $BEFORE:README.md | grep "^## " | sed 's/^## //' > /tmp/old-headings
 for f in usage architecture deployment; do
-  git show main:docs/$f.md | grep "^## " | sed 's/^## //' >> /tmp/old-headings
+  git show $BEFORE:docs/$f.md | grep "^## " | sed 's/^## //' >> /tmp/old-headings
 done
 wc -l /tmp/old-headings
 ```
