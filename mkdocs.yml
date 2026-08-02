@@ -18,7 +18,7 @@ nav:
       - KubeVirt and Cluster API: deployment/kubevirt.md
       - Bare metal and Metal3: deployment/bare-metal.md
   - Operate: deployment/operating.md
-  - Support status: known-limitations.md
+  - Limits: known-limitations.md
   - Troubleshooting: troubleshooting.md
   - Reference:
       - k0smosctl: reference/k0smosctl.md

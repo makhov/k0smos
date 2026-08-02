@@ -1,37 +1,55 @@
-# Support status
+# Limits
 
-k0smos is an early-stage project. The table below separates implemented and
-tested workflows from intended integrations.
+What k0smos deliberately does not do, so you can design around it.
 
-| Area | Status | Evidence / gap |
-|---|---|---|
-| Local single-node cluster | Tested | created under QEMU and checked for node readiness in CI |
-| Local multi-controller cluster | Tested | controllers join and reach Ready over the userspace guest network |
-| Dedicated local workers | Partially tested | generation and role logic have unit coverage; a worker boot is not yet an e2e CI path |
-| Immutable EROFS system | Tested | direct-kernel and UEFI boot paths verify the read-only root and writable `/var` |
-| amd64 metal image | Firmware-tested | boots through OVMF, GRUB, GPT, EROFS, and clean shutdown |
-| arm64 metal image | Built | release artifact is produced; equivalent firmware smoke coverage is pending |
-| KubeVirt OCI image | Built | kernelBoot artifact and VM example exist; live KubeVirt validation is pending |
-| Cluster API with KubeVirt | Experimental | manifests exist but have not completed reconciliation on a management cluster |
-| Cluster API with Metal3 | Experimental | image reference exists; physical provisioning has not been validated |
-| Physical hardware | Untested | driver coverage and firmware behavior require a real hardware matrix |
-| Public-cloud images | Not implemented | no AMI, Azure image, GCP image, or provider metadata client |
+## No in-place upgrades
 
-## Product limitations
+There is no A/B update, no package manager, and no API to change a running
+system. To move to a new k0s release, deploy the new artifact and replace the
+machines through whatever rolls them out — Cluster API, your hypervisor, or
+`machine rm` followed by `machine up` locally.
 
-- There is no in-place, A/B, or API-driven OS upgrade. Roll out a new artifact
-  and replace machines.
-- There is no interactive shell or SSH escape hatch. Plan for serial console and
-  Kubernetes-level observability.
-- `k0smosctl` machine lifecycle and kubeconfig commands use a local QEMU control
-  socket. They do not manage remote KubeVirt or physical machines.
-- The cloud-init implementation is intentionally limited. Arbitrary `runcmd`
-  shell commands are not executed.
-- Everything inside the node runs as root; the image is minimized through
-  immutability and the absence of general-purpose tools, not process-level user
-  isolation.
+## No shell, no SSH
 
-Do not present an experimental integration as supported merely because its
-artifact can be built. A platform becomes supported when its provisioning,
-bootstrap, readiness, replacement, and clean shutdown paths are exercised end to
-end.
+A running node cannot be logged into. Everything a node has to say goes to its
+console, and everything it needs to be told arrives on its cloud-init drive
+before boot.
+
+Plan for console access on every machine: `k0smosctl machine logs` locally,
+the VMI serial console on KubeVirt, serial-over-LAN or the BMC elsewhere.
+Application logs stay Kubernetes logs — collect them through the cluster.
+
+## Cloud-init is a subset, and nothing is executed
+
+`write_files`, the hostname, the network settings and the k0s role are applied.
+A small set of `runcmd` verbs is *interpreted* — `mkdir`, `chmod`, `chown`,
+`ln -s`, and `k0s install` — but no command from a drive is ever executed as a
+process.
+
+Bootstrap data that depends on a shell, package installation, `curl`, pipes or
+redirection will not work. Unrecognised entries are reported on the console as
+`UNSUPPORTED runcmd` and skipped. See
+[machine configuration](usage/cloud-init.md).
+
+## Everything in the node runs as root
+
+The image is kept small by immutability and the absence of general-purpose
+tools, not by process-level isolation.
+
+## k0smosctl is for local machines
+
+`k0smosctl` manages machines it started under QEMU on this host. It does not
+manage remote KubeVirt VMs or physical servers; use the platform's own tooling
+and obtain cluster access from the management cluster or the API endpoint.
+
+## One k0s release per k0smos release
+
+There is no separate OS version to pair with a k0s version, and no way to run a
+k0s version other than the one inside the artifact. Choosing a k0s release means
+choosing a k0smos release.
+
+## No public-cloud images
+
+There is no AMI, Azure image, or GCP image, and no client for cloud instance
+metadata services. Platforms that can boot a UEFI qcow2 or raw disk and attach a
+cloud-init drive will work; the rest are not covered.

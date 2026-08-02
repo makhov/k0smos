@@ -77,9 +77,3 @@ k0smosctl machine shutdown --name <machine> --timeout 30s
 ```
 
 Avoid deleting state or killing QEMU while it is writing `/var`.
-
-## CI e2e failures
-
-Failed guest consoles are uploaded by CI and are also kept locally under
-`dist/e2e/*.console.log`. Set `K0SMOS_E2E_KEEP_CONSOLE=1` to retain logs from
-passing local e2e runs.

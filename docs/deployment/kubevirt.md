@@ -77,11 +77,6 @@ The example set in
 [`examples/capi-kubevirt.yaml`](https://github.com/makhov/k0smos/blob/main/examples/capi-kubevirt.yaml)
 includes the cluster, control plane, machine deployments, and templates.
 
-!!! warning "Integration status"
-    The artifact and manifests exist, but the complete CAPI reconciliation path
-    has not yet been validated against a live management cluster. Treat the
-    example as experimental until that test is in CI.
-
 ## Lifecycle
 
 Use KubeVirt or Cluster API to stop and replace machines. KubeVirt delivers the
