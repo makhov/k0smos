@@ -3,9 +3,9 @@
 What it takes to run k0smos somewhere other than the local QEMU setup, and what
 is still missing for each target.
 
-Read [Limitations](https://github.com/makhov/k0smos/blob/main/README.md#limitations) first. This is a working prototype;
+Read [Known limitations](../known-limitations.md) first. This is a working prototype;
 the gaps below are real. For day-to-day use — booting, configuring, shipping
-manifests, getting a kubeconfig — see [usage.md](../usage.md).
+manifests, getting a kubeconfig — see [Usage](../usage/cli.md).
 
 One artifact per platform, both wrapping the same immutable EROFS OS payload:
 

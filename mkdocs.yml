@@ -22,11 +22,12 @@ nav:
       - Reach the cluster: usage/kubeconfig.md
       - A multi-node cluster: usage/multi-node.md
       - Shut it down: usage/shutdown.md
-      - Leftovers: usage.md
   - Design:
       - The boot chain: design/boot-chain.md
       - Design decisions: design/decisions.md
       - Testability: design/testability.md
+  - Troubleshooting: troubleshooting.md
+  - Known limitations: known-limitations.md
   - Deployment:
       - What you ship: deployment/artifacts.md
       - KVM / libvirt: deployment/libvirt.md
