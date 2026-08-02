@@ -65,13 +65,15 @@ func TestEmbeddedEROFSRootBoots(t *testing.T) {
 	requireEmbeddedRoot(t)
 	data := blankVolume(t, "erofs-data")
 
-	// No Disk and no Root: with neither named, k0smos uses the image it carries.
+	// No Disk; ROOT=auto tells the direct-kernel runner not to force its normal
+	// initramfs-only mode, so PID1 selects the image it carries.
 	// Data at /var rather than /var/lib/k0s because kubelet writes /var/lib/kubelet,
 	// which a read-only root cannot serve.
 	v := boot(t, bootOpts{
 		Data: data,
 		Net:  "k0smos.ip=dhcp k0smos.dns=1.1.1.1 k0smos.data=auto",
 		Exec: execNoop,
+		Root: "auto",
 	})
 
 	v.waitFor(`attached /k0smos-root\.img at /dev/loop\d+`, bootTimeout)

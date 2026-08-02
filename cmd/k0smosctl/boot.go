@@ -366,30 +366,35 @@ func resolveFirmware(g guest, requested string) (string, error) {
 		return requested, nil
 	}
 
-	var candidates []string
-	if g.apkArch == "x86_64" {
-		candidates = []string{
-			"/opt/homebrew/share/qemu/edk2-x86_64-code.fd",
-			"/usr/local/share/qemu/edk2-x86_64-code.fd",
-			"/usr/share/OVMF/OVMF_CODE.fd",
-			"/usr/share/edk2/ovmf/OVMF_CODE.fd",
-			"/usr/share/qemu/OVMF.fd",
-		}
-	} else {
-		candidates = []string{
-			"/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
-			"/usr/local/share/qemu/edk2-aarch64-code.fd",
-			"/usr/share/AAVMF/AAVMF_CODE.fd",
-			"/usr/share/edk2/aarch64/QEMU_EFI.fd",
-			"/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
-		}
-	}
-	for _, candidate := range candidates {
+	for _, candidate := range firmwareCandidates(g) {
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate, nil
 		}
 	}
 	return "", fatalf("could not find UEFI firmware for %s; install QEMU with edk2 firmware, or pass --firmware", g.apkArch)
+}
+
+// firmwareCandidates centralizes host package layouts for both automatic boot
+// and the firmware smoke test. Ubuntu 24.04 ships only the 4M OVMF image on
+// current runners, while older distributions retain OVMF_CODE.fd.
+func firmwareCandidates(g guest) []string {
+	if g.apkArch == "x86_64" {
+		return []string{
+			"/opt/homebrew/share/qemu/edk2-x86_64-code.fd",
+			"/usr/local/share/qemu/edk2-x86_64-code.fd",
+			"/usr/share/OVMF/OVMF_CODE_4M.fd",
+			"/usr/share/OVMF/OVMF_CODE.fd",
+			"/usr/share/edk2/ovmf/OVMF_CODE.fd",
+			"/usr/share/qemu/OVMF.fd",
+		}
+	}
+	return []string{
+		"/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
+		"/usr/local/share/qemu/edk2-aarch64-code.fd",
+		"/usr/share/AAVMF/AAVMF_CODE.fd",
+		"/usr/share/edk2/aarch64/QEMU_EFI.fd",
+		"/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+	}
 }
 
 // qemuArgs assembles the command line. Separated from running it so --dry-run can

@@ -11,6 +11,8 @@
 #   ARCH     guest arch (default host arch)
 #   SERIAL   "stdio" (default, interactive) or a file path (headless)
 #   EXEC     comma-separated k0smos.exec override, e.g. /bin/true
+#   ROOT     disk root override; with no IMG, "auto" permits embedded-root or
+#            LABEL=k0smos discovery instead of the initramfs-only default
 #   MEM/CPUS guest sizing
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -106,9 +108,12 @@ if [ -n "$img" ]; then
   # enumeration is not stable on real hardware. Override with ROOT=/dev/vda.
   append="$append k0smos.root=${ROOT:-LABEL=k0smos} k0smos.rootfstype=ext4"
 else
-  # Empty means auto-discover LABEL=k0smos. This mode intentionally has no
-  # root disk, so opt out explicitly instead of waiting for one to appear.
-  append="$append k0smos.root=none"
+  # Direct-kernel smoke tests historically stay on the initramfs. ROOT=auto is
+  # the deliberate exception used to exercise an EROFS root embedded in it;
+  # omitting k0smos.root lets PID1 select that image before disk discovery.
+  if [ "${ROOT:-none}" != auto ]; then
+    append="$append k0smos.root=${ROOT:-none}"
+  fi
 fi
 [ -n "${EXEC:-}" ] && append="$append k0smos.exec=$EXEC"
 

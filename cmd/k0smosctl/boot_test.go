@@ -162,6 +162,16 @@ func TestArtifactBootRejectsExternalDataVolume(t *testing.T) {
 	}
 }
 
+func TestFirmwareCandidatesCoverUbuntu24OVMF(t *testing.T) {
+	g, err := guestFor("amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/usr/share/OVMF/OVMF_CODE_4M.fd"; !slices.Contains(firmwareCandidates(g), want) {
+		t.Errorf("amd64 firmware candidates do not include Ubuntu 24.04 path %s", want)
+	}
+}
+
 // The cmdline is what the node is actually configured by, so its contents matter
 // more than any other part of this command.
 func TestBootCmdlineCarriesTheEssentials(t *testing.T) {
