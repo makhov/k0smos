@@ -5,7 +5,7 @@ prevent a specific failure that was observed on a real boot; the ordering looks
 arbitrary until you know what each one is for.
 
 This is the *why*. For how to use the thing, see [usage.md](usage.md); for running
-it on KubeVirt or Cluster API, [deployment.md](deployment.md).
+it on KubeVirt or Cluster API, [deployment/kubevirt.md](deployment/kubevirt.md).
 
 ## The boot chain
 
