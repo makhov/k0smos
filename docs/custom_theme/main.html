@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+
+{% block outdated %}
+You are not viewing the documentation for the current stable release of k0smos.
+<a href="{{ '../' ~ base_url }}">
+  <strong>Click here for the current stable release.</strong>
+</a>
+{% endblock %}
