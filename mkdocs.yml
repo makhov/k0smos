@@ -8,6 +8,10 @@ edit_uri: ""
 
 nav:
   - Overview: index.md
+  - Installation:
+      - Quick start: install/quick-start.md
+      - What gets built: install/artifacts.md
+      - Which kernel: install/kernel.md
   - Usage: usage.md
   - Architecture: architecture.md
   - Deployment: deployment.md
