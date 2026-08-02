@@ -44,5 +44,5 @@ data volume, so `mkfs.ext4` stays in the image.
 
 This page is operational — which `ROOTFS` value produces what, and which kernels
 can mount it. For the rationale — why a read-only root works at all — see
-[Why a read-only root works at all](../architecture.md#why-a-read-only-root-works-at-all)
-in the architecture doc.
+[Why a read-only root works at all](../design/decisions.md#why-a-read-only-root-works-at-all)
+in the design doc.

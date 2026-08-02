@@ -75,7 +75,8 @@ Two more things to know:
   `K0sWorkerConfig` spec. k0smotron's `DownloadCommands` returns nothing when it
   is set, so no `curl`/`wget` commands are emitted — the image already ships k0s.
 - **runcmd is interpreted, not executed** (see
-  [architecture.md](../architecture.md)). `k0s install <role>` becomes the
+  [Why runcmd is interpreted and never executed](../design/decisions.md#why-runcmd-is-interpreted-and-never-executed)).
+  `k0s install <role>` becomes the
   supervised workload, `--force` is dropped, `--env KEY=VALUE` is applied to the
   child's environment, and anything else is logged `UNSUPPORTED`. Avoid
   `preK0sCommands`/`postK0sCommands` that assume a shell.

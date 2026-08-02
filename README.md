@@ -15,7 +15,7 @@ cloud-init — which is what Cluster API providers already produce — and repla
 rather than administered. `runcmd` is **interpreted, never executed**.
 
 Docs: **[usage.md](docs/usage.md)** (how to use it) ·
-[architecture.md](docs/architecture.md) (why the boot sequence is ordered as it is)
+[design/decisions.md](docs/design/decisions.md) (why the boot sequence is ordered as it is)
 · [deployment/kubevirt.md](docs/deployment/kubevirt.md) (KubeVirt, Cluster API)
 
 ## Make targets
