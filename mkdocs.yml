@@ -15,6 +15,7 @@ nav:
   - Usage:
       - The CLI: usage/cli.md
       - Boot a node locally: usage/boot.md
+      - Create a local cluster: usage/cluster.md
       - Configure with cloud-init: usage/cloud-init.md
       - Ship Kubernetes manifests: usage/manifests.md
       - The data volume: usage/data-volume.md

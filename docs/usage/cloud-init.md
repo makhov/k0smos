@@ -58,6 +58,9 @@ override only the fields present. They are read before networking is configured.
 `cluster create` uses this to give each clone a distinct address on its second
 NIC without changing the shared artifact.
 
+Per-machine network values applied before k0s starts; used by `cluster create` so
+identical artifacts can have distinct cluster addresses.
+
 **`runcmd`** — **interpreted, never executed.** Nothing named in user-data is ever
 exec'd. Four verbs are carried out with syscalls: `mkdir` (with `-p`), `chmod`,
 `chown`, and `ln -s`. A `k0s install <role> …` is translated into the equivalent
