@@ -1,36 +1,37 @@
-# Known limitations
+# Support status
 
-- **No upgrade path.** Rebuilding the disk image wipes the cluster. No A/B images.
-- **No partition table and no grow-on-first-boot.** Either would let one image
-  fit any disk; neither exists yet.
-- **Multi-node is exercised less than single-node.** `k0smosctl cluster create
-  --controllers N --workers M` is a first-class command, and
-  `e2e/cluster_test.go`'s `TestThreeControllerWorkerCluster` boots a
-  three-controller etcd quorum that joins with a minted token and reaches
-  Ready — the first test that exercises k0smos as more than one machine. The
-  dedicated worker role is covered by unit tests (config generation,
-  join-token placement) but not yet by an e2e boot, and there is one
-  multi-node e2e test against four for the single-node path.
-- **`k0smosctl` talks to local guests only.** `kubeconfig`, `shutdown` and `reboot`
-  use a virtio-serial control port that the QEMU runner attaches and a KubeVirt VMI
-  does not. `gen` is host-side and works anywhere.
-- **Cluster API has never been reconciled.** `examples/capi-kubevirt.yaml` was
-  derived from the providers' Go types and never applied. The cloud-init contract
-  it relies on is covered by e2e tests; the loop itself is not.
-- **Physical hardware is untested.** The complete amd64 qcow2 has booted through
-  OVMF/GRUB, found its GPT partitions, autoloaded drivers, mounted EROFS + `/var`,
-  acquired DHCP and started k0s; the next evidence must come from real machines.
-- **CI has never executed** — the repository has no remote.
-- **Everything runs as root.** `/etc/passwd` exists only so k0s stops warning.
+k0smos is an early-stage project. The table below separates implemented and
+tested workflows from intended integrations.
 
-Two entries have since been dealt with and are recorded here because the reasoning
-matters:
+| Area | Status | Evidence / gap |
+|---|---|---|
+| Local single-node cluster | Tested | created under QEMU and checked for node readiness in CI |
+| Local multi-controller cluster | Tested | controllers join and reach Ready over the userspace guest network |
+| Dedicated local workers | Partially tested | generation and role logic have unit coverage; a worker boot is not yet an e2e CI path |
+| Immutable EROFS system | Tested | direct-kernel and UEFI boot paths verify the read-only root and writable `/var` |
+| amd64 metal image | Firmware-tested | boots through OVMF, GRUB, GPT, EROFS, and clean shutdown |
+| arm64 metal image | Built | release artifact is produced; equivalent firmware smoke coverage is pending |
+| KubeVirt OCI image | Built | kernelBoot artifact and VM example exist; live KubeVirt validation is pending |
+| Cluster API with KubeVirt | Experimental | manifests exist but have not completed reconciliation on a management cluster |
+| Cluster API with Metal3 | Experimental | image reference exists; physical provisioning has not been validated |
+| Physical hardware | Untested | driver coverage and firmware behavior require a real hardware matrix |
+| Public-cloud images | Not implemented | no AMI, Azure image, GCP image, or provider metadata client |
 
-- **Monolithic kernel** — done, and it is the default. Kata's guest kernel builds
-  in virtio, ext4, overlayfs and netfilter, so the named-module class of failure
-  does not arise. Hardware drivers on the modular path are autoloaded from
-  `modules.alias` rather than named.
-- **Config-drive / IMDS** — done for config-drive and NoCloud, including hostname
-  and join tokens. Read in userspace, so it needs no kernel filesystem support.
-  There is no IMDS client: CAPI attaches a drive, and nothing so far has needed
-  the network path.
+## Product limitations
+
+- There is no in-place, A/B, or API-driven OS upgrade. Roll out a new artifact
+  and replace machines.
+- There is no interactive shell or SSH escape hatch. Plan for serial console and
+  Kubernetes-level observability.
+- `k0smosctl` machine lifecycle and kubeconfig commands use a local QEMU control
+  socket. They do not manage remote KubeVirt or physical machines.
+- The cloud-init implementation is intentionally limited. Arbitrary `runcmd`
+  shell commands are not executed.
+- Everything inside the node runs as root; the image is minimized through
+  immutability and the absence of general-purpose tools, not process-level user
+  isolation.
+
+Do not present an experimental integration as supported merely because its
+artifact can be built. A platform becomes supported when its provisioning,
+bootstrap, readiness, replacement, and clean shutdown paths are exercised end to
+end.

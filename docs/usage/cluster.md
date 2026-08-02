@@ -1,50 +1,72 @@
-# Create a local cluster
+# Local clusters
 
-`cluster create` is the normal local entry point. With no `--image`, it resolves
-the latest GitHub release for the selected architecture, downloads the complete
-qcow2, verifies the adjacent `.sha256` release asset, and stores it under
-`~/.cache/k0smos/images/<tag>/`:
+`k0smosctl cluster create` is the primary local workflow. It turns one platform
+artifact into a ready single- or multi-machine k0s cluster.
+
+## Create a cluster
+
+```bash
+k0smosctl cluster create --name dev -o kubeconfig
+```
+
+By default this creates one controller that also runs workloads. To create an HA
+control plane with dedicated workers:
 
 ```bash
 k0smosctl cluster create \
   --name dev \
-  --arch amd64 \
+  --controllers 3 \
+  --workers 2 \
   -o kubeconfig
-
-KUBECONFIG=kubeconfig kubectl get nodes
 ```
 
-Without topology flags this creates one controller that also runs workloads. For
-an HA control plane and separate workers:
+Every machine receives a clone of the same image and a generated configuration
+drive. A rootless userspace network connects the guests. The first controller
+bootstraps the cluster and provides role-specific join tokens for the remaining
+machines.
+
+The command returns only after the requested nodes are Ready.
+
+## Select an artifact
+
+With no image flags, the CLI downloads and verifies the latest release:
 
 ```bash
-k0smosctl cluster create --name dev --controllers 3 --workers 2 -o kubeconfig
+k0smosctl cluster create --name dev
 ```
 
-The command creates one clone and one config drive per machine, starts a rootless
-shared Ethernet segment, boots the initial controller, asks it to mint the
-role-specific join tokens, and then starts the other machines. It returns only
-after the Kubernetes API reports the requested number of nodes and every node is
-Ready. `--dry-run` prints names, roles, addresses, and forwarded API ports without
-creating state.
+Pin a release or use a local image:
 
-The release API is checked on later runs, but the large image is downloaded only
-once for each tag and architecture. k0smos uses the embedded k0s release as the
-release identity: tag `v1.36.3+k0s.0` is the complete artifact set built with that
-exact k0s binary. `--release v1.36.3+k0s.0` pins that set; `--cache-dir` moves the
-cache. If GitHub cannot be reached, the last verified
-cached `latest` artifact is used. For development or an internal mirror,
-`--image /path/to/k0smos-metal-x86_64.qcow2` bypasses release resolution entirely.
-Set `GITHUB_TOKEN` or `GH_TOKEN` when the repository is private or anonymous API
-rate limits are too low.
+```bash
+k0smosctl cluster create --name dev --release v1.36.3+k0s.0
+k0smosctl cluster create --name dev --image ./k0smos-metal-x86_64.qcow2
+```
 
-All machines still appear in `k0smosctl machine list`, with names such as
-`dev-controller-0` and `dev-worker-0`. Their disks and consoles use the normal
-per-machine state directories. The cluster's config drives and network-daemon
-metadata live under `~/.local/state/k0smos/.clusters/dev/`.
+The release cache is reused between clusters. Each machine disk remains private
+to that machine.
 
-Remove the whole local cluster cleanly with:
+## Inspect and remove
+
+Cluster machines appear in the normal machine list:
+
+```bash
+k0smosctl machine list
+k0smosctl machine logs --name dev-controller-0 -f
+```
+
+Remove the cluster as one operation:
 
 ```bash
 k0smosctl cluster rm --name dev
 ```
+
+Do not remove individual cluster machine directories manually. `cluster rm`
+coordinates clean shutdown, the shared network, and all recorded cluster state.
+
+## State locations
+
+- release cache: `~/.cache/k0smos/images/`
+- machine state: `~/.local/state/k0smos/<machine>/`
+- cluster state: `~/.local/state/k0smos/.clusters/<cluster>/`
+
+`K0SMOS_CACHE_DIR` and `K0SMOS_STATE_DIR` relocate these roots.

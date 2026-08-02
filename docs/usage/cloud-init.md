@@ -1,74 +1,104 @@
-# Configure a node with cloud-init
+# Machine configuration
 
-This is the whole configuration interface. `k0smosctl` builds the drive — it
-writes the ISO itself, so there is no `xorriso` and no Docker involved:
+k0smos machines are configured before k0s starts. There is no shell, SSH, or
+configuration agent to modify a running node.
 
-```bash
-make ctl
+Configuration arrives on either:
 
-# put files on the node, taking their permissions from the source file
-k0smosctl gen --file k0s.yaml:/etc/k0s/k0s.yaml --hostname demo-node -o dist/cidata.iso
+- a NoCloud ISO labelled `cidata`; or
+- an OpenStack config-drive labelled `config-2`.
 
-k0smosctl machine up --cidata dist/cidata.iso
-```
+k0smos reads both formats directly in userspace. This is the same interface used
+by local `k0smosctl` machines and by Cluster API providers.
 
-For a cloud-config you have written or rendered elsewhere, pass it whole
-(`-` reads stdin):
+## Generate a local configuration drive
 
 ```bash
-k0smosctl gen --user-data cloud-config.yaml --hostname demo-node -o dist/cidata.iso
+k0smosctl gen \
+  --hostname node-1 \
+  --file k0s.yaml:/etc/k0s/k0s.yaml \
+  -o node-1.iso
+
+k0smosctl machine up --name node-1 --cidata node-1.iso
 ```
 
-It checks what it generates with the same parser the node uses, so a drive that
-would be ignored is refused here rather than booting into a machine that comes up
-silently unconfigured. That catches malformed YAML, and also cloud-config missing
-its `#cloud-config` first line — which k0smos ignores by design, so writing one
-produces a drive with no effect. Nothing is written when it refuses.
+`gen` writes the ISO without external tooling and validates the configuration
+with the same parser used in the guest.
 
-Building the drive by hand still works if you prefer — the format is nothing
-special:
+To use an existing cloud-config document:
 
 ```bash
-xorriso -as mkisofs -V cidata -r -o dist/cidata.iso /tmp/cidata
+k0smosctl gen --user-data cloud-config.yaml --hostname node-1 -o node-1.iso
 ```
 
-`-r` (Rock Ridge) is required; `-J` (Joliet) is not.
+The document must begin with `#cloud-config`.
 
-Rock Ridge is what preserves the name `user-data`, whose hyphen is outside the
-ISO9660 charset.
+## Supported cloud-init fields
 
-The drive is read **without being mounted** — k0smos parses the ISO itself — so no
-kernel filesystem support is involved. An OpenStack config-drive works too:
-label it `config-2` and use `openstack/latest/user_data` and
-`openstack/latest/meta_data.json`.
+### `write_files`
 
-## What is supported
+Supported fields are `path`, `content`, `permissions`, and `encoding`. Encodings
+may be plain, `b64`, `gzip+base64`, or `gz+b64`. Parent directories are created
+automatically.
 
-**`write_files`** — `path`, `content`, `permissions`, and `encoding` of `b64`,
-`gzip+base64` (or `gz+b64`), or plain. Parent directories are created. Bare
-`gzip` without base64 is *not* supported: content arrives as a JSON/YAML string
-and raw deflate bytes do not survive that.
+Use `write_files` for:
 
-**`meta-data`** — `local-hostname` sets the hostname, beating `k0smos.hostname=`
-on the cmdline. `instance-id` is read and otherwise unused.
+- `/etc/k0s/k0s.yaml`;
+- `/etc/k0s/join-token`;
+- registry credentials and trust material; and
+- Kubernetes manifests under `/var/lib/k0s/manifests/<stack>/`.
 
-**`k0smos`** — an optional cloud-config section with `ip`, `iface`, `gateway`,
-and `dns`. These have the same meanings as their `k0smos.*` kernel parameters and
-override only the fields present. They are read before networking is configured.
-`cluster create` uses this to give each clone a distinct address on its second
-NIC without changing the shared artifact.
+### Hostname and network
 
-Per-machine network values applied before k0s starts; used by `cluster create` so
-identical artifacts can have distinct cluster addresses.
+`local-hostname` in metadata sets the hostname. An optional `k0smos` section in
+cloud-config sets machine networking:
 
-**`runcmd`** — **interpreted, never executed.** Nothing named in user-data is ever
-exec'd. Four verbs are carried out with syscalls: `mkdir` (with `-p`), `chmod`,
-`chown`, and `ln -s`. A `k0s install <role> …` is translated into the equivalent
-foreground command, since k0smos supervises one process instead of registering a
-systemd unit, and `--env KEY=VALUE` is lifted into the child's environment.
-`systemctl` calls are dropped silently. Everything else — `curl`, `sed`, a script,
-or any string containing `|`, `>`, `&&`, `$(…)` — is refused and logged as
-`UNSUPPORTED runcmd`.
+```yaml
+#cloud-config
+k0smos:
+  iface: eth0
+  ip: 10.20.0.12/24
+  gateway: 10.20.0.1
+  dns: 10.20.0.53
+```
 
-If a provider's user-data depends on something in that last category, the machine
-will boot and tell you what it ignored. It will not half-apply it.
+Values supplied here override the corresponding kernel command-line fields.
+
+### `runcmd`
+
+k0smos **interprets** a deliberately small subset; it never invokes a shell.
+Supported operations are:
+
+- `mkdir -p`
+- `chmod`
+- `chown`
+- `ln -s`
+- `k0s install controller ...`
+- `k0s install worker ...`
+
+For `k0s install`, k0smos translates the service-install command into the
+foreground process it supervises. `systemctl` entries are ignored because there
+is no service manager.
+
+Other commands are logged as `UNSUPPORTED runcmd` and are not executed. Avoid
+bootstrap configuration that depends on shell scripts, package installation,
+`curl`, pipes, or redirection.
+
+## Kubernetes manifests
+
+k0s reconciles files beneath `/var/lib/k0s/manifests/<stack>/`. Delivering them
+with `write_files` applies them on the first reconciliation without running
+`kubectl` on the node:
+
+```bash
+k0smosctl gen \
+  --file namespace.yaml:/var/lib/k0s/manifests/platform/namespace.yaml \
+  --file deployment.yaml:/var/lib/k0s/manifests/platform/deployment.yaml \
+  -o node-1.iso
+```
+
+## Security boundary
+
+Configuration data can contain cluster-admin credentials and controller join
+tokens. Protect configuration drives and provider bootstrap Secrets as you
+would protect the machine disk itself.

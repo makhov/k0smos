@@ -153,5 +153,5 @@ clean-dist:
 docs:
 	$(MAKE) -C docs docs
 
-docs-serve:
-	$(MAKE) -C docs serve
+docs-serve-dev:
+	$(MAKE) -C docs serve-dev

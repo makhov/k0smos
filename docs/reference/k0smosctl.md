@@ -1,26 +1,11 @@
 # k0smosctl
 
-!!! note "This page is generated"
-    Every description and flag table below is copied from `k0smosctl <command>
-    --help`, not typed by hand, so it cannot drift from the code by transcription
-    error. When you add or change a flag, regenerate it:
-
-    ```bash
-    go build -o /tmp/k0smosctl ./cmd/k0smosctl
-    for c in gen "machine up" "machine logs" "machine list" "machine shutdown" \
-             "machine reboot" "machine rm" "cluster create" "cluster kubeconfig" \
-             "cluster token" "cluster rm"; do
-      echo "=== k0smosctl $c ==="
-      /tmp/k0smosctl $c --help
-    done
-    ```
-
-    then update the affected section(s) of this page by hand from the output.
-
 `k0smosctl` is the host-side CLI that builds cloud-init drives and drives local
-machines and clusters. See [The CLI](../usage/cli.md) for the narrative — what it
-replaces, how the control port works, and the security note. This page is the
-flag reference.
+machines and clusters. This page is the flag reference; start with
+[Get started](../install/quick-start.md) for the normal workflow.
+
+The CLI operates local QEMU machines. It does not replace `virtctl`, Metal3, or
+Cluster API for remote machine lifecycle.
 
 ## k0smosctl gen
 
@@ -80,7 +65,7 @@ guest down cleanly rather than killing it.
 | Flag | Description |
 |---|---|
 | `--api-port int` | host port forwarded to the API server; 0 forwards nothing (default 6443) |
-| `--arch string` | guest architecture: amd64 or arm64 (default "arm64") |
+| `--arch string` | guest architecture: amd64 or arm64 (defaults to the host architecture) |
 | `--attach` | stay in the foreground streaming the console; ctrl-c then shuts the guest down cleanly |
 | `--cache-dir string` | release artifact cache (default ~/.cache/k0smos/images) |
 | `--cidata string` | cloud-init drive to attach, as written by 'k0smosctl gen' |
@@ -203,7 +188,7 @@ kubeconfig before returning.
 | Flag | Description |
 |---|---|
 | `--api-port int` | host port for the first controller; later controllers use consecutive ports (default 6443) |
-| `--arch string` | guest architecture: amd64 or arm64 (default "arm64") |
+| `--arch string` | guest architecture: amd64 or arm64 (defaults to the host architecture) |
 | `--cache-dir string` | release artifact cache (default ~/.cache/k0smos/images) |
 | `--controllers int` | number of controller machines (default 1) |
 | `--cpus int` | CPUs per machine (default 2) |
