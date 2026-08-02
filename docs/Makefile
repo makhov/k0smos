@@ -24,6 +24,9 @@ serve: .require-mkdocs
 	touch -- '$@'
 
 # Serve the site from the container, so no local Python is needed.
+# /k0smos here must match WORKDIR and PYTHONPATH in
+# docs/Dockerfile.serve-dev — rename one, rename both, or mkdocs fails
+# at startup with ModuleNotFoundError.
 .PHONY: serve-dev
 serve-dev: .docker-image.serve-dev.stamp
 	docker run --rm -it -p 8000:8000 -v '$(CURDIR)/..:/k0smos' k0smosdocs.docker-image.serve-dev
