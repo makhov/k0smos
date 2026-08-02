@@ -32,6 +32,11 @@ nav:
       - Cloud: deployment/cloud.md
       - Per-machine configuration: deployment/per-machine.md
       - Operating it: deployment/operating.md
+  - Reference:
+      - Kernel cmdline options: reference/cmdline.md
+      - k0smosctl: reference/k0smosctl.md
+      - Script environment variables: reference/env.md
+      - The read-only root: reference/rootfs.md
 
 theme:
   name: "material"

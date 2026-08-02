@@ -79,6 +79,9 @@ exactly what a user-supplied config wants.
 Every row came from a boot that failed without it, which is why the list is this
 shape rather than "mount tmpfs over everything".
 
+For the operational side — which `ROOTFS` value produces what, and which kernels
+can mount it — see [The read-only root](reference/rootfs.md).
+
 ## Why an initramfs at all
 
 The original design booted `root=/dev/vda init=/sbin/k0smos` directly. That
