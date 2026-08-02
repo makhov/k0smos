@@ -57,51 +57,7 @@ k0smosctl machine up --cidata cidata.iso
 checked with the same parser the node uses, so a drive that would be ignored —
 malformed YAML, or a cloud-config missing its `#cloud-config` first line — is
 refused before it can boot into a silently unconfigured machine. See
-[usage.md](docs/usage.md#configure-a-node-with-cloud-init) for more.
-
-## Talking to a running node
-
-A node has no SSH and no shell. It answers a small set of requests on a
-virtio-serial control port instead:
-
-```bash
-k0smosctl cluster kubeconfig -o kubeconfig   # then KUBECONFIG=kubeconfig kubectl get nodes
-k0smosctl cluster token --role controller    # a join token, so another machine can join
-k0smosctl machine shutdown                   # or reboot — never kill QEMU
-```
-
-The kubeconfig comes off the node's filesystem, so it works whether or not k0s is
-still running, and says so plainly when the cluster has not written its PKI yet.
-The API server address is rewritten to `127.0.0.1`, where the local QEMU machine
-forwards 6443.
-
-A join token is signed with the cluster CA, so only a machine already in the
-cluster can produce one — the node runs `k0s token create` and sends the result
-back. That is what lets a machine with no shell be joined to; see
-[docs/usage.md](docs/usage.md#more-than-one-node) for the whole flow.
-
-Whoever can write to that port obtains cluster-admin, and a controller token
-confers control-plane membership. That is not a new exposure — the same channel
-stops the machine — but do not expose the port anywhere the disk is not equally
-exposed.
-
-From `user-data`:
-
-| Key | Behaviour |
-|---|---|
-| `k0smos`: `ip`, `iface`, `gateway`, `dns` | Per-machine network values applied before k0s starts; used by `cluster create` so identical artifacts can have distinct cluster addresses |
-| `write_files` | Written with the requested `permissions`; parent directories created. Encodings: plain, `b64`/`base64`, `gzip+base64` (and `gz+b64` spellings) |
-| `runcmd`: `k0s install <role> …` | Becomes the supervised workload (`k0s <role> …`); `--env KEY=VAL` goes to the child's environment |
-| `runcmd`: `k0s start`/`stop`, `systemctl`, `service` | Dropped — there is no service manager |
-| `runcmd`: `mkdir`, `chmod`, `chown`, `ln -s` | Interpreted and performed via syscalls |
-| `runcmd`: anything else | Logged `UNSUPPORTED` and skipped |
-
-From `meta-data`: `local-hostname` sets the hostname (overriding
-`k0smos.hostname=`), plus `instance-id`.
-
-Kubernetes resources ship as files, not commands: k0s applies anything under
-`/var/lib/k0s/manifests/<stack>/`, so an addon is a `write_files` entry — which is
-what makes refusing arbitrary commands practical.
+[usage/cloud-init.md](docs/usage/cloud-init.md) for more.
 
 ## Kernel cmdline options
 
@@ -199,29 +155,6 @@ root, preserving the root's byte identity with KubeVirt.
 
 ext4 remains supported for direct-kernel development images and for the writable
 data volume, so `mkfs.ext4` stays in the image.
-
-## The data volume
-
-`/var/lib/k0s` — etcd, containerd, kubelet, pulled images — can live on a separate
-volume, which is what lets a machine be disposable without being diskless:
-
-```
-k0smos.data=auto
-```
-
-Attach an ephemeral per-VM disk (KubeVirt `emptyDisk`) and it dies with the
-machine; attach a PVC and it survives. Same image either way.
-
-How `auto` picks, and why it is safe:
-
-1. A volume already labelled `k0smos-data` is mounted as-is — the steady state
-   after the first boot.
-2. Otherwise it looks for a device with **no recognised filesystem**, so the root
-   and the cloud-init drive can never be selected.
-3. Exactly one blank device is formatted. Zero is not an error — k0s then uses the
-   root filesystem. **More than one is refused**, not guessed at.
-
-k0smos never formats a device that already has a filesystem.
 
 ## Script environment variables
 

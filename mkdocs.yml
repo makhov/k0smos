@@ -12,7 +12,16 @@ nav:
       - Quick start: install/quick-start.md
       - What gets built: install/artifacts.md
       - Which kernel: install/kernel.md
-  - Usage: usage.md
+  - Usage:
+      - The CLI: usage/cli.md
+      - Boot a node locally: usage/boot.md
+      - Configure with cloud-init: usage/cloud-init.md
+      - Ship Kubernetes manifests: usage/manifests.md
+      - The data volume: usage/data-volume.md
+      - Reach the cluster: usage/kubeconfig.md
+      - A multi-node cluster: usage/multi-node.md
+      - Shut it down: usage/shutdown.md
+      - Leftovers: usage.md
   - Architecture: architecture.md
   - Deployment: deployment.md
 
