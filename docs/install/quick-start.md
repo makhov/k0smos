@@ -1,90 +1,92 @@
 # Get started
 
-This guide creates a single-controller k0s cluster on the local machine. The
-controller also runs workloads.
+This guide creates a single-controller k0s cluster on your machine. The
+controller also runs workloads, so it is useful on its own.
 
 ## Prerequisites
 
-- Go 1.25 or newer, to build `k0smosctl`
 - QEMU with UEFI firmware
-- `kubectl`, to use the resulting cluster
-- hardware virtualization (KVM on Linux or HVF on macOS) is strongly recommended
+- `kubectl`
+- hardware virtualization: KVM on Linux, HVF on macOS
 
-Docker and Linux image-building tools are **not** required when consuming a
-published release.
+## 1. Install k0smosctl
 
-## 1. Build the CLI
+Download the binary for your host from the
+[latest release](https://github.com/makhov/k0smos/releases/latest):
 
 ```bash
-make ctl
+curl -sSLo k0smosctl \
+  https://github.com/makhov/k0smos/releases/latest/download/k0smosctl-$(uname -s | tr A-Z a-z)-$(uname -m)
+chmod +x k0smosctl
+sudo mv k0smosctl /usr/local/bin/
 ```
 
-This creates `dist/k0smosctl` for the host. The node image is downloaded in the
-next step.
+Check it runs:
+
+```bash
+k0smosctl --version
+```
 
 ## 2. Create a cluster
 
 ```bash
-./dist/k0smosctl cluster create --name dev -o kubeconfig
+k0smosctl cluster create --name dev
 ```
 
-The command:
+The command resolves the latest release for your architecture, downloads the
+node image and verifies its checksum, gives the machine its own copy of that
+image, boots it, waits for the Kubernetes node to become Ready, and writes
+`kubeconfig`.
 
-1. resolves the latest k0smos release for the host architecture;
-2. downloads the qcow2 and verifies its published SHA-256 checksum;
-3. creates a per-machine disk from that pristine image;
-4. boots the machine and waits for the Kubernetes node to become Ready; and
-5. writes an immediately usable admin kubeconfig.
+Images are cached under `~/.cache/k0smos/images/`, so later clusters start
+without downloading again. Machine and cluster state lives under
+`~/.local/state/k0smos/`.
 
-Images are cached under `~/.cache/k0smos/images/`. Machine and cluster state is
-kept under `~/.local/state/k0smos/`.
-
-## 3. Use the cluster
+## 3. Use it
 
 ```bash
 KUBECONFIG=kubeconfig kubectl get nodes
 KUBECONFIG=kubeconfig kubectl create deployment nginx --image=nginx
 ```
 
-Follow the machine console when diagnosing a boot:
+To watch what a machine is doing:
 
 ```bash
-./dist/k0smosctl machine logs --name dev-controller-0 -f
+k0smosctl machine logs --name dev-controller-0 -f
 ```
 
 ## 4. Remove it
 
 ```bash
-./dist/k0smosctl cluster rm --name dev
+k0smosctl cluster rm --name dev
 ```
 
-This shuts every machine down cleanly before deleting its local disks and
-network state.
+Every machine is shut down cleanly before its disk and network state are
+deleted.
 
-## Useful variations
+## Variations
 
-Create three controllers and two workers:
+A three-controller control plane with two workers:
 
 ```bash
-./dist/k0smosctl cluster create \
-  --name dev \
-  --controllers 3 \
-  --workers 2 \
-  -o kubeconfig
+k0smosctl cluster create --name dev --controllers 3 --workers 2
 ```
 
-Pin the artifact set to an exact k0s release:
+An exact k0s release rather than the latest:
 
 ```bash
-./dist/k0smosctl cluster create --release v1.36.3+k0s.0
+k0smosctl cluster create --name dev --release v1.36.3+k0s.0
 ```
 
-Use a locally built or internally mirrored image without contacting GitHub:
+An image you already have, without contacting GitHub:
 
 ```bash
-./dist/k0smosctl cluster create \
-  --image /path/to/k0smos-metal-x86_64.qcow2
+k0smosctl cluster create --name dev --image ./k0smos-metal-x86_64.qcow2
 ```
 
-Next, see [local clusters](../usage/cluster.md), [individual machines](../usage/boot.md),
-or the [deployment artifacts](../deployment/artifacts.md).
+## Next
+
+- [Local clusters](../usage/cluster.md) — multi-machine clusters, tokens, state
+- [Local machines](../usage/boot.md) — running one machine at a time
+- [Machine configuration](../usage/cloud-init.md) — what a cloud-init drive can
+  carry

@@ -47,7 +47,9 @@ overwrites the selected disk.
 The machine still needs a supported cloud-init or config-drive source containing
 its k0s role and any join token. The release image is intentionally generic.
 
-!!! warning "Hardware status"
-    amd64 firmware boot is tested under QEMU with OVMF. Physical server models,
-    storage controllers, and NICs have not yet been validated as a compatibility
-    matrix.
+## Drivers
+
+The metal image uses a hardware-oriented kernel and carries its driver modules in
+the initramfs. At boot k0smos matches each device's `modalias` against
+`modules.alias`, the same way udev does, so storage controllers and NICs are
+loaded without being named in advance.

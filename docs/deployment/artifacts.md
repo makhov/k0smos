@@ -52,15 +52,14 @@ The qcow2 and raw images contain a GPT disk with:
 The image is a machine template. Each machine gets its own disk or clone; never
 boot the published or cached image in place.
 
-## Building locally
+## Verifying a download
 
-Published artifacts are the normal installation path. Contributors can build
-the platform wrappers with:
+Every release publishes `SHA256SUMS-<arch>.txt`, and the qcow2 additionally has
+its own `.sha256` file for tools such as Ironic that fetch a checksum alongside
+the image.
 
 ```bash
-make metal   # qcow2 and raw disk
-make oci     # local KubeVirt OCI image
+sha256sum -c SHA256SUMS-x86_64.txt
 ```
 
-These targets require Docker and Linux image-building tools. See the repository
-Makefile for lower-level development targets.
+`k0smosctl` verifies the checksum itself when it downloads an artifact.
