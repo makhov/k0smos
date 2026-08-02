@@ -1,15 +1,13 @@
-# Using k0smos
+# Troubleshooting
 
-- [When something goes wrong](#when-something-goes-wrong)
+k0smos has **no shell and no SSH**. Everything a machine needs is supplied
+before it boots, and everything it reports comes out of the console — that is
+the design, not a gap. So there are two ways in: read the console, or read the
+disk offline once the guest is down.
 
-Throughout: k0smos has **no shell and no SSH**. Everything a machine needs is
-supplied before it boots, and everything it reports comes out of the console.
-That is the design, not a gap.
-
-## When something goes wrong
-
-The console is the only interface, and k0smos is deliberately talkative. Lines
-worth recognising:
+**Read the console.** Every init step is logged with a `k0smos:` prefix, and k0s
+logs to the same console. `SERIAL=dist/console.log` captures it headlessly.
+k0smos is deliberately talkative. Lines worth recognising:
 
 | Line | Meaning |
 |---|---|
@@ -29,6 +27,24 @@ Two failures that look like something else:
   missing netfilter module instead.
 - **DNS timeouts under QEMU on macOS.** slirp's resolver never answers. Pass
   `k0smos.dns=1.1.1.1`; the local boot scripts already do.
+
+## Container logs are missing from the console
+
+Container logs never reach the console, but the root is a raw ext4 file, so
+`debugfs` reads it without mounting or root (Docker because `debugfs` is not on
+macOS):
+
+```bash
+docker run --rm -v "$PWD/dist:/d" alpine:3.20 sh -c '
+  apk add -q --no-cache e2fsprogs e2fsprogs-extra >/dev/null
+  debugfs -R "ls /var/log/pods" /d/k0smos.img'
+```
+
+> **Shut the guest down cleanly first.** Killing QEMU leaves `Block bitmap
+> checksum does not match`, which loses recent writes and makes directories read
+> as empty — a diagnosis will silently mislead you.
+
+## e2e failures
 
 For e2e failures, guest consoles are saved to `dist/e2e/<test>.console.log`. They
 are kept on failure only — set `K0SMOS_E2E_KEEP_CONSOLE=1` to keep them for
