@@ -1,52 +1,85 @@
 # Troubleshooting
 
-k0smos has **no shell and no SSH**. Everything a machine needs is supplied
-before it boots, and everything it reports comes out of the console — that is
-the design, not a gap. So there are two ways in: read the console, or read the
-disk offline once the guest is down.
+k0smos has no shell or SSH. Start with the machine console.
 
-**Read the console.** Every init step is logged with a `k0smos:` prefix, and k0s
-logs to the same console. `SERIAL=dist/console.log` captures it headlessly.
-k0smos is deliberately talkative. Lines worth recognising:
-
-| Line | Meaning |
-|---|---|
-| `no module tree; assuming a monolithic kernel` | Normal on the default kernel |
-| `warn: /lib/modules has module trees […] but none for the running kernel` | Kernel and module tree are out of step — the images were built against a different kernel |
-| `reading /dev/vdX (iso9660, LABEL=cidata) directly, no mount` | The cloud-init drive was found and is being parsed |
-| `metadata: could not read user-data` | The drive was found but is unreadable — bootstrap data was **not** applied |
-| `refusing to guess: N blank devices` | `k0smos.data=auto` with more than one candidate; name the device explicitly |
-| `UNSUPPORTED runcmd […]` | A user-data command k0smos will not execute |
-| `warn: dhcp on eth0` | No lease; the node has loopback only and cannot pull images |
-
-Two failures that look like something else:
-
-- **kube-router crashlooping with `failed to synchronize cache`** is usually *not*
-  a kube-router problem. It means no service rules were programmed, so the
-  `kubernetes` ClusterIP does not work and it cannot reach the API. Look for a
-  missing netfilter module instead.
-- **DNS timeouts under QEMU on macOS.** slirp's resolver never answers. Pass
-  `k0smos.dns=1.1.1.1`; the local boot scripts already do.
-
-## Container logs are missing from the console
-
-Container logs never reach the console, but the root is a raw ext4 file, so
-`debugfs` reads it without mounting or root (Docker because `debugfs` is not on
-macOS):
+For a local machine:
 
 ```bash
-docker run --rm -v "$PWD/dist:/d" alpine:3.20 sh -c '
-  apk add -q --no-cache e2fsprogs e2fsprogs-extra >/dev/null
-  debugfs -R "ls /var/log/pods" /d/k0smos.img'
+k0smosctl machine logs --name <machine> -f
 ```
 
-> **Shut the guest down cleanly first.** Killing QEMU leaves `Block bitmap
-> checksum does not match`, which loses recent writes and makes directories read
-> as empty — a diagnosis will silently mislead you.
+Every PID 1 message starts with `k0smos:`. k0s writes to the same console after
+it starts.
 
-## e2e failures
+## The machine does not start
 
-For e2e failures, guest consoles are saved to `dist/e2e/<test>.console.log`. They
-are kept on failure only — set `K0SMOS_E2E_KEEP_CONSOLE=1` to keep them for
-passing tests too, which is the only way to tell a passing assertion from one that
-was skipped.
+Run a dry run to inspect the resolved image, firmware, and QEMU arguments:
+
+```bash
+k0smosctl machine up --name test --dry-run
+```
+
+Common host-side causes are missing QEMU, missing UEFI firmware, an architecture
+mismatch, or an API port already in use.
+
+## The release cannot be downloaded
+
+Pin a known release or use a local image:
+
+```bash
+k0smosctl machine up --release v1.36.3+k0s.0
+k0smosctl machine up --image ./k0smos-metal-x86_64.qcow2
+```
+
+Set `GITHUB_TOKEN` or `GH_TOKEN` for private repositories or GitHub API rate
+limits. A previously verified cached release remains usable when GitHub is
+temporarily unavailable.
+
+## The node does not become Ready
+
+Look for these console stages in order:
+
+1. the EROFS root is discovered and mounted read-only;
+2. the `k0smos-data` partition is mounted at `/var`;
+3. networking receives an address;
+4. cloud-init or config-drive data is applied; and
+5. k0smos starts `k0s controller` or `k0s worker`.
+
+Useful messages:
+
+| Console message | Meaning |
+|---|---|
+| `no module tree; assuming a monolithic kernel` | normal for the VM kernel |
+| `kernel and modules are out of step` | the kernel and initramfs came from different builds |
+| `metadata: could not read user-data` | the configuration drive was found but could not be applied |
+| `UNSUPPORTED runcmd` | the supplied cloud-init requires a command k0smos deliberately does not execute |
+| `warn: dhcp` | the interface did not receive a lease |
+| `refusing to guess: N blank devices` | `k0smos.data=auto` found several possible data disks; identify one explicitly |
+
+## Kubeconfig is not ready
+
+`cluster kubeconfig` fails until k0s creates its admin configuration. For a
+machine started manually, wait for the API server or increase `--timeout`:
+
+```bash
+k0smosctl cluster kubeconfig --name node-1 --timeout 30s -o kubeconfig
+```
+
+`cluster create` already waits for readiness and writes the kubeconfig itself.
+
+## A machine will not shut down
+
+Check that the console reached `listening for host commands` and that the named
+machine's control socket still exists. Retry with:
+
+```bash
+k0smosctl machine shutdown --name <machine> --timeout 30s
+```
+
+Avoid deleting state or killing QEMU while it is writing `/var`.
+
+## CI e2e failures
+
+Failed guest consoles are uploaded by CI and are also kept locally under
+`dist/e2e/*.console.log`. Set `K0SMOS_E2E_KEEP_CONSOLE=1` to retain logs from
+passing local e2e runs.

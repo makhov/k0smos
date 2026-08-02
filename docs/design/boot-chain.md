@@ -4,8 +4,8 @@ Why the boot sequence is ordered the way it is. Nearly every step exists to
 prevent a specific failure that was observed on a real boot; the ordering looks
 arbitrary until you know what each one is for.
 
-This is the *why*. For how to use the thing, see [Usage](../usage/cli.md); for
-running it on KubeVirt or Cluster API, [deployment/kubevirt.md](../deployment/kubevirt.md).
+This is the *why*. For the normal workflow, see [Get started](../install/quick-start.md);
+for KubeVirt or Cluster API, see [KubeVirt](../deployment/kubevirt.md).
 
 ```mermaid
 graph TD
@@ -31,11 +31,11 @@ firmware/QEMU/KubeVirt
                     └── k0smos as /sbin/k0smos   ← PID1, post-switch
                           ├── mount anything that did not come across
                           ├── load modules (again; harmless if already in)
-                          ├── prepare the data volume → /var/lib/k0s
+                          ├── prepare the data volume → /var
                           ├── set up cgroup2
                           ├── loopback up
-                          ├── network: DHCP or static, write /etc/resolv.conf
                           ├── read the cloud-init drive (no mount)
+                          ├── network: DHCP or static, write /etc/resolv.conf
                           │     ├── write_files → syscalls
                           │     ├── runcmd → interpreted, never executed
                           │     └── meta-data may supply the hostname
@@ -53,6 +53,5 @@ firmware/QEMU/KubeVirt
 ```
 
 Two orderings in there are load-bearing and easy to get backwards: the data volume
-is mounted before anything can write to `/var/lib/k0s`, and the cloud-init drive is
-read after networking (so an HTTP source could later work) but before the hostname
-is set (so it can supply one).
+is mounted before anything can write to `/var`, and the cloud-init drive is read
+before networking so it can supply the machine's address.

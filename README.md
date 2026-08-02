@@ -1,111 +1,83 @@
 # k0smos
 
-A minimal Go PID1 for running [k0s](https://k0sproject.io) Kubernetes nodes. No
-shell, no busybox, no systemd — the image contains k0smos, k0s, and a handful of
-libraries.
+k0smos runs [k0s](https://k0sproject.io/) as the machine's supervised workload.
+It is a minimal Linux PID 1, not a general-purpose distribution: there is no
+shell, SSH daemon, package manager, systemd, or mutable system partition.
 
-k0smos does the OS init a Kubernetes node needs and nothing else: mount
-pseudo-filesystems, load kernel modules, switch onto a real root, prepare a data
-volume, configure networking, read its bootstrap data off a cloud-init drive, then
-supervise one workload for the life of the machine and shut it down cleanly when
-asked.
+A node boots an immutable EROFS system, reads its machine-specific configuration
+from cloud-init, mounts writable state at `/var`, and starts k0s. Nodes are
+replaced instead of modified in place.
 
-There is no SSH and no shell to get into. A machine is configured entirely by
-cloud-init — which is what Cluster API providers already produce — and replaced
-rather than administered. `runcmd` is **interpreted, never executed**.
+## Quick start
 
-Docs: **[usage.md](docs/usage.md)** (how to use it) ·
-[design/decisions.md](docs/design/decisions.md) (why the boot sequence is ordered as it is)
-· [deployment/kubevirt.md](docs/deployment/kubevirt.md) (KubeVirt, Cluster API)
-
-## Make targets
-
-| Target | What it does |
-|---|---|
-| `make test` | unit tests — no root, no VM |
-| `make ctl` | build `k0smosctl` into `dist/` (host platform) |
-| `make vet` | vet for the host and for `GOOS=linux` |
-| `make kernel` | fetch the Kata guest kernel |
-| `make kernel-alpine` | fetch Alpine `linux-virt` + its module tree |
-| `make k0s` | download the latest k0s release (~240 MB) |
-| `make initramfs` / `make root` | build the boot initramfs / canonical EROFS root |
-| `make metal` | build the one UEFI-bootable qcow2 consumed by Metal3 |
-| `make artifacts` | build the KubeVirt kernelBoot inputs and embedded-root initramfs |
-| `make smoke` | init-only boot, no k0s — the ~15s check while changing k0smos |
-| `make boot` | rebuild and boot the single metal qcow2 with `k0smosctl` |
-| `make e2e` | QEMU boots asserting on behaviour, no k0s (~10s/boot) |
-| `make e2e-full` | adds the k0s tests: node Ready, manifests, etcd leave |
-| `make accept` | boot headless, wait for `Ready`, power off |
-| `make clean-dist` | delete `dist/` |
-
-## Configuration: cloud-init
-
-The only configuration interface. A NoCloud ISO labelled `cidata` or an OpenStack
-config-drive labelled `config-2`, read **without being mounted** — so no kernel
-filesystem support is involved.
-
-`k0smosctl` builds the drive, writing the ISO itself so no `xorriso` (and on macOS
-no Docker) is needed:
+Build the host CLI, then create a local cluster from the latest published
+artifact:
 
 ```bash
 make ctl
-k0smosctl gen --file k0s.yaml:/etc/k0s/k0s.yaml --hostname node-1 -o cidata.iso
-k0smosctl machine up --cidata cidata.iso
+./dist/k0smosctl cluster create --name dev -o kubeconfig
+KUBECONFIG=kubeconfig kubectl get nodes
 ```
 
-`--user-data <file>` passes a cloud-config through whole instead. Either way it is
-checked with the same parser the node uses, so a drive that would be ignored —
-malformed YAML, or a cloud-config missing its `#cloud-config` first line — is
-refused before it can boot into a silently unconfigured machine. See
-[usage/cloud-init.md](docs/usage/cloud-init.md) for more.
-
-## Tests
+Remove it cleanly:
 
 ```bash
-make test       # unit tests: no root, no VM
-make e2e        # QEMU boots, no k0s
-make e2e-full   # adds the k0s tests
+./dist/k0smosctl cluster rm --name dev
 ```
 
-The e2e suite asserts on console output and, after a clean shutdown, on the
-guest's filesystem via `debugfs` — file contents, modes, symlinks, and that
-`e2fsck` finds nothing to repair. Consoles from failures land in
-`dist/e2e/<test>.console.log`.
+Requirements are Go 1.25+, QEMU with UEFI firmware, and hardware virtualization
+where available. Docker is required only to build OS artifacts locally.
 
-`e2e-full` includes a three-node cluster: three `k0s controller --enable-worker`
-guests on a shared Ethernet segment, joined with a token minted by the first, and
-checked by querying the API for three Ready nodes. Fetch the k0s airgap bundle
-first with `./image/fetch-airgap.sh` — without it every node pulls its images over
-QEMU's user-mode network and the run takes tens of minutes instead of a few.
+## Artifacts
 
-## Layout
+One upstream k0s release produces one same-tagged k0smos release set. Every
+platform wrapper for an architecture carries the same immutable system payload
+and exact k0s version.
 
-```
-cmd/k0smos/         PID1 entry point and boot sequence
-cmd/k0smosctl/      host-side CLI: builds configuration drives
-internal/sys/       every real syscall; other packages take a narrow interface
-internal/mount/     pseudo-filesystem mounts
-internal/module/    module loading: named set (dep + softdep + alias) plus
-                    autoload by device modalias
-internal/blkid/     UUID=/LABEL= resolution by probing superblocks directly
-internal/iso9660/   reads and writes cloud-init ISOs without mounting them
-internal/metadata/  cloud-init user-data/meta-data: parse, interpret, apply
-internal/datavol/   the data volume: find, format once, reuse
-internal/etcd/      giving up etcd membership on shutdown
-internal/switchroot/ initramfs → real root
-internal/cgroup/    cgroup2 unified hierarchy
-internal/net/       loopback and static addressing
-internal/dhcp/      DHCPv4 client with lease renewal
-internal/config/    kernel cmdline parsing
-internal/reaper/    zombie reaping
-internal/supervise/ child supervision with backoff
-internal/control/   host shutdown requests over virtio-serial
-internal/power/     ACPI power button
-internal/shutdown/  sync, unmount, remount-ro, reboot(2)
-image/              kernel/k0s fetchers, image builders, QEMU runner
-e2e/                QEMU boots asserting on console output and guest disks
-examples/           Cluster API manifests (never reconciled — see Limitations)
+| Target | Artifact |
+|---|---|
+| Local QEMU | UEFI-bootable qcow2, downloaded and managed by `k0smosctl` |
+| KubeVirt | OCI `kernelBoot` image with kernel and embedded-root initramfs |
+| Bare metal / Metal3 | UEFI-bootable qcow2 or compressed raw disk |
+
+Machine configuration is delivered separately through NoCloud or OpenStack
+config-drive data. This is the contract used by both `k0smosctl` and Cluster API
+bootstrap providers.
+
+## Documentation
+
+- [Get started](https://makhov.github.io/k0smos/install/quick-start/)
+- [Artifacts and releases](https://makhov.github.io/k0smos/deployment/artifacts/)
+- [KubeVirt and Cluster API](https://makhov.github.io/k0smos/deployment/kubevirt/)
+- [Bare metal and Metal3](https://makhov.github.io/k0smos/deployment/bare-metal/)
+- [Support status](https://makhov.github.io/k0smos/known-limitations/)
+- [CLI reference](https://makhov.github.io/k0smos/reference/k0smosctl/)
+
+## Build and test
+
+```bash
+make test       # unit tests
+make e2e        # fast QEMU boot tests
+make e2e-full   # k0s readiness and multi-node tests
+make metal      # qcow2 and raw platform image
+make oci        # KubeVirt OCI image
 ```
 
-Every package defines its own minimal interface over `internal/sys` and fakes it
-in tests, so the logic is unit-testable with no root and no VM.
+The repository layout is intentionally split between the node and the host:
+
+```text
+cmd/k0smos/       Linux PID 1 and boot lifecycle
+cmd/k0smosctl/    host CLI for local machines and clusters
+internal/         boot, configuration, networking, and shutdown components
+image/            kernels, root filesystem, and platform packaging
+e2e/              QEMU-based acceptance tests
+examples/         experimental Cluster API manifests
+```
+
+## Project status
+
+Local QEMU clusters and amd64 UEFI boot are tested in CI. The KubeVirt and
+Cluster API manifests have not yet completed an end-to-end reconciliation, and
+the metal image has not yet been validated on physical hardware. See the
+[support matrix](https://makhov.github.io/k0smos/known-limitations/) for the
+current boundary.

@@ -8,39 +8,24 @@ edit_uri: ""
 
 nav:
   - Overview: index.md
-  - Installation:
-      - Quick start: install/quick-start.md
-      - What gets built: install/artifacts.md
-      - Which kernel: install/kernel.md
-  - Usage:
-      - The CLI: usage/cli.md
-      - Boot a node locally: usage/boot.md
-      - Create a local cluster: usage/cluster.md
-      - Configure with cloud-init: usage/cloud-init.md
-      - Ship Kubernetes manifests: usage/manifests.md
-      - The data volume: usage/data-volume.md
-      - Reach the cluster: usage/kubeconfig.md
-      - A multi-node cluster: usage/multi-node.md
-      - Shut it down: usage/shutdown.md
-  - Design:
-      - The boot chain: design/boot-chain.md
-      - Design decisions: design/decisions.md
-      - Testability: design/testability.md
-  - Troubleshooting: troubleshooting.md
-  - Known limitations: known-limitations.md
-  - Deployment:
-      - What you ship: deployment/artifacts.md
-      - KVM / libvirt: deployment/libvirt.md
+  - Get started: install/quick-start.md
+  - Use locally:
+      - Local clusters: usage/cluster.md
+      - Local machines: usage/boot.md
+      - Machine configuration: usage/cloud-init.md
+  - Deploy:
+      - Artifacts and releases: deployment/artifacts.md
       - KubeVirt and Cluster API: deployment/kubevirt.md
-      - Bare metal: deployment/bare-metal.md
-      - Cloud: deployment/cloud.md
-      - Per-machine configuration: deployment/per-machine.md
-      - Operating it: deployment/operating.md
+      - Bare metal and Metal3: deployment/bare-metal.md
+  - Operate: deployment/operating.md
+  - Support status: known-limitations.md
+  - Troubleshooting: troubleshooting.md
   - Reference:
-      - Kernel cmdline options: reference/cmdline.md
       - k0smosctl: reference/k0smosctl.md
-      - Script environment variables: reference/env.md
-      - The read-only root: reference/rootfs.md
+      - Kernel parameters: reference/cmdline.md
+  - Internals:
+      - Boot chain: design/boot-chain.md
+      - Design decisions: design/decisions.md
 
 theme:
   name: "material"
@@ -85,6 +70,7 @@ plugins:
         - custom_theme/*
 
 markdown_extensions:
+  - attr_list
   - pymdownx.highlight: {}
   - pymdownx.superfences: {}
   - pymdownx.superfences:

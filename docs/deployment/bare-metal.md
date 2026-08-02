@@ -1,31 +1,19 @@
-# Bare metal
+# Bare metal and Metal3
 
-Build the single Metal3-facing artifact:
+Bare-metal machines use the complete UEFI/GPT disk image from a k0smos release.
 
-```bash
-ARCH=x86_64 make metal
-# dist/k0smos-metal-x86_64.qcow2
-```
+| Format | Use |
+|---|---|
+| `k0smos-metal-<arch>.qcow2` | Metal3/Ironic or virtualization platforms |
+| `k0smos-metal-<arch>.raw.zst` | decompress and write directly to a disk |
 
-`make metal` produces `dist/k0smos-metal-<arch>.qcow2`, a complete UEFI/GPT disk:
+Both formats contain the same partitions and immutable system payload. The
+metal wrapper uses a hardware-oriented kernel and includes its driver modules in
+the initramfs.
 
-```
-ESP             GRUB, linux-lts, platform initramfs + hardware modules
-K0SMOS-ROOT     the canonical read-only EROFS payload
-K0SMOS-DATA     ext4 mounted at /var
-```
+## Metal3 image
 
-It is a complete UEFI/GPT disk with a hardware-oriented `linux-lts` kernel,
-platform modules in the initramfs, the same immutable EROFS root used by
-KubeVirt, and an ext4 `/var`. Use it as a `format: qcow2` image in CAPM3; machine
-role, token, hostname and network configuration still arrive from CAPI rather
-than being baked into the disk.
-
-Each upstream k0s release produces one same-tagged k0smos release set. For
-example, k0s `v1.36.3+k0s.0` produces the k0smos GitHub release
-`v1.36.3+k0s.0`, containing the qcow2 and its adjacent `.sha256` file for both
-architectures. CAPM3 can consume the public release URLs directly (or the same
-two files mirrored internally):
+Point the machine template at the qcow2 and its adjacent checksum file:
 
 ```yaml
 spec:
@@ -38,11 +26,28 @@ spec:
         checksum: https://github.com/makhov/k0smos/releases/download/v1.36.3%2Bk0s.0/k0smos-metal-x86_64.qcow2.sha256
 ```
 
-Set the `BareMetalHost` boot mode to UEFI. Ironic writes the image to the selected
-root device; on boot, k0smos reads the CAPI config-drive and starts the requested
-k0s controller or worker role.
+Set the `BareMetalHost` boot mode to UEFI. Ironic writes the complete disk, and
+the bootstrap provider attaches per-machine configuration separately.
 
-The full amd64 image is firmware-tested under OVMF. Physical hardware remains
-the next validation boundary, particularly platform-specific firmware and NICs.
+An image-template example is available in
+[`examples/capi-metal3-image.yaml`](https://github.com/makhov/k0smos/blob/main/examples/capi-metal3-image.yaml).
 
-Shutdown on bare metal relies on the ACPI power button, which k0smos honours.
+## Direct imaging
+
+For hardware managed outside Ironic:
+
+```bash
+zstd -d k0smos-metal-x86_64.raw.zst -o k0smos-metal-x86_64.raw
+sudo dd if=k0smos-metal-x86_64.raw of=/dev/<target> bs=16M conv=fsync status=progress
+```
+
+Verify the checksum and the target device before writing. This operation
+overwrites the selected disk.
+
+The machine still needs a supported cloud-init or config-drive source containing
+its k0s role and any join token. The release image is intentionally generic.
+
+!!! warning "Hardware status"
+    amd64 firmware boot is tested under QEMU with OVMF. Physical server models,
+    storage controllers, and NICs have not yet been validated as a compatibility
+    matrix.
