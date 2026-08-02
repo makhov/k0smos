@@ -1,0 +1,22 @@
+ARG PYTHON_IMAGE_VERSION
+
+FROM python:${PYTHON_IMAGE_VERSION}
+
+ENV PYTHONUNBUFFERED=1
+# mkdocs_macros loads mkdocs_modules.k0smos_macros, which lives under
+# docs/ rather than on the default path; WORKDIR below is the repo root
+# (the mount point), so docs/ must be added explicitly.
+ENV PYTHONPATH=/k0smos/docs
+
+COPY ./requirements_pip.txt ./requirements.txt /mkdocs/
+
+RUN pip install --disable-pip-version-check -r /mkdocs/requirements_pip.txt \
+  && pip --version \
+  && pip install --disable-pip-version-check -r /mkdocs/requirements.txt
+
+WORKDIR /k0smos
+
+EXPOSE 8000
+
+ENTRYPOINT ["mkdocs"]
+CMD ["serve", "--dev-addr=0.0.0.0:8000"]
