@@ -52,6 +52,7 @@ plugins:
         - Makefile*
         - Dockerfile.serve-dev
         - mkdocs_modules/*
+        - custom_theme/*
 
 markdown_extensions:
   - pymdownx.highlight: {}
