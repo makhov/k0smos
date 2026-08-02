@@ -1,6 +1,7 @@
 # Using k0smos
 
 - [The CLI](#the-cli)
+- [Create a local cluster](#create-a-local-cluster)
 - [Boot a node locally](#boot-a-node-locally)
 - [Configure a node with cloud-init](#configure-a-node-with-cloud-init)
 - [Ship Kubernetes manifests](#ship-kubernetes-manifests)
@@ -26,46 +27,98 @@ make ctl        # -> dist/k0smosctl
 | Command | What it does |
 |---|---|
 | `k0smosctl gen` | write a cloud-init drive for a node to boot with |
-| `k0smosctl boot` | boot a node locally under QEMU |
-| `k0smosctl logs` | show a guest's console (`-f` to follow) |
-| `k0smosctl list` | what guests exist, and which are running |
-| `k0smosctl kubeconfig` | fetch the admin kubeconfig from a running node |
-| `k0smosctl token` | mint a join token so another machine can join the cluster |
-| `k0smosctl shutdown` / `reboot` | stop or restart a node cleanly |
-| `k0smosctl rm` | discard a stopped guest and its disk |
+| `k0smosctl machine up` | create or start one local artifact-backed machine |
+| `k0smosctl machine logs` | show a machine's console (`-f` to follow) |
+| `k0smosctl machine list` | what machines exist, and which are running |
+| `k0smosctl machine shutdown` / `reboot` | stop or restart a machine cleanly |
+| `k0smosctl machine rm` | discard a stopped machine and its disk |
+| `k0smosctl cluster create` | create a Ready local cluster from one artifact |
+| `k0smosctl cluster rm` | cleanly stop and discard a local cluster and its network |
+| `k0smosctl cluster kubeconfig` | fetch the admin kubeconfig from a running cluster |
+| `k0smosctl cluster token` | mint a join token so another machine can join |
 
 Each takes `--help`. Two things it deliberately replaces: building an ISO with
 `xorriso`, and reading a kubeconfig off a stopped guest's disk with `debugfs` —
 neither of which is installed on macOS, so both meant Docker.
 
-The node has no SSH and no shell. `gen` configures it before it boots; the other
-three talk to a running one over its virtio-serial control port.
+The node has no SSH and no shell. `gen` configures it before it boots; machine and
+cluster operations talk to a running one over its virtio-serial control port.
+
+## Create a local cluster
+
+`cluster create` is the normal local entry point. With no `--image`, it resolves
+the latest GitHub release for the selected architecture, downloads the complete
+qcow2, verifies the adjacent `.sha256` release asset, and stores it under
+`~/.cache/k0smos/images/<tag>/`:
+
+```bash
+k0smosctl cluster create \
+  --name dev \
+  --arch amd64 \
+  -o kubeconfig
+
+KUBECONFIG=kubeconfig kubectl get nodes
+```
+
+Without topology flags this creates one controller that also runs workloads. For
+an HA control plane and separate workers:
+
+```bash
+k0smosctl cluster create --name dev --controllers 3 --workers 2 -o kubeconfig
+```
+
+The command creates one clone and one config drive per machine, starts a rootless
+shared Ethernet segment, boots the initial controller, asks it to mint the
+role-specific join tokens, and then starts the other machines. It returns only
+after the Kubernetes API reports the requested number of nodes and every node is
+Ready. `--dry-run` prints names, roles, addresses, and forwarded API ports without
+creating state.
+
+The release API is checked on later runs, but the large image is downloaded only
+once for each tag and architecture. k0smos uses the embedded k0s release as the
+release identity: tag `v1.36.3+k0s.0` is the complete artifact set built with that
+exact k0s binary. `--release v1.36.3+k0s.0` pins that set; `--cache-dir` moves the
+cache. If GitHub cannot be reached, the last verified
+cached `latest` artifact is used. For development or an internal mirror,
+`--image /path/to/k0smos-metal-x86_64.qcow2` bypasses release resolution entirely.
+Set `GITHUB_TOKEN` or `GH_TOKEN` when the repository is private or anonymous API
+rate limits are too low.
+
+All machines still appear in `k0smosctl machine list`, with names such as
+`dev-controller-0` and `dev-worker-0`. Their disks and consoles use the normal
+per-machine state directories. The cluster's config drives and network-daemon
+metadata live under `~/.local/state/k0smos/.clusters/dev/`.
+
+Remove the whole local cluster cleanly with:
+
+```bash
+k0smosctl cluster rm --name dev
+```
 
 ## Boot a node locally
 
-Needs Go 1.25+, QEMU, and Docker (the ext4 image and the kernel unpack both need
-Linux tools). Works on Apple Silicon via HVF and on linux/KVM.
+Needs Go 1.25+ to build the host CLI, plus QEMU. Docker is required only when
+building an OS artifact locally. Works on Apple Silicon via HVF and on Linux/KVM.
 
-Build the artifacts once — `make` is used only for this, because the kernel, k0s
-and the ext4 root all need Linux tools:
+To consume a release, build only the host CLI:
 
 ```bash
-make artifacts ctl
+make ctl
 ```
 
 Then boot with the CLI:
 
 ```bash
-k0smosctl boot
+k0smosctl machine up
 guest "default" running in the background (pid 7547)
-  console:  k0smosctl logs -f
-  cluster:  k0smosctl kubeconfig -o kubeconfig   (API on :6443)
-  stop it:  k0smosctl shutdown
+  console:  k0smosctl machine logs -f
+  cluster:  k0smosctl cluster kubeconfig -o kubeconfig   (API on :6443)
+  stop it:  k0smosctl machine shutdown
 ```
 
 **The guest runs in the background and the command returns.** A k0smos node has no
 shell, so there is nothing to sit in front of. Its console goes to a file you read
-with `k0smosctl logs` — `-f` follows it, `-n 50` shows the last fifty lines. Give it
+with `k0smosctl machine logs` — `-f` follows it, `-n 50` shows the last fifty lines. Give it
 a minute or two; `k0s controller --single` has a lot to start.
 
 `--attach` stays in the foreground streaming the console, and there **ctrl-c shuts
@@ -73,13 +126,22 @@ the guest down cleanly** rather than killing it. (`--interactive` hands the term
 to QEMU, whose only escape is `ctrl-a x` — which kills the guest. It exists for the
 rare case of wanting the QEMU monitor; prefer `--attach`.)
 
-Useful flags: `--cidata` attaches a configuration drive, `--data` a volume for
-`/var/lib/k0s`, and `--dry-run` prints the QEMU command instead of running it.
-`--no-image` boots the initramfs alone, which is fine for a smoke test but not for
-k0s — kubelet cannot run on a ramfs root.
+Useful flags: `--release` pins a GitHub tag, `--cache-dir` relocates downloaded
+artifacts, `--image` selects a local qcow2 without contacting GitHub, `--cidata`
+attaches a configuration drive, and `--dry-run` prints the QEMU command instead
+of running it. The artifact already contains its writable `/var` partition.
 
-With a release's artifacts unpacked there is no `make` at all: `k0smosctl boot`
-takes `--kernel`, `--initramfs` and `--image` directly.
+`machine up` uses the same verified release cache automatically:
+
+```bash
+k0smosctl machine up --arch amd64
+
+# Or use a local build directly.
+k0smosctl machine up --image dist/k0smos-metal-x86_64.qcow2 --arch amd64
+```
+
+Separate `--kernel`, `--initramfs`, `--disk`, `--data`, `--exec` and `--no-image`
+belong to `--direct-kernel`, the low-level development and smoke-test path.
 
 ### Guests, and where their state lives
 
@@ -89,26 +151,26 @@ little metadata. Nothing runtime is written into the working tree, so
 `make clean-dist` cannot take a running machine's socket with it. `K0SMOS_STATE_DIR`
 moves it elsewhere.
 
-**The root image is a template.** `boot` clones it into the guest's directory the
+**The platform image is a template.** `machine up` clones it into the guest's directory the
 first time and never writes to the image itself, which is what makes a second guest
 one command:
 
 ```bash
-k0smosctl boot --name vm2 --api-port 7443
-k0smosctl kubeconfig --name vm2 -o kubeconfig2   # port comes from the guest
+k0smosctl machine up --name vm2 --api-port 7443
+k0smosctl cluster kubeconfig --name vm2 -o kubeconfig2   # port comes from the machine
 ```
 
-Every subcommand takes `--name`:
+Machine lifecycle and cluster access commands take `--name`:
 
 ```bash
-k0smosctl list                     # what exists, and what is running
-k0smosctl logs -f --name vm2
-k0smosctl shutdown --name vm2
-k0smosctl rm --name vm2            # discard it; the next boot re-clones the image
+k0smosctl machine list                     # what exists, and what is running
+k0smosctl machine logs -f --name vm2
+k0smosctl machine shutdown --name vm2
+k0smosctl machine rm --name vm2            # discard it; the next up re-clones the image
 ```
 
-A later `boot` of the same name reuses that guest's disk, so a reboot keeps the
-cluster. `rm` throws it away, which is how these nodes are meant to be treated —
+A later `machine up` of the same name reuses that guest's disk, so a reboot keeps the
+cluster. `machine rm` throws it away, which is how these nodes are meant to be treated —
 replaced rather than repaired.
 
 This matters more than convenience. Booting the image in place would allow only one
@@ -123,16 +185,16 @@ While iterating on k0smos itself, the fast path skips k0s entirely and takes abo
 make smoke
 ```
 
-**If you change any k0smos code, rebuild both images.** After `switch_root`,
-k0smos re-execs `/sbin/k0smos` from the ext4 root, so everything after the pivot
-runs the binary in `dist/k0smos.img`, not the one in the initramfs:
+**If you change any k0smos code, rebuild the complete artifact.** After `switch_root`,
+k0smos re-execs `/sbin/k0smos` from the EROFS root, so everything after the pivot
+runs the binary in `dist/k0smos.erofs`, not `/init` in the initramfs:
 
 ```bash
-make artifacts
+make metal
 ```
 
-Use the target rather than the scripts. With the root carried inside the initramfs
-there are two copies of the k0smos binary — `/init`, and `/sbin/k0smos` inside the
+Use the target rather than the scripts. There are two copies of the k0smos binary
+in the build inputs — `/init`, and `/sbin/k0smos` inside the
 root image, which is the one `switch_root` re-execs — and `mkinitramfs.sh` on its own
 refreshes only the first. `make artifacts` rebuilds the root and then embeds it, in
 that order.
@@ -151,7 +213,7 @@ make ctl
 # put files on the node, taking their permissions from the source file
 k0smosctl gen --file k0s.yaml:/etc/k0s/k0s.yaml --hostname demo-node -o dist/cidata.iso
 
-k0smosctl boot --cidata dist/cidata.iso
+k0smosctl machine up --cidata dist/cidata.iso
 ```
 
 For a cloud-config you have written or rendered elsewhere, pass it whole
@@ -193,6 +255,12 @@ and raw deflate bytes do not survive that.
 
 **`meta-data`** — `local-hostname` sets the hostname, beating `k0smos.hostname=`
 on the cmdline. `instance-id` is read and otherwise unused.
+
+**`k0smos`** — an optional cloud-config section with `ip`, `iface`, `gateway`,
+and `dns`. These have the same meanings as their `k0smos.*` kernel parameters and
+override only the fields present. They are read before networking is configured.
+`cluster create` uses this to give each clone a distinct address on its second
+NIC without changing the shared artifact.
 
 **`runcmd`** — **interpreted, never executed.** Nothing named in user-data is ever
 exec'd. Four verbs are carried out with syscalls: `mkdir` (with `-p`), `chmod`,
@@ -239,14 +307,16 @@ write_files:
 Secret or a metadata service with size limits, whereas a drive written locally has
 no practical limit, so `gen` uses plain base64.
 
-## Give it a data volume
+## The data volume
 
-Without one, k0s writes to the root filesystem, which is fine for a throwaway
-boot. With one, `/var/lib/k0s` is a separate volume that survives a guest reboot
-— which is what lets etcd survive an in-place restart and images stay cached.
+The platform qcow2 already contains an ext4 `k0smos-data` partition mounted at
+`/var`. Because `k0smosctl machine up` clones the complete artifact once per named
+guest, etcd state and cached images survive a reboot without another flag.
+
+An external data image is only part of the direct-kernel development path:
 
 ```bash
-k0smosctl boot --data dist/data.img --data-size 8G
+k0smosctl machine up --direct-kernel --data dist/data.img --data-size 8G
 ```
 
 The image is created blank if it does not exist. Then on the guest side:
@@ -265,17 +335,17 @@ changes the mountpoint, `k0smos.datafstype=` the filesystem.
 
 ## Reach the cluster from the host
 
-`run-qemu.sh` forwards 6443, and `k0smosctl` asks the running node for its
+QEMU forwards 6443, and `k0smosctl` asks the running node for its
 kubeconfig over the control port — no shell on the guest, no shutting it down
 first:
 
 ```bash
-k0smosctl kubeconfig -o kubeconfig
+k0smosctl cluster kubeconfig -o kubeconfig
 KUBECONFIG=kubeconfig kubectl get nodes
 ```
 
 The server address is rewritten from `localhost` (right on the node, wrong
-everywhere else) to `127.0.0.1` and the guest's own forwarded port, which `boot`
+everywhere else) to `127.0.0.1` and the guest's own forwarded port, which `machine up`
 recorded — so a second guest's kubeconfig points at the second guest. `--server
 host:port` overrides it, `--server ''` keeps what the node wrote, and `-o -` prints
 instead of writing a file. The file is written 0600, because it is a cluster-admin
@@ -292,7 +362,7 @@ Reading it off the disk still works and needs no running guest, which is
 occasionally what you want:
 
 ```bash
-k0smosctl shutdown
+k0smosctl machine shutdown
 docker run --rm -v "$PWD/dist:/d" alpine:3.20 sh -c \
   'apk add -q --no-cache e2fsprogs e2fsprogs-extra >/dev/null &&
    debugfs -R "cat /var/lib/k0s/pki/admin.conf" /d/k0smos.img 2>/dev/null' \
@@ -305,12 +375,16 @@ mountpoint.
 
 ## More than one node
 
+For local QEMU, prefer `k0smosctl cluster create`; it automates everything in
+this section. The details below describe the provider-facing mechanism and are
+useful when another system creates the machines.
+
 A second machine joins with a token, which only a machine already in the cluster
-can produce — it is signed with the cluster CA. `k0smosctl token` asks a running
+can produce — it is signed with the cluster CA. `k0smosctl cluster token` asks a running
 node for one over the control port, the same way `kubeconfig` does:
 
 ```bash
-k0smosctl token --role controller -o join-token   # or --role worker
+k0smosctl cluster token --role controller -o join-token   # or --role worker
 ```
 
 The joining node needs three things: the token, its own address, and a k0s
@@ -382,7 +456,7 @@ machines are already on a network.
 disk inspection will lie to you.
 
 ```bash
-k0smosctl shutdown        # or: k0smosctl reboot
+k0smosctl machine shutdown        # or: k0smosctl machine reboot
 ./image/poweroff.sh              # the same thing, without building the CLI
 ```
 
@@ -408,10 +482,10 @@ ARCH=x86_64 make oci                              # for an amd64 cluster
 PUSH=1 REGISTRY=ghcr.io/you TAG=v0 make oci
 ```
 
-That produces one image, `k0smos:<tag>`, holding the kernel at `/boot/vmlinuz`, the
-initramfs at `/boot/initramfs.gz` and the ext4 root at `/disk/k0smos.img` (where
-KubeVirt looks for a containerDisk). A VM references it **twice** — once to boot
-from, once as the disk — which KubeVirt supports and documents.
+That produces one image, `k0smos:<tag>`, holding the kernel at `/boot/vmlinuz` and
+the initramfs at `/boot/initramfs.gz`. The initramfs carries the immutable erofs
+root, so the VM references the image once as its `kernelBoot` container; it does
+not need a `containerDisk`.
 
 One image rather than two because the kernel and the root are not independently
 versionable: the root carries the module tree, so mixing versions produces the skew
@@ -427,7 +501,7 @@ spec:
           image: ghcr.io/you/k0smos:v0
           kernelPath: /boot/vmlinuz
           initrdPath: /boot/initramfs.gz
-        kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.data=auto"
+        kernelArgs: "console=ttyS0 k0smos.ip=dhcp k0smos.data=auto"
 ```
 
 Note `k0smos.data=auto` with an `emptyDisk`: that shares the VMI's lifecycle, so it
@@ -449,19 +523,21 @@ over SSH that does not exist here.
 
 ## Run it on bare metal
 
-**Untested.** The pieces are in place and nothing has run. What you need:
+Build the single Metal3-facing artifact:
 
-1. **A kernel with drivers for your hardware.** Not the default — that is a Kata
-   *guest* kernel with no NVMe, ATA, SCSI, USB or physical NIC support. Alpine's
-   `linux-virt` covers NVMe, ATA, SCSI, USB-storage, `e1000e` and `mlx5`, but not
-   `igb`, `ixgbe`, `i40e`, `bnxt` or `megaraid_sas`. For anything else, supply a
-   distro kernel with a module tree — you do not need to build one. See
-   [Which kernel](https://github.com/makhov/k0smos/blob/main/README.md#which-kernel).
-2. Point `MODULES_DIR` at that tree when building the images. Drivers are then
-   autoloaded by matching each device's `modalias` against `modules.alias`, so you
-   do not have to name them.
-3. Accept that the image writes **no partition table** and does not grow on first
-   boot, so it must be written to a disk it fits.
+```bash
+ARCH=x86_64 make metal
+# dist/k0smos-metal-x86_64.qcow2
+```
+
+It is a complete UEFI/GPT disk with a hardware-oriented `linux-lts` kernel,
+platform modules in the initramfs, the same immutable EROFS root used by
+KubeVirt, and an ext4 `/var`. Use it as a `format: qcow2` image in CAPM3; machine
+role, token, hostname and network configuration still arrive from CAPI rather
+than being baked into the disk.
+
+The full amd64 image is firmware-tested under OVMF. Physical hardware remains
+the next validation boundary, particularly platform-specific firmware and NICs.
 
 ## When something goes wrong
 

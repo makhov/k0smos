@@ -32,79 +32,134 @@ const (
 	guestDNS = "1.1.1.1"
 )
 
-func bootCmd() *cobra.Command {
+func machineUpCmd() *cobra.Command {
 	var (
-		name        string
-		kernel      string
-		initramfs   string
-		image       string
-		disk        string
-		cidata      string
-		data        string
-		dataSize    string
-		socket      string
-		mem         string
-		cpus        string
-		arch        string
-		console     string
-		exec_       string
-		apiPort     int
-		attach      bool
-		interactive bool
-		dryRun      bool
+		name         string
+		kernel       string
+		initramfs    string
+		image        string
+		disk         string
+		cidata       string
+		data         string
+		dataSize     string
+		socket       string
+		mem          string
+		cpus         string
+		arch         string
+		console      string
+		exec_        string
+		apiPort      int
+		attach       bool
+		interactive  bool
+		dryRun       bool
+		directKernel bool
+		firmware     string
+		release      string
+		cacheDir     string
+		clusterNet   string
+		clusterMAC   string
 	)
 	cmd := &cobra.Command{
-		Use:   "boot",
-		Short: "Boot a k0smos node locally under QEMU",
-		Long: `Boots a node with direct kernel boot: the initramfs comes up as PID1, then
-switch_roots onto the ext4 root.
+		Use:   "up",
+		Short: "Create or start one local k0smos machine",
+		Long: `Boots one prepared k0smos platform artifact under QEMU.
 
-This is the same thing image/run-qemu.sh does, without needing the repository or a
-shell — so a downloaded kernel, initramfs and root image are enough.
+By default k0smosctl resolves the latest GitHub release, downloads its matching
+firmware-bootable qcow2 into the local cache, verifies the published checksum,
+and reuses it on later runs. --release pins a tag; --image selects a local file
+and bypasses downloading. The complete artifact is cloned into the guest's state
+directory and QEMU boots its own UEFI, GRUB, kernel, initramfs, immutable EROFS
+root and writable /var. No build tree or separate boot inputs are needed.
+
+--direct-kernel keeps the development path used by low-level tests. In that mode
+QEMU receives --kernel and --initramfs directly; --disk/--from-disk select the
+legacy ext4 root. Flags specific to that path imply --direct-kernel for backward
+compatibility.
 
 The guest runs in the background and the command returns: there is no shell on a
 k0smos node, so there is nothing to sit in front of. Its console goes to a file
-readable with "k0smosctl logs", port 6443 is forwarded, and a control port is
-attached so "k0smosctl kubeconfig" and "k0smosctl shutdown" can reach it.
+readable with "k0smosctl machine logs", port 6443 is forwarded, and a control
+port is attached so "k0smosctl cluster kubeconfig" and "k0smosctl machine
+shutdown" can reach it.
 
-Each guest is identified by --name and keeps its console, control socket and root
-disk under its own state directory. The disk is cloned from --image the first time,
-so the image stays a pristine template and a second guest needs only a name and its
-own --api-port. Later boots of the same name reuse its disk, keeping the cluster.
+Each guest is identified by --name and keeps its console, control socket and machine
+disk under its own state directory. The resolved artifact is cloned the first time,
+so the cached image stays a pristine template and a second guest needs only a name
+and its own --api-port. Later boots of the same name reuse its disk, keeping the cluster.
 
 Use --attach to stay and watch the console instead, where ctrl-c then shuts the
 guest down cleanly rather than killing it.`,
-		Example: `  # artifacts built locally, or unpacked from a release
-  k0smosctl boot
+		Example: `  # download, verify and cache the latest release artifact
+  k0smosctl machine up
 
-  # with configuration, and a data volume for /var/lib/k0s
-  k0smosctl boot --cidata cidata.iso --data data.img
+  # use a locally built artifact instead
+  k0smosctl machine up --image dist/k0smos-metal-x86_64.qcow2
+
+  # with per-machine configuration (the artifact already contains /var)
+  k0smosctl machine up --cidata cidata.iso
 
   # watch the console; ctrl-c stops the guest cleanly
-  k0smosctl boot --attach
+  k0smosctl machine up --attach
 
   # a second guest alongside the first: its own disk is cloned automatically
-  k0smosctl boot --name vm2 --api-port 7443
+  k0smosctl machine up --name vm2 --api-port 7443
 
   # throw a guest away and start again from the image
-  k0smosctl rm --name vm2 && k0smosctl boot --name vm2 --api-port 7443
+  k0smosctl machine rm --name vm2 && k0smosctl machine up --name vm2 --api-port 7443
 
   # print the qemu command instead of running it
-  k0smosctl boot --dry-run`,
+  k0smosctl machine up --dry-run
+
+  # low-level development boot with separate inputs
+  k0smosctl machine up --direct-kernel --kernel vmlinuz --initramfs initramfs.gz`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if cmd.Flags().Changed("image") && (cmd.Flags().Changed("release") || cmd.Flags().Changed("cache-dir")) {
+				return fatalf("--image bypasses release resolution, so it cannot be combined with --release or --cache-dir")
+			}
 			g, err := guestFor(arch)
 			if err != nil {
 				return err
 			}
-			if kernel == "" {
-				kernel = filepath.Join("dist", "kernel", g.apkArch, "vmlinuz")
-			}
+			noImage, _ := cmd.Flags().GetBool("no-image")
+			fromDisk, _ := cmd.Flags().GetBool("from-disk")
+			direct := directKernel || fromDisk || noImage ||
+				cmd.Flags().Changed("kernel") || cmd.Flags().Changed("initramfs") ||
+				cmd.Flags().Changed("disk") || cmd.Flags().Changed("data") ||
+				cmd.Flags().Changed("exec")
 
-			for what, path := range map[string]string{"kernel": kernel, "initramfs": initramfs} {
-				if _, err := os.Stat(path); err != nil {
-					return fatalf("%s %s not found — build it with `make %s`, or point at one with --%s",
-						what, path, what, what)
+			if direct {
+				if cmd.Flags().Changed("release") || cmd.Flags().Changed("cache-dir") {
+					return fatalf("--release and --cache-dir are for platform artifacts, not direct-kernel boot")
+				}
+				if cmd.Flags().Changed("firmware") {
+					return fatalf("--firmware is for platform artifacts; direct-kernel boot does not use UEFI")
+				}
+				if cmd.Flags().Changed("image") && !fromDisk {
+					return fatalf("--image names the platform artifact; combine it with --from-disk only for the legacy ext4 path")
+				}
+				if kernel == "" {
+					kernel = filepath.Join("dist", "kernel", g.apkArch, "vmlinuz")
+				}
+				for what, path := range map[string]string{"kernel": kernel, "initramfs": initramfs} {
+					if _, err := os.Stat(path); err != nil {
+						return fatalf("%s %s not found — build it with `make %s`, or point at one with --%s",
+							what, path, what, what)
+					}
+				}
+				if image == "" {
+					image = filepath.Join("dist", "k0smos.img")
+				}
+			} else {
+				if image == "" {
+					image, err = resolveReleaseArtifact(cmd.Context(), g.apkArch, release, cacheDir, cmd.ErrOrStderr())
+					if err != nil {
+						return err
+					}
+				}
+				firmware, err = resolveFirmware(g, firmware)
+				if err != nil {
+					return err
 				}
 			}
 			if _, err := exec.LookPath(g.qemu); err != nil {
@@ -127,28 +182,32 @@ guest down cleanly rather than killing it.`,
 			// every clone taken afterwards would inherit that guest's cluster
 			// identity — same CA, same node UID — because k0s writes its PKI on
 			// first boot. Both of those went wrong before this existed.
-			// The root normally travels inside the initramfs, so a guest gets no
-			// root disk at all — only a data volume. --from-disk switches onto a
-			// clone of --image instead, which is what an ext4 root wants.
-			noImage, _ := cmd.Flags().GetBool("no-image")
-			fromDisk, _ := cmd.Flags().GetBool("from-disk")
-			switch {
-			case noImage:
-				disk = ""
-			case disk != "":
-				// An explicit --disk is used as given, in place.
-			case fromDisk:
-				disk, err = guestDisk(name, image)
+			// Artifact mode clones the whole firmware-bootable machine disk. The
+			// branches below it retain the older direct-kernel test modes.
+			if direct {
+				switch {
+				case noImage:
+					disk = ""
+				case disk != "":
+					// An explicit --disk is used as given, in place.
+				case fromDisk:
+					disk, err = guestDisk(name, image)
+					if err != nil {
+						return err
+					}
+				default:
+					disk = ""
+				}
+			} else {
+				disk, err = guestArtifact(name, image)
 				if err != nil {
 					return err
 				}
-			default:
-				disk = ""
 			}
 
-			// A read-only root leaves nowhere for /var, so every guest gets a data
-			// volume unless it was told otherwise.
-			if data == "" && !noImage {
+			// Direct-kernel embedded-root boots need a separate writable /var.
+			// Platform artifacts already carry it as their third partition.
+			if direct && data == "" && !noImage {
 				data, err = guestData(name, dataSize)
 				if err != nil {
 					return err
@@ -169,6 +228,8 @@ guest down cleanly rather than killing it.`,
 				data: data, dataSize: dataSize, socket: socket,
 				mem: mem, cpus: cpus, console: console, exec: exec_,
 				apiPort: apiPort, attach: attach, interactive: interactive,
+				artifact: !direct, firmware: firmware, dryRun: dryRun,
+				clusterNet: clusterNet, clusterMAC: clusterMAC,
 			}
 			// Refuse to start alongside a guest already answering on this socket.
 			// Two guests sharing one root image corrupt it, and the second would
@@ -191,7 +252,7 @@ guest down cleanly rather than killing it.`,
 				hint := "ctrl-c shuts the guest down cleanly"
 				if interactive {
 					hint = "escape with ctrl-a x — but that kills the guest, so prefer " +
-						"`k0smosctl shutdown` from another terminal"
+						"`k0smosctl machine shutdown` from another terminal"
 				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "booting %s; %s\n", g.qemu, hint)
 				q.Stdin, q.Stdout, q.Stderr = os.Stdin, cmd.OutOrStdout(), cmd.ErrOrStderr()
@@ -201,17 +262,25 @@ guest down cleanly rather than killing it.`,
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&kernel, "kernel", "", "kernel image (default dist/kernel/<arch>/vmlinuz)")
-	f.StringVar(&initramfs, "initramfs", filepath.Join("dist", "k0smos-initramfs.gz"), "initramfs image")
-	f.StringVar(&image, "image", filepath.Join("dist", "k0smos.img"),
-		"root image to clone this guest's disk from, once — only with --from-disk")
+	f.StringVar(&kernel, "kernel", "", "kernel image (direct-kernel development mode)")
+	f.StringVar(&initramfs, "initramfs", filepath.Join("dist", "k0smos-initramfs.gz"), "initramfs image (direct-kernel development mode)")
+	f.StringVar(&image, "image", "",
+		"firmware-bootable qcow2; bypasses GitHub release resolution")
+	f.StringVar(&release, "release", "latest", "k0s-tagged GitHub release to use when --image is omitted: latest or vX.Y.Z+k0s.N")
+	f.StringVar(&cacheDir, "cache-dir", "", "release artifact cache (default ~/.cache/k0smos/images)")
+	f.StringVar(&firmware, "firmware", "", "UEFI code image (auto-detected from QEMU when omitted)")
+	f.StringVar(&clusterNet, "cluster-network", "", "shared Ethernet hub address (managed by cluster create)")
+	f.StringVar(&clusterMAC, "cluster-mac", "", "MAC address on the shared cluster network")
+	_ = f.MarkHidden("cluster-network")
+	_ = f.MarkHidden("cluster-mac")
+	f.BoolVar(&directKernel, "direct-kernel", false, "use separate kernel/initramfs development inputs instead of the platform artifact")
 	f.StringVar(&disk, "disk", "",
-		`use this disk directly and write to it in place, instead of cloning --image; "" stays on the initramfs with --no-image`)
+		`use this raw ext4 root directly (direct-kernel development mode)`)
 	f.Bool("from-disk", false,
-		"switch onto a root disk cloned from --image, instead of the root carried in the initramfs")
-	f.Bool("no-image", false, "boot the initramfs only, with no root at all (kubelet cannot run there)")
+		"clone --image as a legacy ext4 root (direct-kernel development mode)")
+	f.Bool("no-image", false, "boot only the initramfs in direct-kernel smoke mode (kubelet cannot run there)")
 	f.StringVar(&cidata, "cidata", "", "cloud-init drive to attach, as written by 'k0smosctl gen'")
-	f.StringVar(&data, "data", "", "data volume for /var (default: the guest's own, created blank)")
+	f.StringVar(&data, "data", "", "data volume for /var (direct-kernel mode; platform artifacts include one)")
 	f.StringVar(&dataSize, "data-size", "4G", "size for a newly created --data volume")
 	f.StringVar(&name, "name", defaultGuestName, "name for this guest; its console and control socket are kept under it")
 	f.StringVar(&socket, "socket", "", "control socket path (default: under the guest's state directory)")
@@ -220,7 +289,7 @@ guest down cleanly rather than killing it.`,
 	f.StringVar(&arch, "arch", runtime.GOARCH, "guest architecture: amd64 or arm64")
 	f.StringVar(&console, "console", "",
 		"where to write the console (default: under the guest's state directory)")
-	f.StringVar(&exec_, "exec", "", "override the supervised workload (comma-separated)")
+	f.StringVar(&exec_, "exec", "", "override the supervised workload in direct-kernel mode (comma-separated)")
 	f.IntVar(&apiPort, "api-port", 6443, "host port forwarded to the API server; 0 forwards nothing")
 	f.BoolVar(&attach, "attach", false,
 		"stay in the foreground streaming the console; ctrl-c then shuts the guest down cleanly")
@@ -278,19 +347,79 @@ type bootSpec struct {
 	kernel, initramfs, disk, cidata string
 	data, dataSize, socket          string
 	mem, cpus, console, exec        string
+	firmware                        string
+	clusterNet, clusterMAC          string
 	apiPort                         int
 	attach, interactive             bool
+	artifact                        bool
+	dryRun                          bool
+}
+
+// resolveFirmware locates the UEFI code shipped with QEMU/edk2. The platform
+// artifact contains its bootloader, but firmware is a property of the local VM
+// host, just as it is a property of a physical machine.
+func resolveFirmware(g guest, requested string) (string, error) {
+	if requested != "" {
+		if _, err := os.Stat(requested); err != nil {
+			return "", fatalf("UEFI firmware %s not found", requested)
+		}
+		return requested, nil
+	}
+
+	var candidates []string
+	if g.apkArch == "x86_64" {
+		candidates = []string{
+			"/opt/homebrew/share/qemu/edk2-x86_64-code.fd",
+			"/usr/local/share/qemu/edk2-x86_64-code.fd",
+			"/usr/share/OVMF/OVMF_CODE.fd",
+			"/usr/share/edk2/ovmf/OVMF_CODE.fd",
+			"/usr/share/qemu/OVMF.fd",
+		}
+	} else {
+		candidates = []string{
+			"/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
+			"/usr/local/share/qemu/edk2-aarch64-code.fd",
+			"/usr/share/AAVMF/AAVMF_CODE.fd",
+			"/usr/share/edk2/aarch64/QEMU_EFI.fd",
+			"/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+		}
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", fatalf("could not find UEFI firmware for %s; install QEMU with edk2 firmware, or pass --firmware", g.apkArch)
 }
 
 // qemuArgs assembles the command line. Separated from running it so --dry-run can
 // show exactly what would happen, and so it is testable without QEMU.
 func qemuArgs(g guest, s bootSpec) ([]string, error) {
-	append_ := fmt.Sprintf("console=%s panic=10 k0smos.ip=%s k0smos.gw=%s k0smos.dns=%s",
-		g.console, guestCIDR, guestGateway, guestDNS)
-
 	args := []string{"-M", g.machine}
 	args = append(args, g.accel...)
-	args = append(args, "-m", s.mem, "-smp", s.cpus, "-kernel", s.kernel, "-initrd", s.initramfs)
+	args = append(args, "-m", s.mem, "-smp", s.cpus)
+
+	append_ := ""
+	if s.artifact {
+		if _, err := os.Stat(s.firmware); err != nil {
+			return nil, fatalf("UEFI firmware %s not found", s.firmware)
+		}
+		if _, err := os.Stat(s.disk); err != nil {
+			return nil, fatalf("platform artifact disk %s not found", s.disk)
+		}
+		args = append(args,
+			"-drive", "if=pflash,format=raw,readonly=on,file="+s.firmware,
+			"-drive", "file="+s.disk+",if=virtio,format=qcow2")
+	} else {
+		for what, path := range map[string]string{"kernel": s.kernel, "initramfs": s.initramfs} {
+			if _, err := os.Stat(path); err != nil {
+				return nil, fatalf("%s %s not found", what, path)
+			}
+		}
+		args = append(args, "-kernel", s.kernel, "-initrd", s.initramfs)
+		append_ = fmt.Sprintf("console=%s panic=10 k0smos.ip=%s k0smos.gw=%s k0smos.dns=%s",
+			g.console, guestCIDR, guestGateway, guestDNS)
+	}
 
 	// Read-only, as an infrastructure provider attaches it.
 	if s.cidata != "" {
@@ -300,8 +429,13 @@ func qemuArgs(g guest, s bootSpec) ([]string, error) {
 		args = append(args, "-drive", "file="+s.cidata+",if=virtio,format=raw,readonly=on")
 	}
 	if s.data != "" {
-		if err := ensureDataVolume(s.data, s.dataSize); err != nil {
-			return nil, err
+		if s.artifact {
+			return nil, errors.New("the platform artifact already contains its /var volume; --data is only available with --direct-kernel")
+		}
+		if !s.dryRun {
+			if err := ensureDataVolume(s.data, s.dataSize); err != nil {
+				return nil, err
+			}
 		}
 		args = append(args, "-drive", "file="+s.data+",if=virtio,format=raw")
 		// Attaching the volume is not enough; k0smos has to be told to use it.
@@ -309,7 +443,7 @@ func qemuArgs(g guest, s bootSpec) ([]string, error) {
 		// names, and k0smos refuses to guess when more than one device is blank.
 		append_ += " k0smos.data=auto"
 	}
-	if s.disk != "" {
+	if !s.artifact && s.disk != "" {
 		if _, err := os.Stat(s.disk); err != nil {
 			return nil, fatalf("root image %s not found — build it with `make disk`, "+
 				"or pass --disk '' to stay on the initramfs (kubelet cannot run there)", s.disk)
@@ -318,19 +452,30 @@ func qemuArgs(g guest, s bootSpec) ([]string, error) {
 		// By label rather than /dev/vda: attaching a cloud-init drive shifts the
 		// device names, and on real hardware enumeration is not stable at all.
 		append_ += " k0smos.root=LABEL=k0smos k0smos.rootfstype=ext4"
+	} else if !s.artifact && s.initramfs != "" {
+		// An empty root now means automatic LABEL=k0smos discovery. This is the
+		// explicit initramfs-only mode, so do not make PID1 wait for a disk.
+		append_ += " k0smos.root=none"
 	}
 	if s.exec != "" {
+		if s.artifact {
+			return nil, errors.New("--exec is only available with --direct-kernel; configure an artifact boot through --cidata")
+		}
 		append_ += " k0smos.exec=" + s.exec
 	}
-	args = append(args, "-append", append_)
+	if !s.artifact {
+		args = append(args, "-append", append_)
+	}
 
 	if s.socket != "" {
-		if err := os.MkdirAll(filepath.Dir(s.socket), 0755); err != nil {
-			return nil, err
-		}
-		// A stale socket file makes QEMU fail to bind.
-		if err := os.Remove(s.socket); err != nil && !os.IsNotExist(err) {
-			return nil, err
+		if !s.dryRun {
+			if err := os.MkdirAll(filepath.Dir(s.socket), 0755); err != nil {
+				return nil, err
+			}
+			// A stale socket file makes QEMU fail to bind.
+			if err := os.Remove(s.socket); err != nil && !os.IsNotExist(err) {
+				return nil, err
+			}
 		}
 		args = append(args,
 			"-chardev", "socket,path="+s.socket+",server=on,wait=off,id=k0smosctl",
@@ -338,11 +483,27 @@ func qemuArgs(g guest, s bootSpec) ([]string, error) {
 			"-device", "virtserialport,chardev=k0smosctl,name=k0smos.control")
 	}
 
-	netdev := "user,id=n0"
+	// Artifact boots use DHCP, unlike the direct-kernel development path. Tell
+	// slirp to advertise the same reachable resolver the latter puts on the
+	// cmdline; its default 10.0.2.3 accepted queries but never answered them on
+	// macOS in repeated image-pull tests.
+	netdev := "user,id=n0,dns=" + guestDNS
 	if s.apiPort != 0 {
 		netdev += fmt.Sprintf(",hostfwd=tcp::%d-:6443", s.apiPort)
 	}
 	args = append(args, "-netdev", netdev, "-device", "virtio-net-pci,netdev=n0")
+	if s.clusterNet != "" {
+		dev := "virtio-net-pci,netdev=n1"
+		if s.clusterMAC != "" {
+			if _, err := net.ParseMAC(s.clusterMAC); err != nil {
+				return nil, fmt.Errorf("invalid cluster MAC %q: %w", s.clusterMAC, err)
+			}
+			dev += ",mac=" + s.clusterMAC
+		}
+		args = append(args,
+			"-netdev", "socket,id=n1,connect="+s.clusterNet,
+			"-device", dev)
+	}
 
 	consoleArgs, err := consoleArgs(s)
 	if err != nil {
@@ -463,6 +624,14 @@ const shutdownGrace = 60 * time.Second
 // This only works because the console is not in QEMU's raw mode: see consoleArgs.
 // Under --interactive the terminal belongs to QEMU and ctrl-c never arrives here.
 func runGuest(q *exec.Cmd, s bootSpec, out io.Writer) error {
+	// Keep QEMU out of this terminal's process group. Otherwise ctrl-c reaches
+	// both k0smosctl and QEMU: the parent asks PID1 to shut down cleanly while
+	// QEMU simultaneously exits on SIGINT, racing and usually defeating the
+	// clean shutdown. Interactive mode deliberately gives QEMU the terminal and
+	// retains its own ctrl-a x semantics.
+	if !s.interactive {
+		q.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	if err := q.Start(); err != nil {
 		return err
 	}
@@ -559,11 +728,11 @@ func detach(q *exec.Cmd, s bootSpec, name, metaPath string, out io.Writer) error
 		suffix = " --name " + name
 	}
 	fmt.Fprintf(out, "guest %q running in the background (pid %d)\n", name, pid)
-	fmt.Fprintf(out, "  console:  k0smosctl logs -f%s\n", suffix)
+	fmt.Fprintf(out, "  console:  k0smosctl machine logs -f%s\n", suffix)
 	if s.apiPort != 0 {
-		fmt.Fprintf(out, "  cluster:  k0smosctl kubeconfig%s -o kubeconfig   (API on :%d)\n", suffix, s.apiPort)
+		fmt.Fprintf(out, "  cluster:  k0smosctl cluster kubeconfig%s -o kubeconfig   (API on :%d)\n", suffix, s.apiPort)
 	}
-	fmt.Fprintf(out, "  stop it:  k0smosctl shutdown%s\n", suffix)
+	fmt.Fprintf(out, "  stop it:  k0smosctl machine shutdown%s\n", suffix)
 	return nil
 }
 

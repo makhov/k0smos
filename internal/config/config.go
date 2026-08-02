@@ -23,9 +23,9 @@ type Config struct {
 	Gateway string
 	DNS     string
 
-	// Root, if set, is a block device holding the real root filesystem to
-	// switch_root into (e.g. /dev/vda). Empty means stay on the initramfs,
-	// which is fine for an init-only smoke test but not for running kubelet.
+	// Root, if set, overrides the block device holding the real root filesystem.
+	// Empty uses an embedded root, then discovers LABEL=k0smos. "none" stays on
+	// the initramfs, which is useful for an init-only smoke test.
 	Root       string
 	RootFSType string
 	RootFlags  string
