@@ -1,7 +1,7 @@
 # Per-machine configuration
 
 Everything is on the kernel cmdline; see the
-[options table](https://github.com/makhov/k0smos/blob/main/README.md#kernel-cmdline-options). A typical fleet line:
+[options table](../reference/cmdline.md). A typical fleet line:
 
 ```
 console=ttyS0 k0smos.ip=dhcp k0smos.hostname=node-07
