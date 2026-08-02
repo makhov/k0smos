@@ -44,7 +44,7 @@ Taken with the user during design:
 | Version macros | Yes |
 | Mermaid | Yes |
 | Dev container | Yes |
-| Hash-pinned requirements | Yes |
+| Pinned requirements | Yes |
 | Nav shape | Mirror k0s |
 
 mike now rather than later: switching a flat `gh-pages` to mike's per-version
@@ -60,7 +60,7 @@ refuses a config file inside its own docs directory. Files added:
 |---|---|
 | `mkdocs.yml` | site config: material theme, nav, macros, mermaid, mike |
 | `docs/requirements.txt` | pinned MkDocs stack |
-| `docs/requirements_pip.txt` | hash-pinned pip and wheel |
+| `docs/requirements_pip.txt` | pinned pip and wheel, with a pip-compile refresh target |
 | `docs/Makefile` | `docs` target: `cd .. && mkdocs build --strict` |
 | `docs/Makefile.variables` | python and alpine versions for the dev container |
 | `docs/Dockerfile.serve-dev` | containerised `mkdocs serve` |

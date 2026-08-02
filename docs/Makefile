@@ -16,3 +16,23 @@ serve: .require-mkdocs
 	  echo 'mkdocs required, use pip install --disable-pip-version-check -r $(CURDIR)/requirements.txt' >&2; \
 	  exit 1; \
 	}
+
+.docker-image.serve-dev.stamp: Dockerfile.serve-dev requirements_pip.txt requirements.txt Makefile.variables
+	docker build \
+	  --build-arg PYTHON_IMAGE_VERSION=$(python_version)-alpine$(alpine_version) \
+	  -t 'k0smosdocs$(basename $@)' -f '$<' .
+	touch -- '$@'
+
+# Serve the site from the container, so no local Python is needed.
+.PHONY: serve-dev
+serve-dev: .docker-image.serve-dev.stamp
+	docker run --rm -it -p 8000:8000 -v '$(CURDIR)/..:/k0smos' k0smosdocs.docker-image.serve-dev
+
+.PHONY: update-pip-requirements
+update-pip-requirements: .docker-image.serve-dev.stamp
+	docker run --rm --entrypoint sh k0smosdocs.docker-image.serve-dev -c \
+	'pip install --disable-pip-version-check pip-tools > /dev/null \
+	  && echo pip | pip-compile --allow-unsafe --output-file - - | grep -E -v "^ *#" \
+	  && echo wheel | pip-compile --allow-unsafe --output-file - - | grep -E -v "^ *#"' \
+	  > requirements_pip.txt.tmp
+	mv -- requirements_pip.txt.tmp requirements_pip.txt
