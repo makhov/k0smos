@@ -169,7 +169,8 @@ guest down cleanly rather than killing it.`,
 			// Paths come from the guest's own state directory unless overridden, so
 			// nothing runtime lands in the working tree and a second guest needs no
 			// bookkeeping from the caller.
-			if _, err := ensureGuestDir(name); err != nil {
+			machineDir, err := ensureGuestDir(name)
+			if err != nil {
 				return err
 			}
 			stateConsole, stateSocket, metaPath, err := guestPaths(name)
@@ -222,13 +223,20 @@ guest down cleanly rather than killing it.`,
 			if console == "" && !attach && !interactive {
 				console = stateConsole
 			}
+			firmwareVars := ""
+			if !direct {
+				firmwareVars, err = prepareFirmwareVars(firmware, machineDir)
+				if err != nil {
+					return err
+				}
+			}
 
 			spec := bootSpec{
 				kernel: kernel, initramfs: initramfs, disk: disk, cidata: cidata,
 				data: data, dataSize: dataSize, socket: socket,
 				mem: mem, cpus: cpus, console: console, exec: exec_,
 				apiPort: apiPort, attach: attach, interactive: interactive,
-				artifact: !direct, firmware: firmware, dryRun: dryRun,
+				artifact: !direct, firmware: firmware, firmwareVars: firmwareVars, dryRun: dryRun,
 				clusterNet: clusterNet, clusterMAC: clusterMAC,
 			}
 			// Refuse to start alongside a guest already answering on this socket.
@@ -348,6 +356,7 @@ type bootSpec struct {
 	data, dataSize, socket          string
 	mem, cpus, console, exec        string
 	firmware                        string
+	firmwareVars                    string
 	clusterNet, clusterMAC          string
 	apiPort                         int
 	attach, interactive             bool
@@ -397,6 +406,40 @@ func firmwareCandidates(g guest) []string {
 	}
 }
 
+// prepareFirmwareVars clones a distribution's writable UEFI variable template
+// into the machine state directory. Split OVMF_CODE images need this second
+// pflash device; presenting the code image alone stalls before disk boot.
+// Combined firmware images (including Homebrew's current edk2 files) have no
+// sibling template and continue to use the single readonly pflash device.
+func prepareFirmwareVars(code, machineDir string) (string, error) {
+	base := filepath.Base(code)
+	varsName := ""
+	switch base {
+	case "OVMF_CODE_4M.fd":
+		varsName = "OVMF_VARS_4M.fd"
+	case "OVMF_CODE.fd":
+		varsName = "OVMF_VARS.fd"
+	}
+	if varsName == "" {
+		return "", nil
+	}
+	template := filepath.Join(filepath.Dir(code), varsName)
+	if _, err := os.Stat(template); err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	dst := filepath.Join(machineDir, "uefi-vars.fd")
+	if _, err := os.Stat(dst); err == nil {
+		return dst, nil
+	}
+	if err := cloneFile(template, dst); err != nil {
+		return "", fmt.Errorf("clone UEFI variable store: %w", err)
+	}
+	return dst, nil
+}
+
 // qemuArgs assembles the command line. Separated from running it so --dry-run can
 // show exactly what would happen, and so it is testable without QEMU.
 func qemuArgs(g guest, s bootSpec) ([]string, error) {
@@ -413,8 +456,14 @@ func qemuArgs(g guest, s bootSpec) ([]string, error) {
 			return nil, fatalf("platform artifact disk %s not found", s.disk)
 		}
 		args = append(args,
-			"-drive", "if=pflash,format=raw,readonly=on,file="+s.firmware,
-			"-drive", "file="+s.disk+",if=virtio,format=qcow2")
+			"-drive", "if=pflash,format=raw,unit=0,readonly=on,file="+s.firmware)
+		if s.firmwareVars != "" {
+			if _, err := os.Stat(s.firmwareVars); err != nil {
+				return nil, fatalf("UEFI variable store %s not found", s.firmwareVars)
+			}
+			args = append(args, "-drive", "if=pflash,format=raw,unit=1,file="+s.firmwareVars)
+		}
+		args = append(args, "-drive", "file="+s.disk+",if=virtio,format=qcow2")
 	} else {
 		for what, path := range map[string]string{"kernel": s.kernel, "initramfs": s.initramfs} {
 			if _, err := os.Stat(path); err != nil {
