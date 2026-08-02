@@ -6,6 +6,8 @@ ENV PYTHONUNBUFFERED=1
 # mkdocs_macros loads mkdocs_modules.k0smos_macros, which lives under
 # docs/ rather than on the default path; WORKDIR below is the repo root
 # (the mount point), so docs/ must be added explicitly.
+# /k0smos here must match the container path in the `-v` mount in
+# docs/Makefile's serve-dev target — rename one, rename both.
 ENV PYTHONPATH=/k0smos/docs
 
 COPY ./requirements_pip.txt ./requirements.txt /mkdocs/
@@ -14,6 +16,9 @@ RUN pip install --disable-pip-version-check -r /mkdocs/requirements_pip.txt \
   && pip --version \
   && pip install --disable-pip-version-check -r /mkdocs/requirements.txt
 
+# Must match the container path in the `-v` mount in docs/Makefile's
+# serve-dev target (and the /k0smos in PYTHONPATH above) — rename one,
+# rename both, or mkdocs fails at startup with ModuleNotFoundError.
 WORKDIR /k0smos
 
 EXPOSE 8000
