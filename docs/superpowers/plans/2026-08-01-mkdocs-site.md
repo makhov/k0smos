@@ -1154,9 +1154,26 @@ Keep the prose. The diagram is a summary, not a replacement — the prose says w
 
 `docs/index.md`. New prose, short. Cover: what k0smos is (a minimal Go PID1 that boots k0s nodes — no shell, no busybox, no systemd), what it is for, and links into Installation, Usage and Design. Take the framing from the README's opening rather than inventing a new one.
 
+- [ ] **Step 3b: Repoint every inbound link to `architecture.md` before deleting it**
+
+Deleting the file breaks four references, and `--strict` fails the build on the
+two that live under `docs/`. Repoint all of them at the page that now carries the
+section:
+
+| File | Current target | Points at |
+|---|---|---|
+| `docs/reference/rootfs.md:47` | `../architecture.md#why-a-read-only-root-works-at-all` | `../design/decisions.md#...` |
+| `docs/deployment/kubevirt.md:78` | `../architecture.md` | the design page carrying that material |
+| `mkdocs.yml:26` | `- Architecture: architecture.md` | replaced by the Design section |
+| `README.md:18` | `docs/architecture.md` | `docs/design/decisions.md` |
+
+Check the anchor survives the split: an anchor is generated from its heading, so
+it only still resolves if the heading text is unchanged. Verify each one against
+the page you created rather than assuming.
+
 - [ ] **Step 4: Update the nav**
 
-`- Overview: index.md` is already the nav entry as of Task 1; this task replaces the stub's contents. No nav change is needed.
+`- Overview: index.md` is already the nav entry as of Task 1; this task replaces the stub's contents. Remove the `- Architecture: architecture.md` entry and add the Design section in its place.
 
 ```bash
 git rm docs/architecture.md
