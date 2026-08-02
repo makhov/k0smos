@@ -5,3 +5,4 @@
 vmlinuz*
 /site/
 /.venv-docs/
+__pycache__/
