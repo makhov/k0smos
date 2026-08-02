@@ -6,3 +6,4 @@ vmlinuz*
 /site/
 /.venv-docs/
 __pycache__/
+/docs/.docker-image.serve-dev.stamp
