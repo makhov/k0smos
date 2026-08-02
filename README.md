@@ -16,7 +16,7 @@ rather than administered. `runcmd` is **interpreted, never executed**.
 
 Docs: **[usage.md](docs/usage.md)** (how to use it) ·
 [architecture.md](docs/architecture.md) (why the boot sequence is ordered as it is)
-· [deployment.md](docs/deployment.md) (KubeVirt, Cluster API)
+· [deployment/kubevirt.md](docs/deployment/kubevirt.md) (KubeVirt, Cluster API)
 
 ## Make targets
 
