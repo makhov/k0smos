@@ -23,7 +23,10 @@ nav:
       - A multi-node cluster: usage/multi-node.md
       - Shut it down: usage/shutdown.md
       - Leftovers: usage.md
-  - Architecture: architecture.md
+  - Design:
+      - The boot chain: design/boot-chain.md
+      - Design decisions: design/decisions.md
+      - Testability: design/testability.md
   - Deployment:
       - What you ship: deployment/artifacts.md
       - KVM / libvirt: deployment/libvirt.md
