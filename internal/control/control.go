@@ -150,6 +150,10 @@ func readOnce(ctx context.Context, open func() (io.ReadWriteCloser, error), out 
 			forwarded = true // the port is alive; do not back off
 			continue
 		}
+		// A power command is a request too from the host's point of view. Reply
+		// before handing it to PID 1: shutdown may close the virtio port as soon
+		// as the command is delivered, which would otherwise race the reply.
+		serveCommandAck(rc)
 		select {
 		case out <- ev.command:
 			forwarded = true
@@ -158,6 +162,12 @@ func readOnce(ctx context.Context, open func() (io.ReadWriteCloser, error), out 
 		}
 	}
 	return forwarded
+}
+
+// serveCommandAck confirms that a power command reached the guest. It uses the
+// normal zero-length success frame so the host can share Request's parser.
+func serveCommandAck(w io.Writer) {
+	fmt.Fprintf(w, "%s 0\n", ReplyOK)
 }
 
 // serveRequest writes the reply for one request.
