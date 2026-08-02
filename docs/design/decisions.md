@@ -1,53 +1,4 @@
-# k0smos architecture
-
-Why the boot sequence is ordered the way it is. Nearly every step exists to
-prevent a specific failure that was observed on a real boot; the ordering looks
-arbitrary until you know what each one is for.
-
-This is the *why*. For how to use the thing, see [usage.md](usage.md); for running
-it on KubeVirt or Cluster API, [deployment/kubevirt.md](deployment/kubevirt.md).
-
-## The boot chain
-
-```
-firmware/QEMU/KubeVirt
-  └── kernel (Kata guest kernel by default, Alpine linux-virt, or your own)
-        └── initramfs: k0smos as /init          ← PID1, pre-switch
-              ├── mount /proc /sys /dev /run /tmp …
-              ├── read /proc/cmdline
-              ├── export PATH                    (mkfs and k0s both need it)
-              ├── load modules: named set, then autoload by modalias
-              ├── choose root: explicit override → embedded EROFS → LABEL=k0smos
-              ├── mount it at /newroot
-              └── switch_root ── exec /sbin/k0smos --switched-root
-                    └── k0smos as /sbin/k0smos   ← PID1, post-switch
-                          ├── mount anything that did not come across
-                          ├── load modules (again; harmless if already in)
-                          ├── prepare the data volume → /var/lib/k0s
-                          ├── set up cgroup2
-                          ├── loopback up
-                          ├── network: DHCP or static, write /etc/resolv.conf
-                          ├── read the cloud-init drive (no mount)
-                          │     ├── write_files → syscalls
-                          │     ├── runcmd → interpreted, never executed
-                          │     └── meta-data may supply the hostname
-                          ├── set hostname
-                          ├── install SIGCHLD reaper
-                          ├── watch control port + power button
-                          ├── supervise the workload
-                          │     (k0s controller --single, unless user-data
-                          │      names a role and join token)
-                          └── on shutdown request:
-                                k0s etcd leave (controllers, not --single)
-                                killall TERM → grace → KILL
-                                sync → unmount → sync → remount / ro
-                                reboot(2)
-```
-
-Two orderings in there are load-bearing and easy to get backwards: the data volume
-is mounted before anything can write to `/var/lib/k0s`, and the cloud-init drive is
-read after networking (so an HTTP source could later work) but before the hostname
-is set (so it can supply one).
+# Design decisions
 
 ## Why a read-only root works at all
 
@@ -80,7 +31,7 @@ Every row came from a boot that failed without it, which is why the list is this
 shape rather than "mount tmpfs over everything".
 
 For the operational side — which `ROOTFS` value produces what, and which kernels
-can mount it — see [The read-only root](reference/rootfs.md).
+can mount it — see [The read-only root](../reference/rootfs.md).
 
 ## Why an initramfs at all
 
@@ -362,16 +313,3 @@ with `EBUSY` while any process still holds the root — and k0s's children
 The evidence that this works is that a read-only `e2fsck -fn` of the image
 afterwards is completely silent — **no journal left to replay**. If the remount
 had quietly failed, there would be one.
-
-## Testability
-
-`internal/sys` holds every real syscall. Every other package declares its own
-narrow interface over the subset it needs and fakes it in tests, so all logic is
-unit-testable with no root and no VM.
-
-Two packages declare kernel constants locally rather than importing
-`golang.org/x/sys/unix` — `internal/shutdown` (reboot commands, `MS_REMOUNT`)
-and `internal/switchroot` (`MS_MOVE`) — so that they build and test on a non-Linux
-dev machine. Each has a `_linux_test.go` asserting the local values match `unix`
-on the real target. Those assertions compile on macOS but only *run* under
-`GOOS=linux`.
