@@ -10,7 +10,7 @@ All optional; k0smos boots with defaults if none are given.
 | `k0smos.data=` | *(none)* | Data volume: `auto`, a device path, or `LABEL=`/`UUID=`. Unset disables it |
 | `k0smos.datalabel=` | `k0smos-data` | Label applied when formatting, and searched for by `auto` |
 | `k0smos.datafstype=` | `ext4` | Filesystem created and mounted |
-| `k0smos.datadir=` | `/var/lib/k0s` | Where it is mounted |
+| `k0smos.datadir=` | `/var` | Where the writable data volume is mounted |
 | `k0smos.ip=` | *(none)* | `dhcp`, a static CIDR like `10.0.0.20/24`, or a per-interface list (below). Unset leaves loopback only |
 | `k0smos.gw=` | *(none)* | Default gateway. Applies to `k0smos.iface` only — a machine has one default route |
 | `k0smos.dns=` | *(none)* | Resolver for `/etc/resolv.conf`. **Overrides the DHCP lease** |
