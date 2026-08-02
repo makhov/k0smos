@@ -10,18 +10,10 @@ command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 is requir
 ctl=${K0SMOSCTL:-dist/k0smosctl}
 [ -x "$ctl" ] || { echo "$ctl is required — run 'make ctl'" >&2; exit 1; }
 
-firmware=${FIRMWARE:-}
-if [ -z "$firmware" ]; then
-  for candidate in \
-    /usr/share/OVMF/OVMF_CODE.fd \
-    /usr/share/edk2/ovmf/OVMF_CODE.fd; do
-    if [ -f "$candidate" ]; then
-      firmware=$candidate
-      break
-    fi
-  done
+firmware_args=()
+if [ -n "${FIRMWARE:-}" ]; then
+  firmware_args=(--firmware "$FIRMWARE")
 fi
-[ -f "$firmware" ] || { echo "set FIRMWARE to an OVMF code image" >&2; exit 1; }
 
 # Keep the control socket below macOS's 104-byte Unix path limit.
 tmp=$(mktemp -d /tmp/k0smos-metal.XXXXXX)
@@ -38,7 +30,8 @@ base=$(cd "$(dirname "$image")" && pwd)/$(basename "$image")
 log=$tmp/console.log
 export K0SMOS_STATE_DIR=$tmp/state
 
-"$ctl" machine up --image "$base" --arch amd64 --firmware "$firmware" \
+"$ctl" machine up --image "$base" --arch amd64 \
+  ${firmware_args[@]+"${firmware_args[@]}"} \
   --attach --api-port 0 --name firmware --memory "${MEM:-2048}" \
   --cpus "${CPUS:-2}" >"$log" 2>&1 &
 pid=$!
