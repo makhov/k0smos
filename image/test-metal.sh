@@ -21,11 +21,16 @@ pid=""
 cleanup() {
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
     kill "$pid" 2>/dev/null || true
-    # k0smosctl normally turns SIGTERM into a clean guest shutdown. If firmware
-    # never booted there is no control endpoint to answer, so bound cleanup and
-    # hard-stop only this temporary QEMU/CLI process rather than hanging CI.
+    # A second signal tells k0smosctl to kill QEMU if its first, graceful request
+    # cannot be delivered. This avoids orphaning QEMU by killing only the CLI.
     tries=0
-    while kill -0 "$pid" 2>/dev/null && [ "$tries" -lt 20 ]; do
+    while kill -0 "$pid" 2>/dev/null && [ "$tries" -lt 8 ]; do
+      sleep 0.25
+      tries=$((tries + 1))
+    done
+    kill "$pid" 2>/dev/null || true
+    tries=0
+    while kill -0 "$pid" 2>/dev/null && [ "$tries" -lt 12 ]; do
       sleep 0.25
       tries=$((tries + 1))
     done
@@ -78,6 +83,15 @@ for line in "${required[@]}"; do
 done
 
 "$ctl" machine shutdown --name firmware >>"$log" 2>&1
+shutdown_deadline=$((SECONDS + 30))
+while kill -0 "$pid" 2>/dev/null && [ "$SECONDS" -lt "$shutdown_deadline" ]; do
+  sleep 1
+done
+if kill -0 "$pid" 2>/dev/null; then
+  echo "firmware guest acknowledged poweroff but did not exit in time" >&2
+  tail -200 "$log" >&2
+  exit 1
+fi
 wait "$pid"
 pid=""
 for line in 'host requested poweroff' 'reboot: Power down'; do
