@@ -14,6 +14,13 @@ env:
 permissions:
   contents: write
 
+# Serializing docs deploys closes the race where a main push and a release
+# publication both attempt to push to gh-pages, which can leave the second with
+# a non-fast-forward rejection and an out-of-sync branch.
+concurrency:
+  group: k0smos-docs-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Deploy docs
