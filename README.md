@@ -18,88 +18,6 @@ Docs: **[usage.md](docs/usage.md)** (how to use it) ·
 [architecture.md](docs/architecture.md) (why the boot sequence is ordered as it is)
 · [deployment.md](docs/deployment.md) (KubeVirt, Cluster API)
 
-## Quick start
-
-Needs Go 1.25+ to build `k0smosctl`, plus QEMU. Works on Apple Silicon via HVF
-and on Linux/KVM. Docker is needed only when building OS artifacts locally.
-
-Build the host CLI once:
-
-```bash
-make ctl
-```
-
-Everything after that is `k0smosctl`. The shortest path downloads the matching
-qcow2 from the latest GitHub release, verifies its published SHA-256 checksum,
-caches it under `~/.cache/k0smos/images/<tag>/`, and waits for every requested
-node to become Ready:
-
-```bash
-./dist/k0smosctl cluster create --name dev -o kubeconfig
-KUBECONFIG=kubeconfig kubectl get nodes
-./dist/k0smosctl cluster rm --name dev      # clean shutdown and discard
-```
-
-That defaults to one controller which also runs workloads. An HA topology is
-`cluster create --controllers 3 --workers 2`. The CLI starts a rootless shared
-network, boots the first controller, mints join tokens there, boots the remaining
-machines with role-specific config drives, and writes the kubeconfig only after
-all five nodes are Ready.
-
-For one-machine work, `machine up` remains the lower-level primitive. Each guest
-gets its own disk cloned from the image and state under
-`~/.local/state/k0smos/<name>/`; `machine list`, `logs`, `shutdown`, and `rm`
-operate on it. Never kill QEMU: use `machine shutdown`, so `/var` is cleanly
-unmounted.
-
-The download happens once per release and architecture; later clusters reuse the
-verified cached image and make only per-machine clones. A k0smos release tag is
-the exact embedded k0s tag: one k0s release produces one complete k0smos artifact
-set. For example, `--release v1.36.3+k0s.0` pins that set. `--cache-dir` relocates
-the cache, and `--image path.qcow2` bypasses GitHub
-for a locally built or mirrored artifact. If GitHub is unavailable, a previously
-verified cached release remains usable. `GITHUB_TOKEN` or `GH_TOKEN` provides
-authentication for private repositories and avoids anonymous API rate limits.
-
-`make` is for building the CLI or local OS artifacts. The kernel, k0s and EROFS
-root require Linux tooling, but consuming a release does not.
-
-A good boot looks like:
-
-```
-k0smos: starting as PID1 (switched-root=false)
-k0smos: pseudo-filesystems mounted
-k0smos: no module tree; assuming a monolithic kernel
-k0smos: no explicit or embedded root; discovering canonical LABEL=k0smos
-k0smos: resolved LABEL=k0smos to /dev/vda2
-k0smos: mounted /dev/vda2 at /newroot read-only, switching root
-k0smos: starting as PID1 (switched-root=true)
-k0smos: cgroup2 hierarchy ready
-k0smos: loopback up
-k0smos: eth0 configured 10.0.2.15/24 gw 10.0.2.2
-k0smos: hostname set to "k0smos"
-k0smos: supervising [/usr/local/bin/k0s controller --single]
-```
-
-**Changing k0smos code means rebuilding both images.** After `switch_root`, k0smos
-re-execs `/sbin/k0smos` from the immutable root, so everything after the pivot runs the
-binary in `dist/k0smos.erofs` — rebuilding only the initramfs tests stale code that
-boots perfectly.
-
-## What gets built
-
-| Artifact | Built by | Contents |
-|---|---|---|
-| `dist/kernel/<arch>/vmlinuz` | `make kernel` | Kata guest kernel (monolithic, pinned). `make kernel-alpine` fetches Alpine `linux-virt` + a module tree instead |
-| `dist/k0smos-initramfs.gz` | `make initramfs` | k0smos as `/init`, plus the module tree if the kernel has one |
-| `dist/k0smos.erofs` | `make root` | Canonical immutable OS payload: k0smos, k0s, `/etc`; no platform modules |
-| `dist/k0smos.img` | `make disk` | ext4 root: k0smos, k0s, `/etc` |
-| `dist/k0smos-metal-<arch>.qcow2` | `make metal` | UEFI/GPT Metal3 image wrapping the canonical root plus writable `/var` |
-
-The platform artifact boots through UEFI and GRUB into its initramfs; PID1 then
-discovers and `switch_root`s onto its EROFS partition. The separate kernel,
-initramfs and ext4 image are development/build inputs, not the local boot UX.
-
 ## Make targets
 
 | Target | What it does |
@@ -281,24 +199,6 @@ root, preserving the root's byte identity with KubeVirt.
 
 ext4 remains supported for direct-kernel development images and for the writable
 data volume, so `mkfs.ext4` stays in the image.
-
-## Which kernel
-
-| | `make kernel` | `make kernel-alpine` | `make kernel-metal` |
-|---|---|---|---|
-| kernel | Kata guest | Alpine `linux-virt` | Alpine `linux-lts` |
-| modules | none | VM-oriented set | broad hardware set, including EROFS |
-| use | KubeVirt | modular-kernel tests | physical machines / Metal3 |
-
-Kata's is a *guest* kernel: ideal for VMs, useless on bare metal. Nothing special
-is needed to build against it — `make disk` and `./image/mkinitramfs.sh` handle a
-missing module tree as "monolithic".
-
-**Bring your own instead.** k0smos does not own a kernel; the fetch scripts only
-fetch. Point `MODULES_DIR` at any distro kernel's module tree — you do not need to
-build one. It must provide drivers for your hardware, `ext4`, `nf_tables` +
-`nft_compat`, `overlayfs` and cgroup v2. It does **not** need any filesystem
-support for the cloud-init drive.
 
 ## The data volume
 
