@@ -19,15 +19,15 @@ func logsCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "logs",
-		Short: "Show a guest's console",
-		Long: `Prints the console of a guest started by "k0smosctl boot".
+		Short: "Show a machine's console",
+		Long: `Prints the console of a guest started by "k0smosctl machine up".
 
 The console is the only thing a k0smos node reports through — there is no shell and
 no SSH — so this is how you watch a boot, and where k0s's own logs appear.`,
-		Example: `  k0smosctl logs               # the whole console so far
-  k0smosctl logs -f            # follow it
-  k0smosctl logs -n 50         # the last 50 lines
-  k0smosctl logs --name vm2 -f`,
+		Example: `  k0smosctl machine logs               # the whole console so far
+  k0smosctl machine logs -f            # follow it
+  k0smosctl machine logs -n 50         # the last 50 lines
+  k0smosctl machine logs --name vm2 -f`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			console, _, _, err := guestPaths(name)
@@ -129,8 +129,8 @@ func listCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
-		Short:   "List guests and whether they are running",
-		Long: `Lists the guests "k0smosctl boot" has started, and whether each is still up.
+		Short:   "List machines and whether they are running",
+		Long: `Lists the guests "k0smosctl machine up" has started, and whether each is still up.
 
 Liveness comes from its control socket answering, not from the recorded pid: a pid
 can be reused, and a socket that answers is the thing the other subcommands
@@ -142,7 +142,7 @@ actually need.`,
 				return err
 			}
 			if len(guests) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "no guests; start one with `k0smosctl boot`")
+				fmt.Fprintln(cmd.OutOrStdout(), "no guests; start one with `k0smosctl machine up`")
 				return nil
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
@@ -180,10 +180,10 @@ func rmCmd() *cobra.Command {
 	var name string
 	cmd := &cobra.Command{
 		Use:   "rm",
-		Short: "Discard a stopped guest and its disk",
+		Short: "Discard a stopped machine and its disk",
 		Long: `Deletes a guest's state directory: its root disk, console and metadata.
 
-The next boot with that name starts again from a fresh clone of the image, which is
+The next "machine up" with that name starts again from a fresh clone of the image, which is
 how a k0smos node is meant to be treated — replaced rather than repaired.
 
 Refuses while the guest is still running, since removing a disk from under QEMU
@@ -203,7 +203,7 @@ corrupts it.`,
 			}
 			if guestIsLive(socket) {
 				return fatalf("guest %q is still running — stop it first with "+
-					"`k0smosctl shutdown --name %s`", name, name)
+					"`k0smosctl machine shutdown --name %s`", name, name)
 			}
 			if err := os.RemoveAll(dir); err != nil {
 				return err

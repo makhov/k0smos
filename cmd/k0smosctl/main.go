@@ -34,7 +34,7 @@ func main() {
 func root() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "k0smosctl",
-		Short: "Build configuration drives for k0smos nodes and talk to running ones",
+		Short: "Manage local k0smos machines and clusters",
 		Long: `k0smosctl drives k0smos nodes from the host.
 
 A k0smos node has no shell and no SSH. It is configured by a cloud-init drive
@@ -52,8 +52,34 @@ port while it runs.`,
 		},
 	}
 	cmd.SetErrPrefix("k0smosctl:")
-	cmd.AddCommand(genCmd(), bootCmd(), logsCmd(), listCmd(), kubeconfigCmd(),
-		tokenCmd(), shutdownCmd("shutdown"), shutdownCmd("reboot"), rmCmd())
+	cmd.AddCommand(genCmd(), machineCmd(), clusterCmd(), clusterHubCmd())
+	return cmd
+}
+
+func machineCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "machine",
+		Short: "Create and operate local artifact-backed machines",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+	}
+	cmd.AddCommand(machineUpCmd(), logsCmd(), listCmd(),
+		shutdownCmd("shutdown"), shutdownCmd("reboot"), rmCmd())
+	return cmd
+}
+
+func clusterCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "cluster",
+		Short: "Create and access Kubernetes clusters on k0smos machines",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+	}
+	cmd.AddCommand(clusterCreateCmd(), kubeconfigCmd(), tokenCmd(), clusterRemoveCmd())
 	return cmd
 }
 

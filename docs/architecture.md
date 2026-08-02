@@ -17,7 +17,7 @@ firmware/QEMU/KubeVirt
               ├── read /proc/cmdline
               ├── export PATH                    (mkfs and k0s both need it)
               ├── load modules: named set, then autoload by modalias
-              ├── resolve k0smos.root (UUID=/LABEL= → /dev/…)
+              ├── choose root: explicit override → embedded EROFS → LABEL=k0smos
               ├── mount it at /newroot
               └── switch_root ── exec /sbin/k0smos --switched-root
                     └── k0smos as /sbin/k0smos   ← PID1, post-switch
@@ -51,7 +51,7 @@ is set (so it can supply one).
 
 ## Why a read-only root works at all
 
-The ext4 root exists because kubelet cannot run on a ramfs: cadvisor asks the kernel
+The block-backed root exists because kubelet cannot run on a ramfs: cadvisor asks the kernel
 for filesystem statistics about the root device and a ramfs reports none. That
 constraint is about the root being *block-backed*, not about it being *writable* — so
 a read-only erofs image, loop-attached, satisfies it. That is how Talos ships its own
@@ -228,6 +228,12 @@ provider (kubeadm, or k0smotron for k0s) renders a cloud-config, and the
 infrastructure provider attaches it as a NoCloud ISO (`cidata`) or an OpenStack
 config-drive (`config-2`). Reading it is what tells a machine whether it is a
 control plane or a worker, and with which join token.
+
+The same drive may carry a small `k0smos` network section. PID1 reads metadata
+before bringing interfaces up, so clones of one immutable artifact can receive
+different addresses without patching GRUB or rebuilding the root. Metadata is
+still applied after the writable overlays and `/var` mount, because its
+`write_files` entries must land on writable paths before k0s starts.
 
 The drive is read **without being mounted**. `internal/iso9660` parses the image
 straight off the block device: primary volume descriptor at sector 16, root

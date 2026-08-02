@@ -16,28 +16,16 @@ manifests, getting a kubeconfig — see [usage.md](usage.md).
 
 ## What you ship
 
-Three artifacts, and a kernel cmdline. Nothing else — no package manager, no
-configuration management, no SSH.
+One artifact per platform, both wrapping the same immutable EROFS OS payload:
 
-```
-vmlinuz                  kernel (the Kata guest kernel via make kernel,
-                         Alpine's via make kernel-alpine, or your own)
-k0smos-initramfs.gz      k0smos as /init, plus the module tree if there is one
-k0smos.img               ext4 root: k0smos, k0s, /etc, modules
-```
+| Platform | Artifact |
+|---|---|
+| KubeVirt | one OCI kernelBoot image from `make oci` |
+| Metal3 / bare metal | one UEFI-bootable qcow2 from `make metal` |
 
-Build them for the target architecture:
-
-```bash
-ARCH=x86_64 ./image/fetch-kernel.sh
-ARCH=x86_64 ./image/fetch-k0s.sh
-ARCH=x86_64 ./image/mkinitramfs.sh
-ARCH=x86_64 K0S_BIN=dist/k0s-amd64 ./image/mkrootfs.sh dist/k0smos.img
-```
-
-> The amd64 path builds and boots the initramfs, but the full
-> disk/`switch_root`/k0s chain has only been verified on arm64. Treat a first
-> amd64 deployment as a test.
+Kernel, initramfs and partition images remain internal build inputs. Machine
+configuration is not baked into either artifact; Cluster API supplies it through
+the provider's config-drive/user-data path.
 
 ## KVM / libvirt
 
@@ -49,7 +37,7 @@ involved:
   <type arch='x86_64' machine='q35'>hvm</type>
   <kernel>/var/lib/k0smos/vmlinuz</kernel>
   <initrd>/var/lib/k0smos/k0smos-initramfs.gz</initrd>
-  <cmdline>console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp</cmdline>
+  <cmdline>console=ttyS0 k0smos.ip=dhcp</cmdline>
 </os>
 <devices>
   <disk type='file' device='disk'>
@@ -84,10 +72,10 @@ development.
 ARCH=x86_64 REGISTRY=ghcr.io/you TAG=v0 PUSH=1 make oci
 ```
 
-`k0smos:<tag>` contains `/boot/vmlinuz`, `/boot/initramfs.gz` and the ext4 root at
-`/disk/k0smos.img`. A VM references it **twice** — as
-`spec.domain.firmware.kernelBoot.container` and as a `containerDisk` volume — which
-KubeVirt supports and documents:
+`k0smos:<tag>` contains `/boot/vmlinuz` and `/boot/initramfs.gz`; the initramfs
+carries the immutable erofs root. A VM references it once as
+`spec.domain.firmware.kernelBoot.container` and gives writable state its own
+`emptyDisk` or PVC:
 
 ```yaml
 firmware:
@@ -96,11 +84,11 @@ firmware:
       image: ghcr.io/you/k0smos:v0
       kernelPath: /boot/vmlinuz
       initrdPath: /boot/initramfs.gz
-    kernelArgs: "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.data=auto"
+    kernelArgs: "console=ttyS0 k0smos.ip=dhcp k0smos.data=auto"
 volumes:
-  - name: root
-    containerDisk:
-      image: ghcr.io/you/k0smos:v0
+  - name: data
+    emptyDisk:
+      capacity: 20Gi
 ```
 
 One image rather than two because the kernel and the root cannot be versioned
@@ -150,29 +138,34 @@ down cleanly, so no extra channel is needed.
 
 ## Bare metal
 
-Works in principle, with two things to arrange.
-
-**Booting.** Use PXE/iPXE or a bootloader that can load a kernel and initrd with
-a cmdline. iPXE:
+`make metal` produces `dist/k0smos-metal-<arch>.qcow2`, a complete UEFI/GPT disk:
 
 ```
-kernel http://boot.example.com/vmlinuz console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp
-initrd http://boot.example.com/k0smos-initramfs.gz
-boot
+ESP             GRUB, linux-lts, platform initramfs + hardware modules
+K0SMOS-ROOT     the canonical read-only EROFS payload
+K0SMOS-DATA     ext4 mounted at /var
 ```
 
-GRUB works equally well (`linux` + `initrd` stanzas).
+Each upstream k0s release produces one same-tagged k0smos release set. For
+example, k0s `v1.36.3+k0s.0` produces the k0smos GitHub release
+`v1.36.3+k0s.0`, containing the qcow2 and its adjacent `.sha256` file for both
+architectures. CAPM3 can consume the public release URLs directly (or the same
+two files mirrored internally):
 
-**Getting the root onto the disk.** `mkrootfs.sh` writes a bare filesystem image
-with **no partition table**, so either write it to a partition:
-
-```bash
-dd if=k0smos.img of=/dev/sda1 bs=4M status=progress && sync
+```yaml
+spec:
+  template:
+    spec:
+      image:
+        url: https://github.com/makhov/k0smos/releases/download/v1.36.3%2Bk0s.0/k0smos-metal-x86_64.qcow2
+        format: qcow2
+        checksumType: sha256
+        checksum: https://github.com/makhov/k0smos/releases/download/v1.36.3%2Bk0s.0/k0smos-metal-x86_64.qcow2.sha256
 ```
 
-or use it as a whole-disk filesystem. Either way the label survives, so
-`k0smos.root=LABEL=k0smos` finds it. There is no grow-on-first-boot: the
-filesystem stays the size it was built at (content + 3 GB).
+Set the `BareMetalHost` boot mode to UEFI. Ironic writes the image to the selected
+root device; on boot, k0smos reads the CAPI config-drive and starts the requested
+k0s controller or worker role.
 
 Shutdown on bare metal relies on the ACPI power button, which k0smos honours.
 
@@ -199,7 +192,7 @@ Everything is on the kernel cmdline; see the
 [options table](https://github.com/makhov/k0smos/blob/main/README.md#kernel-cmdline-options). A typical fleet line:
 
 ```
-console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.hostname=node-07
+console=ttyS0 k0smos.ip=dhcp k0smos.hostname=node-07
 ```
 
 With DHCP this is identical on every machine except the hostname, which is what
@@ -222,11 +215,10 @@ machine down cleanly, then read the disk with `debugfs`; see
 **Data — treat every machine as disposable.** k0s state lives in `/var/lib/k0s`
 on the root filesystem, and nothing is designed to outlive the machine:
 
-- On **KubeVirt**, a `containerDisk` is read-only and the guest writes to an
-  ephemeral overlay discarded with the pod. The root is therefore never storage.
-  Attach a data volume (`k0smos.data=auto`) and everything mutable lands there
-  instead: with `emptyDisk` it survives a guest reboot and dies with the machine;
-  with a `DataVolume`/PVC it outlives both.
+- On **KubeVirt**, the erofs root carried in the initramfs is read-only and is
+  never storage. Attach a data volume (`k0smos.data=auto`) and everything mutable
+  lands there instead: with `emptyDisk` it survives a guest reboot and dies with
+  the machine; with a `DataVolume`/PVC it outlives both.
 - On **bare metal** the disk does persist across reboots, but Cluster API still
   replaces machines rather than repairing them, so do not rely on it.
 
