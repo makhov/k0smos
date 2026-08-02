@@ -43,7 +43,7 @@ rather than as a console warning after the machine has already booted.`,
   k0smosctl gen --file ns.yaml:/var/lib/k0s/manifests/demo/ns.yaml
 
   # then boot with it attached
-  CIDATA=cidata.iso make boot`,
+  k0smosctl machine up --cidata cidata.iso`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			body, err := userDataBody(userData, files, cmd.InOrStdin())

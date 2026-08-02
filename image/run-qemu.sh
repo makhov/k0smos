@@ -76,8 +76,8 @@ append="console=$console panic=10 $net_args"
 boot=(-initrd "$initramfs")
 
 # With a disk attached, k0smos loads the storage modules and switch_roots onto
-# it. Without one it stays on the initramfs — fine for an init smoke test, but
-# kubelet cannot run on a ramfs root.
+# it. Without one the script explicitly selects initramfs-only mode — fine for
+# an init smoke test, but kubelet cannot run on a ramfs root.
 # A cloud-init drive, as a CAPI infrastructure provider would attach. Build one
 # with xorriso: `xorriso -as mkisofs -V cidata -J -r -o cidata.iso <dir>/`
 # containing user-data and meta-data.
@@ -105,6 +105,10 @@ if [ -n "$img" ]; then
   # By label, not /dev/vda: this is what a real deployment must use, since disk
   # enumeration is not stable on real hardware. Override with ROOT=/dev/vda.
   append="$append k0smos.root=${ROOT:-LABEL=k0smos} k0smos.rootfstype=ext4"
+else
+  # Empty means auto-discover LABEL=k0smos. This mode intentionally has no
+  # root disk, so opt out explicitly instead of waiting for one to appear.
+  append="$append k0smos.root=none"
 fi
 [ -n "${EXEC:-}" ] && append="$append k0smos.exec=$EXEC"
 

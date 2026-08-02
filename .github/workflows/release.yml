@@ -1,146 +1,236 @@
-name: release
+name: Release k0smos artifacts
 
-# Publishes ready-to-use artifacts so nobody has to build anything to try k0smos.
-#
-# Tag-driven: `git tag v0.1.0 && git push origin v0.1.0`. Can also be run by hand
-# from the Actions tab against a branch, which produces the artifacts without
-# creating a release — useful for checking this workflow itself.
 on:
-  push:
-    tags: ["v*"]
+  repository_dispatch:
+    types: [k0s-release]
+  schedule:
+    # k0s does not publish on a fixed cadence. Poll daily and create only
+    # release sets that do not already exist.
+    - cron: "17 4 * * *"
   workflow_dispatch:
+    inputs:
+      k0s_version:
+        description: "Exact k0s release tag, or 'latest'"
+        required: false
+        default: latest
 
 permissions:
-  contents: write # create the release and upload assets
-  packages: write # push the OCI images to GHCR
+  contents: write
+  packages: write
 
-env:
-  # Pinned so a given tag always builds the same node. Bumping k0s is a commit,
-  # not a side effect of when the release happened to be cut.
-  K0S_VERSION: v1.36.3+k0s.0
+# Serializing release discovery closes the race where two runs resolve the same
+# new upstream release before either has created the k0smos release.
+concurrency:
+  group: k0smos-k0s-release
+  cancel-in-progress: false
 
 jobs:
-  # One job per architecture, on a native runner. Cross-building the ext4 root
-  # would mean emulating mkfs and apk under qemu-user; a native runner per arch
-  # is simpler and faster.
+  resolve:
+    name: Resolve k0s release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      oci_version: ${{ steps.version.outputs.oci_version }}
+      exists: ${{ steps.version.outputs.exists }}
+      draft: ${{ steps.version.outputs.draft }}
+    steps:
+      - name: Resolve and validate version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_VERSION: ${{ github.event.client_payload.k0s_version || inputs.k0s_version || 'latest' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$REQUESTED_VERSION"
+          if [[ -z "$version" || "$version" == "latest" ]]; then
+            version="$(gh api repos/k0sproject/k0s/releases/latest --jq .tag_name)"
+          fi
+
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\+k0s\.[0-9]+$ ]]; then
+            echo "Invalid k0s release tag: $version" >&2
+            exit 1
+          fi
+
+          encoded_version="${version//+/%2B}"
+          gh api "repos/k0sproject/k0s/releases/tags/$encoded_version" >/dev/null
+
+          if release_state="$(gh release view "$version" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [[ "$release_state" == "true" ]]; then
+              exists=false
+              draft=true
+            else
+              exists=true
+              draft=false
+            fi
+          else
+            exists=false
+            draft=false
+          fi
+
+          # '+' is part of a valid k0s/GitHub tag, but is not valid in an OCI tag.
+          oci_version="${version//+/-}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "oci_version=$oci_version" >> "$GITHUB_OUTPUT"
+          echo "exists=$exists" >> "$GITHUB_OUTPUT"
+          echo "draft=$draft" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### k0smos release set"
+            echo
+            echo "- k0s release: \`$version\`"
+            echo "- OCI version: \`$oci_version\`"
+            echo "- already published: \`$exists\`"
+            echo "- resumable draft: \`$draft\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   build:
+    name: Build ${{ matrix.arch }} release set
+    needs: resolve
+    if: needs.resolve.outputs.exists != 'true'
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
-            arch: x86_64
+          - arch: x86_64
             goarch: amd64
-          - runner: ubuntu-24.04-arm
-            arch: aarch64
+            runner: ubuntu-24.04
+          - arch: aarch64
             goarch: arm64
+            runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 60
+    env:
+      ARCH: ${{ matrix.arch }}
+      K0S_VERSION: ${{ needs.resolve.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: install zstd
-        run: sudo apt-get update && sudo apt-get install -y zstd
-
-      - name: build artifacts
-        env:
-          ARCH: ${{ matrix.arch }}
+      - name: Install release tools
         run: |
-          make kernel        # Kata guest kernel, pinned by digest
-          make k0s
-          ./image/mkinitramfs.sh
-          K0S_BIN=dist/k0s-${{ matrix.goarch }} ./image/mkrootfs.sh dist/k0smos.img
+          sudo apt-get update
+          sudo apt-get install -y qemu-utils zstd
 
-      # The root image is sparse — ~240MB allocated under a 3.3GB apparent size —
-      # so it must be compressed for transport, not uploaded raw. Measured: 157MB
-      # in about 4 seconds, and `zstd -d` restores the holes, so the decompressed
-      # file occupies its allocated size rather than 3.3GB.
-      - name: package
-        env:
-          ARCH: ${{ matrix.arch }}
+      - name: Build canonical root and platform wrappers
         run: |
-          out=release
-          mkdir -p "$out"
-          cp "dist/kernel/${{ matrix.arch }}/vmlinuz" "$out/vmlinuz-${{ matrix.arch }}"
-          cp dist/k0smos-initramfs.gz "$out/k0smos-initramfs-${{ matrix.arch }}.gz"
-          # -T0 uses every core. Level 12 rather than 19: the bulk of the input is
-          # the sparse image's zero padding, which compresses to nothing at any
-          # level, so the extra minutes buy almost no size.
-          zstd -12 -T0 -o "$out/k0smos-${{ matrix.arch }}.img.zst" dist/k0smos.img
-          ( cd "$out" && sha256sum -- * > "SHA256SUMS-${{ matrix.arch }}.txt" )
-          ls -l "$out"
+          set -euo pipefail
+          make build
+          make metal
+          make kernel
+          make initramfs
+          ./image/verify-artifacts.sh
 
-      - uses: actions/upload-artifact@v4
+      - name: Smoke-test firmware boot
+        if: matrix.arch == 'x86_64'
+        run: |
+          sudo apt-get install -y ovmf qemu-system-x86
+          make ctl
+          ./image/test-metal.sh dist/k0smos-metal-x86_64.qcow2
+
+      - name: Package release artifacts
+        env:
+          RELEASE_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp dist/k0smos.erofs "out/k0smos-root-${RELEASE_ARCH}.erofs"
+          cp dist/k0smos-initramfs.gz "out/k0smos-initramfs-${RELEASE_ARCH}.gz"
+          cp "dist/k0smos-metal-${RELEASE_ARCH}.qcow2" "out/k0smos-metal-${RELEASE_ARCH}.qcow2"
+          zstd -12 -T0 -f \
+            "dist/metal-${RELEASE_ARCH}/k0smos-metal-${RELEASE_ARCH}.raw" \
+            -o "out/k0smos-metal-${RELEASE_ARCH}.raw.zst"
+
+          root_sha256="$(sha256sum dist/k0smos.erofs | cut -d' ' -f1)"
+          {
+            echo "k0s_version=$K0S_VERSION"
+            echo "k0smos_commit=$GITHUB_SHA"
+            echo "architecture=$RELEASE_ARCH"
+            echo "root_sha256=$root_sha256"
+          } > "out/k0smos-${RELEASE_ARCH}.manifest"
+
+          cd out
+          qcow2="k0smos-metal-${RELEASE_ARCH}.qcow2"
+          sha256sum "$qcow2" > "$qcow2.sha256"
+          sha256sum \
+            "k0smos-root-${RELEASE_ARCH}.erofs" \
+            "k0smos-initramfs-${RELEASE_ARCH}.gz" \
+            "$qcow2" \
+            "k0smos-metal-${RELEASE_ARCH}.raw.zst" \
+            "k0smos-${RELEASE_ARCH}.manifest" \
+            > "SHA256SUMS-${RELEASE_ARCH}.txt"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.arch }}
-          path: release/
+          path: out/*
           if-no-files-found: error
 
-      # OCI images for KubeVirt: a kernelBoot image and a containerDisk. Tags are
-      # arch-suffixed because each runner pushes its own; there is no manifest
-      # list yet, so a VM spec must name the arch it wants.
-      - name: push OCI images
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push KubeVirt OCI artifact
         env:
-          ARCH: ${{ matrix.arch }}
+          OCI_VERSION: ${{ needs.resolve.outputs.oci_version }}
           PUSH: "1"
           REGISTRY: ghcr.io/${{ github.repository_owner }}
-          TAG: ${{ github.ref_name }}-${{ matrix.goarch }}
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
-            -u "${{ github.actor }}" --password-stdin
-          ./image/mkoci.sh
+          set -euo pipefail
+          TAG="${OCI_VERSION}-${{ matrix.goarch }}" ./image/mkoci.sh
 
   release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    name: Publish k0s ${{ needs.resolve.outputs.version }} release set
+    needs: [resolve, build]
+    if: needs.resolve.outputs.exists != 'true' && needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
+          path: release-assets
           merge-multiple: true
-          path: release
 
-      - name: create release
+      - name: Create GitHub release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          K0S_VERSION: ${{ needs.resolve.outputs.version }}
+          OCI_VERSION: ${{ needs.resolve.outputs.oci_version }}
+          EXISTING_DRAFT: ${{ needs.resolve.outputs.draft }}
+        shell: bash
         run: |
-          cat > notes.md <<'EOF'
-          ## Artifacts
+          set -euo pipefail
+          {
+            echo "This is the k0smos artifact set for upstream k0s \`$K0S_VERSION\`."
+            echo
+            echo "Every image in this release embeds that exact k0s version and the same immutable EROFS root for its architecture. The KubeVirt OCI images are \`ghcr.io/${GITHUB_REPOSITORY_OWNER}/k0smos:${OCI_VERSION}-amd64\` and \`ghcr.io/${GITHUB_REPOSITORY_OWNER}/k0smos:${OCI_VERSION}-arm64\`."
+          } > release-notes.md
 
-          | File | What it is |
-          |---|---|
-          | `vmlinuz-<arch>` | Kata guest kernel, monolithic and pinned. VMs only — no bare-metal drivers |
-          | `k0smos-initramfs-<arch>.gz` | k0smos as `/init` |
-          | `k0smos-<arch>.img.zst` | ext4 root: k0smos + k0s, ~157MB. `zstd -d` before use — it restores the file's holes, so it occupies ~240MB not 3.3GB |
+          if [[ "$EXISTING_DRAFT" != "true" ]]; then
+            gh release create "$K0S_VERSION" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "k0smos for k0s $K0S_VERSION" \
+              --notes-file release-notes.md \
+              --draft
+          fi
 
-          Also pushed to GHCR for KubeVirt as one image per architecture,
-          `k0smos:<tag>-<goarch>`, holding the kernel at `/boot/vmlinuz`, the
-          initrd at `/boot/initramfs.gz` and the root at `/disk/k0smos.img`. A VM
-          spec references it twice — as the kernelBoot container and as the
-          containerDisk volume.
-
-          ## Booting one
-
-          ```
-          zstd -d k0smos-x86_64.img.zst
-          qemu-system-x86_64 -m 4096 -smp 2 \
-            -kernel vmlinuz-x86_64 -initrd k0smos-initramfs-x86_64.gz \
-            -append "console=ttyS0 k0smos.root=LABEL=k0smos k0smos.ip=dhcp k0smos.dns=1.1.1.1" \
-            -drive file=k0smos.img,if=virtio,format=raw -nographic
-          ```
-
-          Configuration is a cloud-init drive; see docs/usage.md.
-
-          Verify with `SHA256SUMS-<arch>.txt`.
-          EOF
-          gh release create "${GITHUB_REF_NAME}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "${GITHUB_REF_NAME}" \
-            --notes-file notes.md \
-            release/*
+          # Upload while the release is hidden. A failed run leaves a resumable
+          # draft instead of exposing an incomplete platform artifact set.
+          gh release upload "$K0S_VERSION" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+          gh release edit "$K0S_VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "k0smos for k0s $K0S_VERSION" \
+            --notes-file release-notes.md \
+            --draft=false

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -32,7 +33,8 @@ const (
 	metaFile    = "guest.json"
 )
 
-// guestMeta is what boot records so the other subcommands, and a later `list`, can
+// guestMeta is what machine up records so the other subcommands, and a later
+// `machine list`, can
 // describe a guest without being told about it again.
 type guestMeta struct {
 	Name    string    `json:"name"`
@@ -61,7 +63,7 @@ func stateRoot() (string, error) {
 
 // guestDir returns the state directory for a named guest without creating it:
 // reading a guest's logs must not bring a guest into existence, which is how a
-// mistyped --name once turned up in `list`.
+// mistyped --name once turned up in `machine list`.
 func guestDir(name string) (string, error) {
 	if err := validGuestName(name); err != nil {
 		return "", err
@@ -73,7 +75,7 @@ func guestDir(name string) (string, error) {
 	return filepath.Join(root, name), nil
 }
 
-// ensureGuestDir creates the state directory. Only boot does this.
+// ensureGuestDir creates the state directory. Only machine up does this.
 func ensureGuestDir(name string) (string, error) {
 	dir, err := guestDir(name)
 	if err != nil {
@@ -155,7 +157,7 @@ func listGuests() ([]guestMeta, error) {
 	}
 	var out []guestMeta
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		m, err := loadMeta(filepath.Join(root, e.Name(), metaFile))
@@ -173,15 +175,16 @@ func listGuests() ([]guestMeta, error) {
 // A guest's own images. The root is a copy only when booting from a disk; with the
 // root carried in the initramfs, which is the default, only the data volume exists.
 const (
-	rootFile = "root.img"
-	dataFile = "data.img"
+	rootFile     = "root.img"
+	artifactFile = "machine.qcow2"
+	dataFile     = "data.img"
 )
 
 // guestData returns the guest's data volume, creating it sparse if absent.
 //
 // Every guest needs one: the root is read-only, so /var — k0s's state, kubelet's,
 // containerd's images — has nowhere else to live. It is per-guest and persists
-// across reboots of that guest, and `k0smosctl rm` discards it.
+// across reboots of that guest, and `k0smosctl machine rm` discards it.
 func guestData(name, size string) (string, error) {
 	dir, err := guestDir(name)
 	if err != nil {
@@ -200,17 +203,27 @@ func guestData(name, size string) (string, error) {
 // one guest per machine, and any clone taken afterwards would carry that guest's
 // PKI — identical CA and node UID — since k0s generates it on first boot.
 func guestDisk(name, image string) (string, error) {
+	return cloneGuestDisk(name, image, rootFile, "root image", "build it with `make disk`, or point at one with --image")
+}
+
+// guestArtifact clones the complete firmware-bootable platform artifact. It has
+// a different state filename from the legacy ext4 root: reusing root.img from a
+// previous direct-kernel guest as qcow2 would make QEMU reject or corrupt it.
+func guestArtifact(name, image string) (string, error) {
+	return cloneGuestDisk(name, image, artifactFile, "platform artifact", "build it with `make metal`, or point at one with --image")
+}
+
+func cloneGuestDisk(name, image, filename, what, hint string) (string, error) {
 	dir, err := guestDir(name)
 	if err != nil {
 		return "", err
 	}
-	disk := filepath.Join(dir, rootFile)
+	disk := filepath.Join(dir, filename)
 	if _, err := os.Stat(disk); err == nil {
 		return disk, nil // reuse it: a reboot should keep the cluster
 	}
 	if _, err := os.Stat(image); err != nil {
-		return "", fmt.Errorf("root image %s not found — build it with `make disk`, "+
-			"or point at one with --image", image)
+		return "", fmt.Errorf("%s %s not found — %s", what, image, hint)
 	}
 	if err := cloneFile(image, disk); err != nil {
 		return "", fmt.Errorf("clone %s: %w", image, err)

@@ -49,6 +49,27 @@ func TestParseUserDataWriteFiles(t *testing.T) {
 	}
 }
 
+func TestParseUserDataMachineNetwork(t *testing.T) {
+	doc := `#cloud-config
+k0smos:
+  ip: eth0:dhcp,eth1:10.10.0.11/24
+  iface: eth0
+  gateway: 10.0.2.2
+  dns: 1.1.1.1
+`
+	got, err := ParseUserData([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := MachineConfig{
+		IP: "eth0:dhcp,eth1:10.10.0.11/24", Iface: "eth0",
+		Gateway: "10.0.2.2", DNS: "1.1.1.1",
+	}
+	if got.Machine != want {
+		t.Errorf("machine config = %#v, want %#v", got.Machine, want)
+	}
+}
+
 // runcmd entries come as either a bare string or an argv list. Both must yield
 // an argv, because k0smos has no shell to hand a string to.
 func TestParseUserDataRuncmdBothForms(t *testing.T) {
