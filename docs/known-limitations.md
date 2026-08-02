@@ -1,10 +1,16 @@
 # Known limitations
 
 - **No upgrade path.** Rebuilding the disk image wipes the cluster. No A/B images.
-- **No partition table and no grow-on-first-boot**, so one image fits any disk.
-- **Multi-node.** The default workload is `k0s controller --single`. Roles and
-  `--token-file` already pass through from cloud-init, but no multi-node cluster
-  has been run, so treat it as unproven rather than supported.
+- **No partition table and no grow-on-first-boot.** Either would let one image
+  fit any disk; neither exists yet.
+- **Multi-node is exercised less than single-node.** `k0smosctl cluster create
+  --controllers N --workers M` is a first-class command, and
+  `e2e/cluster_test.go`'s `TestThreeControllerWorkerCluster` boots a
+  three-controller etcd quorum that joins with a minted token and reaches
+  Ready — the first test that exercises k0smos as more than one machine. The
+  dedicated worker role is covered by unit tests (config generation,
+  join-token placement) but not yet by an e2e boot, and there is one
+  multi-node e2e test against four for the single-node path.
 - **`k0smosctl` talks to local guests only.** `kubeconfig`, `shutdown` and `reboot`
   use a virtio-serial control port that the QEMU runner attaches and a KubeVirt VMI
   does not. `gen` is host-side and works anywhere.
