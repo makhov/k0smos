@@ -207,13 +207,12 @@ afterwards.`,
 			if err != nil {
 				return err
 			}
-			conn, err := dial(socket, timeout)
+			data, err := request(socket, word, timeout)
 			if err != nil {
-				return err
+				return fmt.Errorf("guest did not acknowledge %s: %w", word, err)
 			}
-			defer conn.Close()
-			if _, err := fmt.Fprintf(conn, "%s\n", word); err != nil {
-				return err
+			if len(data) != 0 {
+				return fmt.Errorf("unexpected %d-byte reply to %s", len(data), word)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "sent %s to %s\n", word, socket)
 			return nil
