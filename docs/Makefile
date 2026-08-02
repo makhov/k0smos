@@ -4,11 +4,11 @@ include Makefile.variables
 # docs_dir is its own parent. Hence the cd.
 .PHONY: docs
 docs: .require-mkdocs
-	cd .. && mkdocs build --strict
+	cd .. && PYTHONPATH="$(CURDIR)" mkdocs build --strict
 
 .PHONY: serve
 serve: .require-mkdocs
-	cd .. && mkdocs serve
+	cd .. && PYTHONPATH="$(CURDIR)" mkdocs serve
 
 .PHONY: .require-mkdocs
 .require-mkdocs:
