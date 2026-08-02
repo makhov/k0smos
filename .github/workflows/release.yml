@@ -188,10 +188,70 @@ jobs:
           set -euo pipefail
           TAG="${OCI_VERSION}-${{ matrix.goarch }}" ./image/mkoci.sh
 
+  cli:
+    name: Build k0smosctl
+    needs: resolve
+    if: needs.resolve.outputs.exists != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      K0S_VERSION: ${{ needs.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build host binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+
+          # Asset names use uname's spelling, not Go's, so that the documented
+          # one-liner works unchanged on every host:
+          #   k0smosctl-$(uname -s | tr A-Z a-z)-$(uname -m)
+          for target in \
+            "linux amd64 x86_64" \
+            "linux arm64 aarch64" \
+            "darwin amd64 x86_64" \
+            "darwin arm64 arm64"
+          do
+            read -r goos goarch uname_m <<<"$target"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build \
+              -ldflags "-s -w -X main.version=${K0S_VERSION}" \
+              -o "out/k0smosctl-${goos}-${uname_m}" \
+              ./cmd/k0smosctl
+          done
+
+          cd out
+          sha256sum k0smosctl-* > SHA256SUMS-k0smosctl.txt
+
+      - name: Check the built CLI runs and reports its version
+        shell: bash
+        run: |
+          set -euo pipefail
+          got="$(./out/k0smosctl-linux-x86_64 --version)"
+          echo "$got"
+          # A binary that reports "dev" means the stamp silently stopped working.
+          [[ "$got" == *"$K0S_VERSION"* ]]
+
+      # Named release-* so the publish job's existing download pattern picks it up.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-cli
+          path: out/*
+          if-no-files-found: error
+
   release:
     name: Publish k0s ${{ needs.resolve.outputs.version }} release set
-    needs: [resolve, build]
-    if: needs.resolve.outputs.exists != 'true' && needs.build.result == 'success'
+    needs: [resolve, build, cli]
+    if: >-
+      needs.resolve.outputs.exists != 'true'
+      && needs.build.result == 'success'
+      && needs.cli.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -213,6 +273,15 @@ jobs:
             echo "This is the k0smos artifact set for upstream k0s \`$K0S_VERSION\`."
             echo
             echo "Every image in this release embeds that exact k0s version and the same immutable EROFS root for its architecture. The KubeVirt OCI images are \`ghcr.io/${GITHUB_REPOSITORY_OWNER}/k0smos:${OCI_VERSION}-amd64\` and \`ghcr.io/${GITHUB_REPOSITORY_OWNER}/k0smos:${OCI_VERSION}-arm64\`."
+            echo
+            echo "### Install the CLI"
+            echo
+            echo '```bash'
+            echo "curl -sSLo k0smosctl https://github.com/${GITHUB_REPOSITORY}/releases/download/${K0S_VERSION//+/%2B}/k0smosctl-\$(uname -s | tr A-Z a-z)-\$(uname -m)"
+            echo "chmod +x k0smosctl && sudo mv k0smosctl /usr/local/bin/"
+            echo '```'
+            echo
+            echo "Then \`k0smosctl cluster create --name dev\`."
           } > release-notes.md
 
           if [[ "$EXISTING_DRAFT" != "true" ]]; then
