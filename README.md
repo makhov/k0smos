@@ -78,48 +78,6 @@ checked by querying the API for three Ready nodes. Fetch the k0s airgap bundle
 first with `./image/fetch-airgap.sh` — without it every node pulls its images over
 QEMU's user-mode network and the run takes tens of minutes instead of a few.
 
-## Debugging
-
-No shell and no SSH, so there are two ways in.
-
-**Read the console.** Every init step is logged with a `k0smos:` prefix, and k0s
-logs to the same console. `SERIAL=dist/console.log` captures it headlessly.
-
-**Read the disk offline.** Container logs never reach the console, but the root is
-a raw ext4 file, so `debugfs` reads it without mounting or root (Docker because
-`debugfs` is not on macOS):
-
-```bash
-docker run --rm -v "$PWD/dist:/d" alpine:3.20 sh -c '
-  apk add -q --no-cache e2fsprogs e2fsprogs-extra >/dev/null
-  debugfs -R "ls /var/log/pods" /d/k0smos.img'
-```
-
-> **Shut the guest down cleanly first.** Killing QEMU leaves `Block bitmap
-> checksum does not match`, which loses recent writes and makes directories read
-> as empty — a diagnosis will silently mislead you.
-
-[usage.md](docs/usage.md#when-something-goes-wrong) lists the console lines worth
-recognising and two failures that look like something else.
-
-## Limitations
-
-- **Single node in practice.** The default workload is `k0s controller --single`.
-  Roles and `--token-file` pass through from cloud-init, but no multi-node cluster
-  has ever been run.
-- **Cluster API has never been reconciled.** `examples/capi-kubevirt.yaml` was
-  derived from the providers' Go types and never applied. The cloud-init contract
-  it relies on is covered by e2e tests; the loop itself is not.
-- **Physical hardware is untested.** The complete amd64 qcow2 has booted through
-  OVMF/GRUB, found its GPT partitions, autoloaded drivers, mounted EROFS + `/var`,
-  acquired DHCP and started k0s; the next evidence must come from real machines.
-- **CI has never executed** — the repository has no remote.
-- **`k0smosctl` talks to local guests only.** `kubeconfig`, `shutdown` and `reboot`
-  use a virtio-serial control port that the QEMU runner attaches and a KubeVirt VMI
-  does not. `gen` is host-side and works anywhere.
-- **No upgrade path.** Rebuilding the disk image wipes the cluster. No A/B images.
-- **Everything runs as root.** `/etc/passwd` exists only so k0s stops warning.
-
 ## Layout
 
 ```
