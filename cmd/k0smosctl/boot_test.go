@@ -85,7 +85,7 @@ func TestArtifactBootUsesFirmwareAndOneMachineDisk(t *testing.T) {
 	args := artifactArgsFor(t, nil)
 	joined := strings.Join(args, " ")
 	for _, want := range []string{
-		"if=pflash,format=raw,readonly=on,file=",
+		"if=pflash,format=raw,unit=0,readonly=on,file=",
 		"machine.qcow2,if=virtio,format=qcow2",
 		"name=k0smos.control",
 		"hostfwd=tcp::6443-:6443",
@@ -169,6 +169,45 @@ func TestFirmwareCandidatesCoverUbuntu24OVMF(t *testing.T) {
 	}
 	if want := "/usr/share/OVMF/OVMF_CODE_4M.fd"; !slices.Contains(firmwareCandidates(g), want) {
 		t.Errorf("amd64 firmware candidates do not include Ubuntu 24.04 path %s", want)
+	}
+}
+
+func TestPrepareFirmwareVarsClonesUbuntuTemplate(t *testing.T) {
+	dir := t.TempDir()
+	code := filepath.Join(dir, "OVMF_CODE_4M.fd")
+	template := filepath.Join(dir, "OVMF_VARS_4M.fd")
+	for path, content := range map[string]string{code: "code", template: "vars"} {
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	machineDir := filepath.Join(dir, "machine")
+	if err := os.Mkdir(machineDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	got, err := prepareFirmwareVars(code, machineDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "vars" {
+		t.Errorf("cloned vars = %q, want vars", data)
+	}
+}
+
+func TestArtifactBootAttachesWritableFirmwareVars(t *testing.T) {
+	args := artifactArgsFor(t, func(s *bootSpec) {
+		s.firmwareVars = filepath.Join(filepath.Dir(s.firmware), "uefi-vars.fd")
+		if err := os.WriteFile(s.firmwareVars, []byte("vars"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "if=pflash,format=raw,unit=1,file=") {
+		t.Errorf("artifact boot does not attach a writable UEFI variable store:\n%s", joined)
 	}
 }
 

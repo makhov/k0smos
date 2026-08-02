@@ -21,6 +21,15 @@ pid=""
 cleanup() {
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
     kill "$pid" 2>/dev/null || true
+    # k0smosctl normally turns SIGTERM into a clean guest shutdown. If firmware
+    # never booted there is no control endpoint to answer, so bound cleanup and
+    # hard-stop only this temporary QEMU/CLI process rather than hanging CI.
+    tries=0
+    while kill -0 "$pid" 2>/dev/null && [ "$tries" -lt 20 ]; do
+      sleep 0.25
+      tries=$((tries + 1))
+    done
+    kill -KILL "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
   fi
   rm -rf "$tmp"
