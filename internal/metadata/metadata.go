@@ -8,7 +8,8 @@
 // and has no join token.
 //
 // Only the subset that bootstrap providers actually emit is supported —
-// write_files and runcmd — not cloud-init as a whole.
+// write_files and runcmd — plus a small k0smos network section used to
+// specialise identical immutable artifacts. This is not cloud-init as a whole.
 package metadata
 
 import (
@@ -31,9 +32,25 @@ type UserData struct {
 	// RunCmd holds commands as argv slices, already normalised from
 	// cloud-init's two accepted forms.
 	RunCmd [][]string
+	// Machine carries the small part of machine configuration that cannot be
+	// baked into an immutable platform artifact. In particular, every member of
+	// a local cluster boots the same qcow2 but needs its own address on the shared
+	// segment before k0s starts.
+	Machine MachineConfig
 	// Warnings records input that was understood but deliberately skipped, so
 	// the console shows why something did not happen.
 	Warnings []string
+}
+
+// MachineConfig is k0smos's cloud-config extension. It deliberately mirrors
+// the networking names used on the kernel command line; cloud-config values win
+// when present, allowing one immutable image to be specialised per machine by
+// its ordinary metadata drive.
+type MachineConfig struct {
+	IP      string
+	Iface   string
+	Gateway string
+	DNS     string
 }
 
 // WriteFile is one entry of cloud-init's write_files.
@@ -65,6 +82,12 @@ type cloudConfig struct {
 		Permissions string `json:"permissions"`
 	} `json:"write_files"`
 	RunCmd []any `json:"runcmd"`
+	K0smos struct {
+		IP      string `json:"ip"`
+		Iface   string `json:"iface"`
+		Gateway string `json:"gateway"`
+		DNS     string `json:"dns"`
+	} `json:"k0smos"`
 }
 
 // decodeContent applies cloud-init's write_files encoding.
@@ -128,6 +151,10 @@ func ParseUserData(b []byte) (UserData, error) {
 	var cc cloudConfig
 	if err := yaml.Unmarshal(b, &cc); err != nil {
 		return out, fmt.Errorf("parse cloud-config: %w", err)
+	}
+	out.Machine = MachineConfig{
+		IP: cc.K0smos.IP, Iface: cc.K0smos.Iface,
+		Gateway: cc.K0smos.Gateway, DNS: cc.K0smos.DNS,
 	}
 
 	for _, f := range cc.WriteFiles {

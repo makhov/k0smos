@@ -1,0 +1,46 @@
+name: Build docs
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - mkdocs.yml
+      - docs/**
+      - .github/workflows/docs.yml
+
+env:
+  PYTHON_VERSION: "3.10"
+
+jobs:
+  build:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # mike and the version macro both read tags.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install --disable-pip-version-check -r docs/requirements_pip.txt
+          pip --version
+          pip install --disable-pip-version-check -r docs/requirements.txt
+
+      - name: Build
+        run: make -C docs docs
+
+  dev-container:
+    name: Build docs dev container
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: make -C docs .docker-image.serve-dev.stamp

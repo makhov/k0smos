@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -46,6 +47,170 @@ func argsFor(t *testing.T, mutate func(*bootSpec)) []string {
 	return args
 }
 
+func artifactArgsFor(t *testing.T, mutate func(*bootSpec)) []string {
+	t.Helper()
+	dir := t.TempDir()
+	touch := func(name string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	s := bootSpec{
+		artifact: true,
+		firmware: touch("uefi.fd"),
+		disk:     touch("machine.qcow2"),
+		socket:   filepath.Join(dir, "control.sock"),
+		mem:      "4096",
+		cpus:     "2",
+		apiPort:  6443,
+		attach:   true,
+	}
+	if mutate != nil {
+		mutate(&s)
+	}
+	g, err := guestFor(runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args, err := qemuArgs(g, s)
+	if err != nil {
+		t.Fatalf("qemuArgs: %v", err)
+	}
+	return args
+}
+
+func TestArtifactBootUsesFirmwareAndOneMachineDisk(t *testing.T) {
+	args := artifactArgsFor(t, nil)
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"if=pflash,format=raw,unit=0,readonly=on,file=",
+		"machine.qcow2,if=virtio,format=qcow2",
+		"name=k0smos.control",
+		"hostfwd=tcp::6443-:6443",
+		"dns=" + guestDNS,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("artifact boot args are missing %q:\n%s", want, joined)
+		}
+	}
+	for _, forbidden := range []string{"-kernel", "-initrd", "-append"} {
+		if slices.Contains(args, forbidden) {
+			t.Errorf("artifact boot unexpectedly passes %s:\n%s", forbidden, joined)
+		}
+	}
+}
+
+func TestArtifactBootCanJoinSharedClusterNetwork(t *testing.T) {
+	args := artifactArgsFor(t, func(s *bootSpec) {
+		s.clusterNet = "127.0.0.1:4321"
+		s.clusterMAC = "52:54:00:c0:5e:0b"
+	})
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"socket,id=n1,connect=127.0.0.1:4321",
+		"virtio-net-pci,netdev=n1,mac=52:54:00:c0:5e:0b",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("shared-network args are missing %q:\n%s", want, joined)
+		}
+	}
+}
+
+func TestArtifactBootAttachesCidataWithoutSeparateDataDisk(t *testing.T) {
+	dir := t.TempDir()
+	cidata := filepath.Join(dir, "cidata.iso")
+	if err := os.WriteFile(cidata, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(artifactArgsFor(t, func(s *bootSpec) { s.cidata = cidata }), " ")
+	if !strings.Contains(joined, cidata+",if=virtio,format=raw,readonly=on") {
+		t.Errorf("artifact boot did not attach cidata read-only:\n%s", joined)
+	}
+}
+
+func TestArtifactBootRejectsExternalDataVolume(t *testing.T) {
+	dir := t.TempDir()
+	g, _ := guestFor(runtime.GOARCH)
+	_, err := qemuArgs(g, bootSpec{
+		artifact: true,
+		firmware: filepath.Join(dir, "uefi.fd"),
+		disk:     filepath.Join(dir, "machine.qcow2"),
+		data:     filepath.Join(dir, "data.img"),
+		attach:   true,
+	})
+	// Missing boot files are checked first, so create them and retry the semantic
+	// validation rather than weakening qemuArgs's input checks.
+	if err == nil || !strings.Contains(err.Error(), "firmware") {
+		t.Fatalf("first validation = %v, want missing firmware", err)
+	}
+	for _, name := range []string{"uefi.fd", "machine.qcow2"} {
+		if writeErr := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}
+	_, err = qemuArgs(g, bootSpec{
+		artifact: true,
+		firmware: filepath.Join(dir, "uefi.fd"),
+		disk:     filepath.Join(dir, "machine.qcow2"),
+		data:     filepath.Join(dir, "data.img"),
+		attach:   true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "already contains") {
+		t.Errorf("artifact with --data = %v, want contained-volume error", err)
+	}
+}
+
+func TestFirmwareCandidatesCoverUbuntu24OVMF(t *testing.T) {
+	g, err := guestFor("amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/usr/share/OVMF/OVMF_CODE_4M.fd"; !slices.Contains(firmwareCandidates(g), want) {
+		t.Errorf("amd64 firmware candidates do not include Ubuntu 24.04 path %s", want)
+	}
+}
+
+func TestPrepareFirmwareVarsClonesUbuntuTemplate(t *testing.T) {
+	dir := t.TempDir()
+	code := filepath.Join(dir, "OVMF_CODE_4M.fd")
+	template := filepath.Join(dir, "OVMF_VARS_4M.fd")
+	for path, content := range map[string]string{code: "code", template: "vars"} {
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	machineDir := filepath.Join(dir, "machine")
+	if err := os.Mkdir(machineDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	got, err := prepareFirmwareVars(code, machineDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "vars" {
+		t.Errorf("cloned vars = %q, want vars", data)
+	}
+}
+
+func TestArtifactBootAttachesWritableFirmwareVars(t *testing.T) {
+	args := artifactArgsFor(t, func(s *bootSpec) {
+		s.firmwareVars = filepath.Join(filepath.Dir(s.firmware), "uefi-vars.fd")
+		if err := os.WriteFile(s.firmwareVars, []byte("vars"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "if=pflash,format=raw,unit=1,file=") {
+		t.Errorf("artifact boot does not attach a writable UEFI variable store:\n%s", joined)
+	}
+}
+
 // The cmdline is what the node is actually configured by, so its contents matter
 // more than any other part of this command.
 func TestBootCmdlineCarriesTheEssentials(t *testing.T) {
@@ -66,12 +231,12 @@ func TestBootCmdlineCarriesTheEssentials(t *testing.T) {
 	}
 }
 
-// Without a root image the guest stays on the initramfs, and must not be told to
-// switch onto a disk that is not there.
-func TestBootWithoutDiskDoesNotSetRoot(t *testing.T) {
+// Without a root image the guest stays on the initramfs explicitly; an empty
+// root setting is reserved for automatic discovery by PID1.
+func TestBootWithoutDiskDisablesRootDiscovery(t *testing.T) {
 	args := argsFor(t, func(s *bootSpec) { s.disk = "" })
-	if got := flagValue(t, args, "-append"); strings.Contains(got, "k0smos.root=") {
-		t.Errorf("-append names a root with no disk attached:\n%s", got)
+	if got := flagValue(t, args, "-append"); !strings.Contains(got, "k0smos.root=none") {
+		t.Errorf("-append does not disable root discovery with no disk attached:\n%s", got)
 	}
 }
 
@@ -105,6 +270,18 @@ func TestBootRemovesAStaleSocket(t *testing.T) {
 	argsFor(t, func(s *bootSpec) { s.socket = sock })
 	if _, err := os.Stat(sock); !os.IsNotExist(err) {
 		t.Error("stale control socket was left in place")
+	}
+}
+
+func TestBootDryRunDoesNotRemoveAControlSocket(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "control.sock")
+	if err := os.WriteFile(sock, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	argsFor(t, func(s *bootSpec) { s.socket, s.dryRun = sock, true })
+	if _, err := os.Stat(sock); err != nil {
+		t.Errorf("dry-run removed the control socket: %v", err)
 	}
 }
 

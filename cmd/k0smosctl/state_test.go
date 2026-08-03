@@ -24,7 +24,7 @@ func stateIn(t *testing.T) string {
 }
 
 // Reading a guest's state must not bring the guest into existence. Creating the
-// directory on any lookup meant a mistyped --name appeared in `list` as a stopped
+// directory on any lookup meant a mistyped --name appeared in `machine list` as a stopped
 // guest that had never been booted.
 func TestGuestPathsDoNotCreateAnything(t *testing.T) {
 	root := stateIn(t)
@@ -100,6 +100,36 @@ func TestGuestDiskReportsAMissingImage(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "make disk") {
 		t.Errorf("error = %v, want it to say how to build one", err)
+	}
+}
+
+func TestGuestArtifactUsesASeparateQCOW2StateDisk(t *testing.T) {
+	stateIn(t)
+	image := filepath.Join(t.TempDir(), "k0smos-metal-x86_64.qcow2")
+	if err := os.WriteFile(image, []byte("firmware artifact"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ensureGuestDir("vm"); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a legacy direct-kernel guest. Artifact mode must never reuse it.
+	legacy, err := guestDisk("vm", image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("raw ext4 state"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	disk, err := guestArtifact("vm", image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disk == legacy || filepath.Base(disk) != artifactFile {
+		t.Fatalf("artifact disk = %s, legacy disk = %s", disk, legacy)
+	}
+	if got, _ := os.ReadFile(disk); string(got) != "firmware artifact" {
+		t.Errorf("artifact clone = %q", got)
 	}
 }
 

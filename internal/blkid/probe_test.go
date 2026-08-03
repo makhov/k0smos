@@ -153,8 +153,10 @@ func erofsImage(label string, uuid []byte) []byte {
 	img := make([]byte, erofsSBOffset+erofsSBLen)
 	sb := img[erofsSBOffset:]
 	binary.LittleEndian.PutUint32(sb[0:], erofsMagic)
-	copy(sb[erofsUUIDOff:], uuid)
-	copy(sb[erofsLabelOff:], label)
+	// Literal offsets make this a fixture for the kernel's on-disk
+	// erofs_super_block layout, rather than merely echoing the parser constants.
+	copy(sb[48:], uuid)
+	copy(sb[64:], label)
 	return img
 }
 

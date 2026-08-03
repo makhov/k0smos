@@ -1,9 +1,12 @@
 BIN := dist/k0smos
+TARGET_MACHINE := $(if $(ARCH),$(ARCH),$(shell uname -m))
+TARGET_GOARCH := $(if $(filter arm64 aarch64,$(TARGET_MACHINE)),arm64,amd64)
+TARGET_APKARCH := $(if $(filter arm64 aarch64,$(TARGET_MACHINE)),aarch64,x86_64)
 # k0smos only runs as a linux init, so always cross-compile for the target —
 # a host build on macOS would just produce the "linux only" stub.
-GO_BUILD := GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags '-extldflags "-static"'
+GO_BUILD := GOOS=linux GOARCH=$(TARGET_GOARCH) CGO_ENABLED=0 go build -ldflags '-extldflags "-static"'
 
-.PHONY: build ctl test vet kernel kernel-alpine k0s initramfs rootfs disk artifacts e2e-artifacts boot smoke oci e2e e2e-full accept clean-dist
+.PHONY: build ctl test vet kernel kernel-alpine kernel-metal k0s initramfs root rootfs disk artifacts verify-artifacts metal e2e-artifacts boot smoke oci e2e e2e-full accept clean-dist
 build:
 	$(GO_BUILD) -o $(BIN) ./cmd/k0smos
 
@@ -39,6 +42,11 @@ kernel:
 kernel-alpine:
 	./image/fetch-kernel.sh
 
+# Alpine linux-lts for physical machines: unlike linux-virt it includes the
+# broad NIC, storage, USB and platform driver set reached by modalias autoloading.
+kernel-metal:
+	KERNEL_PACKAGE=linux-lts KERNEL_ROOT=dist/kernel-metal ./image/fetch-kernel.sh
+
 # Latest k0s release binary for the host arch (~240MB).
 k0s:
 	./image/fetch-k0s.sh
@@ -58,7 +66,14 @@ k0s:
 initramfs:
 	./image/mkinitramfs.sh
 
-# The root k0smos switch_roots onto. kubelet cannot run on the initramfs itself
+# The canonical, platform-independent OS payload. Platform-specific kernel
+# modules belong in the initramfs wrapper, never in this image, so KubeVirt and
+# Metal3 can prove they carry the same root bytes.
+root: k0s
+	ROOTFS=erofs MODULES_DIR=dist/no-platform-modules \
+		K0S_BIN=dist/k0s-$(TARGET_GOARCH) ./image/mkrootfs.sh dist/k0smos.erofs
+
+# The root k0smos switch_roots onto in kernel-matrix tests. kubelet cannot run on the initramfs itself
 # (cadvisor finds no filesystem info for a ramfs root), but it is satisfied by a
 # read-only erofs image on a loop device — which is why the root can travel inside
 # the initramfs rather than as a separate disk.
@@ -68,16 +83,25 @@ initramfs:
 rootfs: k0s
 	K0S_BIN=dist/k0s-$$(go env GOARCH) ./image/mkrootfs.sh dist/k0smos.erofs
 
-# The writable ext4 root instead, for booting from a disk. Still used by most of the
-# e2e suite, and what bare metal will want once there is an installer.
+# The writable ext4 root used by most of the e2e suite. Platform releases use
+# the canonical EROFS root instead.
 disk: k0s
 	ROOTFS=ext4 K0S_BIN=dist/k0s-$$(go env GOARCH) ./image/mkrootfs.sh dist/k0smos.img
 
-# Everything k0smosctl boot needs. `disk` already pulls in the kernel and k0s;
-# initramfs is listed because it is built from the kernel's module tree and is not
-# a prerequisite of the root image.
-# rootfs before initramfs: the initramfs embeds it.
-artifacts: kernel k0s rootfs initramfs
+# KubeVirt kernelBoot inputs. Keep root before initramfs: the latter embeds the
+# former byte-for-byte. Local `k0smosctl machine up` consumes the `metal` artifact.
+artifacts: kernel k0s root initramfs
+
+# Guard the invariant that makes the single-image KubeVirt packaging work: the
+# initramfs must contain the exact immutable root built alongside it. This also
+# catches the easy-to-make rootfs/initramfs ordering mistake in release jobs.
+verify-artifacts: artifacts
+	./image/verify-artifacts.sh
+
+# The single Cluster API/Metal3-facing artifact. Internally this assembles a raw
+# GPT disk first, but only the bootable qcow2 is the product users consume.
+metal: kernel-metal k0s root
+	./image/build-metal.sh
 
 # Everything the e2e suite boots: the default node, plus the ext4 disk most of the
 # tests switch onto. No kernel prerequisite, so a caller can choose one first — CI
@@ -86,23 +110,25 @@ artifacts: kernel k0s rootfs initramfs
 # k0smos.img and every test that boots it by LABEL waited out its timeout.
 e2e-artifacts: k0s rootfs initramfs disk
 
-# Full local boot, through the CLI so there is one path a user can follow rather
-# than a make-only shortcut that drifts from it. --attach because a contributor
-# running this wants to watch the boot; ctrl-c then stops the guest cleanly.
-boot: artifacts ctl
-	./dist/k0smosctl boot --attach --memory 8192 --cpus 4
+# Full local boot consumes the same single firmware artifact shipped to Metal3.
+# --attach because a contributor running this wants to watch the boot; ctrl-c
+# then stops the guest cleanly.
+boot: metal ctl
+	./dist/k0smosctl machine up --image dist/k0smos-metal-$(TARGET_APKARCH).qcow2 \
+		--attach --memory 8192 --cpus 4
 
 # Fast init-only check: no k0s, supervises /init (which exits 1 via the PID1
 # gate) purely to prove the mount/cgroup/net/supervise/shutdown path works.
 smoke: kernel initramfs
 	EXEC=/init MEM=1024 ./image/run-qemu.sh
 
-# OCI artifacts for KubeVirt: a kernelBoot image (kernel + initramfs) and a
-# containerDisk (the ext4 root). PUSH=1 to push, REGISTRY/TAG to retag.
+# OCI artifact for KubeVirt: one kernelBoot image containing the kernel and an
+# initramfs which itself contains the immutable erofs root. PUSH=1 to push,
+# REGISTRY/TAG to retag.
 # For a KubeVirt host, build amd64:
 #   ARCH=x86_64 make oci
-oci: kernel disk
-	./image/mkinitramfs.sh
+oci: artifacts
+	./image/verify-artifacts.sh
 	./image/mkoci.sh
 
 # End-to-end tests: boot k0smos under QEMU and assert on what happens. The fast
@@ -120,3 +146,12 @@ accept: disk
 
 clean-dist:
 	rm -rf dist
+
+# Documentation. The real targets live in docs/Makefile, matching how k0s and
+# k0smotron lay this out; these delegate so the root stays the entry point.
+.PHONY: docs docs-serve
+docs:
+	$(MAKE) -C docs docs
+
+docs-serve-dev:
+	$(MAKE) -C docs serve-dev

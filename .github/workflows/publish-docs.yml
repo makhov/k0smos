@@ -1,0 +1,83 @@
+name: Publish docs
+
+on:
+  push:
+    branches:
+      - main
+  release:
+    types:
+      - published
+
+env:
+  PYTHON_VERSION: "3.10"
+
+permissions:
+  contents: write
+
+# Serializing docs deploys closes the race where a main push and a release
+# publication both attempt to push to gh-pages, which can leave the second with
+# a non-fast-forward rejection and an out-of-sync branch.
+concurrency:
+  group: k0smos-docs-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install --disable-pip-version-check -r docs/requirements_pip.txt
+          pip --version
+          pip install --disable-pip-version-check -r docs/requirements.txt
+
+      - name: Build
+        run: make -C docs docs
+
+      - name: git config
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+      # Merges to main publish as "head", which is what the docs for unreleased
+      # code should be called.
+      - name: mike deploy head
+        if: github.ref == 'refs/heads/main'
+        run: |
+          K0SMOS_VERSION=head mike deploy --push head
+
+      - name: mike deploy release
+        if: >-
+          github.event_name == 'release' &&
+          github.event.action == 'published' &&
+          !github.event.release.draft &&
+          !github.event.release.prerelease
+        env:
+          VERSION: ${{ github.event.release.tag_name }}
+        run: |
+          K0SMOS_VERSION="$VERSION" mike deploy --push "$VERSION"
+
+      # stable points at the newest non-prerelease tag, and is what a visitor
+      # to the bare site URL gets.
+      - name: Update aliases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mike alias -u head main
+          STABLE=$(gh release list -L 100 --exclude-drafts --exclude-pre-releases \
+            --json tagName --jq '.[].tagName' | sort -V | tail -1)
+          if [ -n "$STABLE" ]; then
+            mike alias -u "$STABLE" stable
+            mike set-default --push stable
+          fi

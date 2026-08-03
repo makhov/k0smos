@@ -102,8 +102,8 @@ const (
 	erofsSBLen    = 128
 	erofsMagic    = 0xE0F5E1E2
 	// Offsets within the superblock, from struct erofs_super_block.
-	erofsUUIDOff  = 32 // uuid[16]
-	erofsLabelOff = 48 // volume_name[16]
+	erofsUUIDOff  = 48 // uuid[16]
+	erofsLabelOff = 64 // volume_name[16]
 )
 
 // probeEROFS identifies an erofs image, which is what a root filesystem carried
