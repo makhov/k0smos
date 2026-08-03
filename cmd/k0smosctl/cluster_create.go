@@ -8,13 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
-	"os/exec"
-	"os/signal"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
@@ -26,7 +22,6 @@ import (
 	"github.com/amakhov/k0smos/internal/control"
 	"github.com/amakhov/k0smos/internal/iso9660"
 	"github.com/amakhov/k0smos/internal/metadata"
-	"github.com/amakhov/k0smos/internal/nethub"
 )
 
 const (
@@ -42,21 +37,6 @@ type clusterCreateOptions struct {
 	kubeconfig                  string
 	timeout                     time.Duration
 	dryRun                      bool
-}
-
-type clusterMachine struct {
-	Name    string `json:"name"`
-	Role    string `json:"role"`
-	IP      string `json:"ip"`
-	APIPort int    `json:"apiPort,omitempty"`
-}
-
-type clusterMeta struct {
-	Name       string           `json:"name"`
-	HubPID     int              `json:"hubPid"`
-	HubAddress string           `json:"hubAddress"`
-	Machines   []clusterMachine `json:"machines"`
-	Created    time.Time        `json:"created"`
 }
 
 func clusterCreateCmd() *cobra.Command {
@@ -108,101 +88,6 @@ kubeconfig before returning.`,
 	f.DurationVar(&o.timeout, "timeout", 10*time.Minute, "time allowed for the cluster to become ready")
 	f.BoolVar(&o.dryRun, "dry-run", false, "print the machine plan without starting anything")
 	return cmd
-}
-
-func clusterRemoveCmd() *cobra.Command {
-	var name string
-	var timeout time.Duration
-	cmd := &cobra.Command{
-		Use:     "rm",
-		Aliases: []string{"delete"},
-		Short:   "Shut down and discard a local cluster",
-		Long: `Shuts every machine down cleanly, stops the cluster's userspace network,
-then removes the machine clones, config drives and recorded cluster state.
-
-It refuses to remove disks if a machine does not shut down within the timeout.`,
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			dir, err := clusterStateDir(name)
-			if err != nil {
-				return err
-			}
-			var state clusterMeta
-			body, err := os.ReadFile(filepath.Join(dir, "cluster.json"))
-			if os.IsNotExist(err) {
-				return fmt.Errorf("no cluster named %q", name)
-			}
-			if err != nil {
-				return err
-			}
-			if err := json.Unmarshal(body, &state); err != nil {
-				return err
-			}
-
-			for _, machine := range state.Machines {
-				_, socket, metaPath, err := guestPaths(machine.Name)
-				if err != nil {
-					return err
-				}
-				meta, metaErr := loadMeta(metaPath)
-				if metaErr == nil && processRunning(meta.PID) {
-					conn, err := dial(socket, 5*time.Second)
-					if err != nil {
-						return fmt.Errorf("machine %q is running but does not accept a clean shutdown: %w", machine.Name, err)
-					}
-					_, err = fmt.Fprintf(conn, "%s\n", control.PowerOff.String())
-					conn.Close()
-					if err != nil {
-						return err
-					}
-				}
-			}
-
-			deadline := time.Now().Add(timeout)
-			for _, machine := range state.Machines {
-				_, _, metaPath, _ := guestPaths(machine.Name)
-				meta, err := loadMeta(metaPath)
-				if err != nil {
-					continue
-				}
-				for processRunning(meta.PID) && time.Now().Before(deadline) {
-					time.Sleep(250 * time.Millisecond)
-				}
-				if processRunning(meta.PID) {
-					return fmt.Errorf("machine %q did not stop within %s; no disks were removed", machine.Name, timeout)
-				}
-			}
-
-			if state.HubPID > 0 {
-				_ = syscall.Kill(state.HubPID, syscall.SIGTERM)
-			}
-			for _, machine := range state.Machines {
-				machineDir, err := guestDir(machine.Name)
-				if err != nil {
-					return err
-				}
-				if err := os.RemoveAll(machineDir); err != nil {
-					return err
-				}
-			}
-			if err := os.RemoveAll(dir); err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "removed cluster %q and %d machine(s)\n", name, len(state.Machines))
-			return nil
-		},
-	}
-	cmd.Flags().StringVar(&name, "name", "dev", "cluster to remove")
-	cmd.Flags().DurationVar(&timeout, "timeout", 2*time.Minute, "time allowed for clean machine shutdown")
-	return cmd
-}
-
-func processRunning(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	err := syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 func createCluster(cmd *cobra.Command, o clusterCreateOptions) error {
@@ -381,22 +266,6 @@ func planCluster(o clusterCreateOptions) ([]clusterMachine, error) {
 		n++
 	}
 	return out, nil
-}
-
-var clusterNamePattern = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$`)
-
-func clusterNodeIP(i int) string  { return fmt.Sprintf("%s.%d", clusterSubnet, clusterFirstHost+i) }
-func clusterNodeMAC(i int) string { return fmt.Sprintf("52:54:00:c0:5e:%02x", clusterFirstHost+i) }
-
-func clusterStateDir(name string) (string, error) {
-	if err := validGuestName(name); err != nil {
-		return "", fmt.Errorf("invalid cluster name: %w", err)
-	}
-	root, err := stateRoot()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(root, ".clusters", name), nil
 }
 
 func writeJSON(path string, v any) error {
@@ -652,79 +521,4 @@ func kubeClient(data []byte) (*http.Client, string, error) {
 		MinVersion: tls.VersionTLS12, RootCAs: roots, Certificates: []tls.Certificate{cert},
 	}}
 	return &http.Client{Transport: transport}, cfg.Clusters[0].Cluster.Server, nil
-}
-
-// clusterHubCmd is an implementation detail of cluster create. It is a separate
-// process because QEMU's socket network needs the hub for the cluster's whole
-// lifetime, while create must return once Kubernetes is ready.
-func clusterHubCmd() *cobra.Command {
-	var listen, ready string
-	cmd := &cobra.Command{
-		Use:    "__hub",
-		Hidden: true,
-		Args:   cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			h, err := nethub.Listen(listen)
-			if err != nil {
-				return err
-			}
-			defer h.Close()
-			h.OnDrop = func(err error) { fmt.Fprintf(cmd.ErrOrStderr(), "cluster network: %v\n", err) }
-			if err := os.WriteFile(ready, []byte(h.Addr()+"\n"), 0600); err != nil {
-				return err
-			}
-			sig := make(chan os.Signal, 1)
-			signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-			defer signal.Stop(sig)
-			<-sig
-			return nil
-		},
-	}
-	cmd.Flags().StringVar(&listen, "listen", "127.0.0.1:0", "listen address")
-	cmd.Flags().StringVar(&ready, "ready-file", "", "write the selected address here")
-	_ = cmd.MarkFlagRequired("ready-file")
-	return cmd
-}
-
-func startClusterHub(dir string) (string, int, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", 0, err
-	}
-	ready := filepath.Join(dir, "hub.ready")
-	_ = os.Remove(ready)
-	logPath := filepath.Join(dir, "hub.log")
-	log, err := os.Create(logPath)
-	if err != nil {
-		return "", 0, err
-	}
-	defer log.Close()
-	child := exec.Command(exe, "__hub", "--ready-file", ready)
-	child.Stdout, child.Stderr, child.Stdin = log, log, nil
-	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := child.Start(); err != nil {
-		return "", 0, err
-	}
-	pid := child.Process.Pid
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		b, err := os.ReadFile(ready)
-		if err == nil {
-			addr := strings.TrimSpace(string(b))
-			if _, _, err := net.SplitHostPort(addr); err == nil {
-				if err := child.Process.Release(); err != nil {
-					_ = child.Process.Kill()
-					return "", 0, err
-				}
-				return addr, pid, nil
-			}
-		}
-		if err := syscall.Kill(pid, 0); err != nil {
-			body, _ := os.ReadFile(logPath)
-			return "", 0, fmt.Errorf("cluster network hub exited: %s", strings.TrimSpace(string(body)))
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	_ = child.Process.Kill()
-	return "", 0, errors.New("cluster network hub did not become ready")
 }
