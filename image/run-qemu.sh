@@ -11,6 +11,8 @@
 #   ARCH     guest arch (default host arch)
 #   SERIAL   "stdio" (default, interactive) or a file path (headless)
 #   EXEC     comma-separated k0smos.exec override, e.g. /bin/true
+#   ROOT     disk root override; with no IMG, "auto" permits embedded-root or
+#            LABEL=k0smos discovery instead of the initramfs-only default
 #   MEM/CPUS guest sizing
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -76,8 +78,8 @@ append="console=$console panic=10 $net_args"
 boot=(-initrd "$initramfs")
 
 # With a disk attached, k0smos loads the storage modules and switch_roots onto
-# it. Without one it stays on the initramfs — fine for an init smoke test, but
-# kubelet cannot run on a ramfs root.
+# it. Without one the script explicitly selects initramfs-only mode — fine for
+# an init smoke test, but kubelet cannot run on a ramfs root.
 # A cloud-init drive, as a CAPI infrastructure provider would attach. Build one
 # with xorriso: `xorriso -as mkisofs -V cidata -J -r -o cidata.iso <dir>/`
 # containing user-data and meta-data.
@@ -105,6 +107,13 @@ if [ -n "$img" ]; then
   # By label, not /dev/vda: this is what a real deployment must use, since disk
   # enumeration is not stable on real hardware. Override with ROOT=/dev/vda.
   append="$append k0smos.root=${ROOT:-LABEL=k0smos} k0smos.rootfstype=ext4"
+else
+  # Direct-kernel smoke tests historically stay on the initramfs. ROOT=auto is
+  # the deliberate exception used to exercise an EROFS root embedded in it;
+  # omitting k0smos.root lets PID1 select that image before disk discovery.
+  if [ "${ROOT:-none}" != auto ]; then
+    append="$append k0smos.root=${ROOT:-none}"
+  fi
 fi
 [ -n "${EXEC:-}" ] && append="$append k0smos.exec=$EXEC"
 

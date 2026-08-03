@@ -37,7 +37,7 @@ func kubeconfigCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "kubeconfig",
-		Short: "Fetch the admin kubeconfig from a running node",
+		Short: "Fetch the admin kubeconfig from a running cluster",
 		Long: `Asks a running node for its admin kubeconfig over the control port.
 
 This replaces reading the guest's disk offline with debugfs, which meant shutting
@@ -49,14 +49,14 @@ still running, and says so plainly when the cluster has not created it yet.
 Note that whoever can write to the control port obtains cluster-admin. That is not
 a new exposure — the same channel can stop the machine — but the port should not be
 exposed anywhere the disk is not.`,
-		Example: `  k0smosctl kubeconfig -o kubeconfig
+		Example: `  k0smosctl cluster kubeconfig -o kubeconfig
   KUBECONFIG=kubeconfig kubectl get nodes
 
   # print it instead of writing a file
-  k0smosctl kubeconfig -o -
+  k0smosctl cluster kubeconfig -o -
 
   # a guest booted with --name vm2 --api-port 7443
-  k0smosctl kubeconfig --name vm2 --server 127.0.0.1:7443 -o kubeconfig2`,
+  k0smosctl cluster kubeconfig --name vm2 --server 127.0.0.1:7443 -o kubeconfig2`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			socket, err := resolveSocket(socket, name)
@@ -64,7 +64,7 @@ exposed anywhere the disk is not.`,
 				return err
 			}
 			// A guest booted with a non-default --api-port is reached on that port,
-			// and boot recorded it. Filling it in here is the difference between
+			// and machine up recorded it. Filling it in here is the difference between
 			// this working and handing back a kubeconfig that points at whichever
 			// guest happens to hold 6443.
 			if !cmd.Flags().Changed("server") && server != "" {
@@ -133,12 +133,12 @@ a while to answer; raise --timeout rather than retrying.
 The same caution as kubeconfig applies: a controller token confers control-plane
 membership on whoever holds it.`,
 		Example: `  # grow the control plane: mint a token, put it on the new node's drive
-  k0smosctl token --role controller -o join-token
+  k0smosctl cluster token --role controller -o join-token
   k0smosctl gen --file join-token:/etc/k0s/join-token -o node2.iso
-  k0smosctl boot --name node2 --cidata node2.iso
+  k0smosctl machine up --name node2 --cidata node2.iso
 
   # print it instead of writing a file
-  k0smosctl token --role worker -o -`,
+  k0smosctl cluster token --role worker -o -`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if !slices.Contains(joinRoles, role) {
@@ -188,10 +188,10 @@ func shutdownCmd(verb string) *cobra.Command {
 		timeout time.Duration
 	)
 	word := control.PowerOff.String()
-	short := "Shut a running node down cleanly"
+	short := "Shut a running machine down cleanly"
 	if verb == "reboot" {
 		word = control.Reboot.String()
-		short = "Restart a running node cleanly"
+		short = "Restart a running machine cleanly"
 	}
 	cmd := &cobra.Command{
 		Use:   verb,
@@ -207,13 +207,12 @@ afterwards.`,
 			if err != nil {
 				return err
 			}
-			conn, err := dial(socket, timeout)
+			data, err := request(socket, word, timeout)
 			if err != nil {
-				return err
+				return fmt.Errorf("guest did not acknowledge %s: %w", word, err)
 			}
-			defer conn.Close()
-			if _, err := fmt.Fprintf(conn, "%s\n", word); err != nil {
-				return err
+			if len(data) != 0 {
+				return fmt.Errorf("unexpected %d-byte reply to %s", len(data), word)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "sent %s to %s\n", word, socket)
 			return nil
@@ -273,7 +272,7 @@ func rewriteServer(data []byte, server string) ([]byte, error) {
 	}), nil
 }
 
-// recordedAPIPort returns the host port boot forwarded for a named guest.
+// recordedAPIPort returns the host port machine up forwarded for a named guest.
 func recordedAPIPort(name string) (int, error) {
 	_, _, metaPath, err := guestPaths(name)
 	if err != nil {

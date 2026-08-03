@@ -171,6 +171,28 @@ func (p *port) Close() error {
 	return nil
 }
 
+func TestPowerCommandIsAcknowledged(t *testing.T) {
+	p := &port{in: strings.NewReader("poweroff\n")}
+	commands := make(chan Command, 1)
+	if !readOnce(context.Background(), func() (io.ReadWriteCloser, error) {
+		return p, nil
+	}, commands, nil) {
+		t.Fatal("power command was not forwarded")
+	}
+
+	select {
+	case cmd := <-commands:
+		if cmd != PowerOff {
+			t.Fatalf("command = %v, want PowerOff", cmd)
+		}
+	default:
+		t.Fatal("power command was not delivered")
+	}
+	if got, want := p.out.String(), ReplyOK+" 0\n"; got != want {
+		t.Errorf("reply = %q, want %q", got, want)
+	}
+}
+
 // A data request must be answered on the same port, not forwarded as a command:
 // the caller holding the command channel has no handle to reply through.
 func TestRequestIsAnsweredOnThePort(t *testing.T) {

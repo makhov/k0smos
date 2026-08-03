@@ -1,57 +1,8 @@
-# k0smos architecture
-
-Why the boot sequence is ordered the way it is. Nearly every step exists to
-prevent a specific failure that was observed on a real boot; the ordering looks
-arbitrary until you know what each one is for.
-
-This is the *why*. For how to use the thing, see [usage.md](usage.md); for running
-it on KubeVirt or Cluster API, [deployment.md](deployment.md).
-
-## The boot chain
-
-```
-firmware/QEMU/KubeVirt
-  └── kernel (Kata guest kernel by default, Alpine linux-virt, or your own)
-        └── initramfs: k0smos as /init          ← PID1, pre-switch
-              ├── mount /proc /sys /dev /run /tmp …
-              ├── read /proc/cmdline
-              ├── export PATH                    (mkfs and k0s both need it)
-              ├── load modules: named set, then autoload by modalias
-              ├── resolve k0smos.root (UUID=/LABEL= → /dev/…)
-              ├── mount it at /newroot
-              └── switch_root ── exec /sbin/k0smos --switched-root
-                    └── k0smos as /sbin/k0smos   ← PID1, post-switch
-                          ├── mount anything that did not come across
-                          ├── load modules (again; harmless if already in)
-                          ├── prepare the data volume → /var/lib/k0s
-                          ├── set up cgroup2
-                          ├── loopback up
-                          ├── network: DHCP or static, write /etc/resolv.conf
-                          ├── read the cloud-init drive (no mount)
-                          │     ├── write_files → syscalls
-                          │     ├── runcmd → interpreted, never executed
-                          │     └── meta-data may supply the hostname
-                          ├── set hostname
-                          ├── install SIGCHLD reaper
-                          ├── watch control port + power button
-                          ├── supervise the workload
-                          │     (k0s controller --single, unless user-data
-                          │      names a role and join token)
-                          └── on shutdown request:
-                                k0s etcd leave (controllers, not --single)
-                                killall TERM → grace → KILL
-                                sync → unmount → sync → remount / ro
-                                reboot(2)
-```
-
-Two orderings in there are load-bearing and easy to get backwards: the data volume
-is mounted before anything can write to `/var/lib/k0s`, and the cloud-init drive is
-read after networking (so an HTTP source could later work) but before the hostname
-is set (so it can supply one).
+# Design decisions
 
 ## Why a read-only root works at all
 
-The ext4 root exists because kubelet cannot run on a ramfs: cadvisor asks the kernel
+The block-backed root exists because kubelet cannot run on a ramfs: cadvisor asks the kernel
 for filesystem statistics about the root device and a ramfs reports none. That
 constraint is about the root being *block-backed*, not about it being *writable* — so
 a read-only erofs image, loop-attached, satisfies it. That is how Talos ships its own
@@ -78,6 +29,9 @@ exactly what a user-supplied config wants.
 
 Every row came from a boot that failed without it, which is why the list is this
 shape rather than "mount tmpfs over everything".
+
+For the platform packaging and disk layout, see
+[Artifacts and releases](../deployment/artifacts.md).
 
 ## Why an initramfs at all
 
@@ -229,6 +183,12 @@ infrastructure provider attaches it as a NoCloud ISO (`cidata`) or an OpenStack
 config-drive (`config-2`). Reading it is what tells a machine whether it is a
 control plane or a worker, and with which join token.
 
+The same drive may carry a small `k0smos` network section. PID1 reads metadata
+before bringing interfaces up, so clones of one immutable artifact can receive
+different addresses without patching GRUB or rebuilding the root. Metadata is
+still applied after the writable overlays and `/var` mount, because its
+`write_files` entries must land on writable paths before k0s starts.
+
 The drive is read **without being mounted**. `internal/iso9660` parses the image
 straight off the block device: primary volume descriptor at sector 16, root
 directory extent, directory records, and the Rock Ridge `NM` entries that carry
@@ -353,16 +313,3 @@ with `EBUSY` while any process still holds the root — and k0s's children
 The evidence that this works is that a read-only `e2fsck -fn` of the image
 afterwards is completely silent — **no journal left to replay**. If the remount
 had quietly failed, there would be one.
-
-## Testability
-
-`internal/sys` holds every real syscall. Every other package declares its own
-narrow interface over the subset it needs and fakes it in tests, so all logic is
-unit-testable with no root and no VM.
-
-Two packages declare kernel constants locally rather than importing
-`golang.org/x/sys/unix` — `internal/shutdown` (reboot commands, `MS_REMOUNT`)
-and `internal/switchroot` (`MS_MOVE`) — so that they build and test on a non-Linux
-dev machine. Each has a `_linux_test.go` asserting the local values match `unix`
-on the real target. Those assertions compile on macOS but only *run* under
-`GOOS=linux`.

@@ -1,5 +1,12 @@
 /dist/
 /build/
+# Built binaries, in case someone builds into the repo root rather than dist/.
+/k0smos
+/k0smosctl
 *.img
 *.qcow2
 vmlinuz*
+/site/
+/.venv-docs/
+__pycache__/
+/docs/.docker-image.serve-dev.stamp

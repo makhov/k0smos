@@ -62,6 +62,14 @@ const (
 	// How long to keep looking for the root device before giving up.
 	rootProbeAttempts = 30
 	rootProbeInterval = 500 * time.Millisecond
+	// canonicalRootSpec is the platform-independent contract for a packaged
+	// disk root. Platform wrappers only have to label the root filesystem; PID1
+	// discovers it without requiring a platform-specific kernel argument.
+	canonicalRootSpec = "LABEL=k0smos"
+	// noRootSpec explicitly requests an initramfs-only boot. An empty root is
+	// reserved for automatic discovery so a normal artifact boots with no root
+	// arguments at all.
+	noRootSpec = "none"
 
 	// embeddedRoot is where mkinitramfs.sh puts a root filesystem image carried
 	// inside the initramfs. Present only for a read-only root (erofs), which is
@@ -463,39 +471,60 @@ func watchPowerButton(ctx context.Context) <-chan struct{} {
 // rootDevice finds the block device holding the root filesystem.
 //
 // An image carried inside the initramfs is attached to a loop device: that is what
-// lets the root travel with the kernel instead of as a second artifact, and it is
-// how Talos ships its own root. Otherwise the root is a real disk, named by
-// UUID=/LABEL= rather than a path because on real hardware disks enumerate as
-// /dev/sda or /dev/nvme0n1 and can reorder between boots.
+// lets the root travel with the kernel instead of as a second artifact. Otherwise
+// the root is a real disk. With no explicit override, the canonical LABEL=k0smos
+// filesystem is discovered automatically.
+func selectRoot(explicit string, hasEmbedded bool) (spec string, useEmbedded, disabled bool) {
+	switch {
+	case explicit == noRootSpec:
+		return "", false, true
+	case explicit != "":
+		return explicit, false, false
+	case hasEmbedded:
+		return "", true, false
+	default:
+		return canonicalRootSpec, false, false
+	}
+}
+
 func rootDevice(s *sys.Sys, cfg config.Config) (string, error) {
 	// An explicit k0smos.root= wins over an embedded image. Both can be present —
 	// the initramfs carries a root by default, and a boot may still be told to
 	// switch onto a disk — and silently ignoring what the cmdline named would be
 	// the wrong way round.
+	hasEmbedded := false
 	if cfg.Root == "" {
-		if _, err := os.Stat(embeddedRoot); err == nil {
-			// Read-only: the image is erofs, and attaching it writable makes the
-			// mount fail with EACCES.
-			dev, err := s.LoopAttach(embeddedRoot, true)
-			if err != nil {
-				return "", fmt.Errorf("attach %s to a loop device: %w", embeddedRoot, err)
-			}
-			logf("attached %s at %s", embeddedRoot, dev)
-			return dev, nil
+		_, err := os.Stat(embeddedRoot)
+		hasEmbedded = err == nil
+	}
+	rootSpec, useEmbedded, disabled := selectRoot(cfg.Root, hasEmbedded)
+	if disabled {
+		return "", fmt.Errorf("root discovery is disabled by k0smos.root=%s", noRootSpec)
+	}
+	if useEmbedded {
+		// Read-only: the image is erofs, and attaching it writable makes the
+		// mount fail with EACCES.
+		dev, err := s.LoopAttach(embeddedRoot, true)
+		if err != nil {
+			return "", fmt.Errorf("attach %s to a loop device: %w", embeddedRoot, err)
 		}
-		return "", fmt.Errorf("no root: neither k0smos.root= nor %s", embeddedRoot)
+		logf("attached %s at %s", embeddedRoot, dev)
+		return dev, nil
+	}
+	if cfg.Root == "" {
+		logf("no explicit or embedded root; discovering canonical %s", rootSpec)
 	}
 
 	// Retried because virtio_blk and friends probe asynchronously, so the device
 	// can appear just after its module loads.
-	dev, err := blkid.ResolveWait(s, cfg.Root, rootProbeAttempts, func() {
+	dev, err := blkid.ResolveWait(s, rootSpec, rootProbeAttempts, func() {
 		time.Sleep(rootProbeInterval)
 	})
 	if err != nil {
-		return "", fmt.Errorf("find root %s: %w", cfg.Root, err)
+		return "", fmt.Errorf("find root %s: %w", rootSpec, err)
 	}
-	if dev != cfg.Root {
-		logf("resolved %s to %s", cfg.Root, dev)
+	if dev != rootSpec {
+		logf("resolved %s to %s", rootSpec, dev)
 	}
 	return dev, nil
 }
@@ -523,9 +552,8 @@ func pivot(s *sys.Sys, cfg config.Config) error {
 		return fmt.Errorf("mkdir %s: %w", newRootDir, err)
 	}
 	// Read-write first, then read-only. A writable root is what ext4 wants; but a
-	// read-only filesystem (erofs) or a read-only device — which is exactly how
-	// KubeVirt attaches a containerDisk — refuses the first attempt with EACCES,
-	// and the boot has nothing useful to say about why.
+	// read-only filesystem (erofs) or a read-only device refuses the first attempt
+	// with EACCES, and the boot has nothing useful to say about why.
 	err = s.Mount(dev, newRootDir, fstype, 0, cfg.RootFlags)
 	readOnly := false
 	if errors.Is(err, unix.EACCES) || errors.Is(err, unix.EROFS) {
@@ -534,6 +562,15 @@ func pivot(s *sys.Sys, cfg config.Config) error {
 	}
 	if err != nil {
 		return fmt.Errorf("mount %s (%s): %w", dev, fstype, err)
+	}
+	// A read-only filesystem such as EROFS can accept a mount without
+	// MS_RDONLY and still report the resulting mount as read-only. This is the
+	// normal metal-root path, so report the effective state rather than merely
+	// which mount(2) call succeeded.
+	if !readOnly {
+		if ro, statErr := s.IsReadOnly(newRootDir); statErr == nil {
+			readOnly = ro
+		}
 	}
 	how := "read-write"
 	if readOnly {
@@ -623,14 +660,13 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		logf("warn: modules: %v", err)
 	}
 
-	// Leave the initramfs for the real root, if one was given. kubelet cannot
+	// Leave the initramfs for the real root. kubelet cannot
 	// run on a ramfs root — cadvisor finds no filesystem info for it. Modules
 	// had to be loaded first: the kernel needs virtio_blk and ext4 before the
-	// root device is even visible. On success this execs and does not return.
-	// An embedded image is reason enough to switch: it needs no k0smos.root=, since
-	// there is no device to name.
-	_, embedded := os.Stat(embeddedRoot)
-	if (cfg.Root != "" || embedded == nil) && !switched {
+	// root device is even visible. With no override, rootDevice first uses an
+	// embedded image and then the canonical LABEL=k0smos disk. root=none is the
+	// explicit initramfs-only escape hatch used by smoke tests.
+	if cfg.Root != noRootSpec && !switched {
 		if err := pivot(s, cfg); err != nil {
 			return fmt.Errorf("switch root: %w", err)
 		}
@@ -677,6 +713,15 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		return fmt.Errorf("cgroup: %w", err)
 	}
 	logf("cgroup2 hierarchy ready")
+
+	// Metadata is local block-device input, so it does not need networking. Read
+	// it before configuring interfaces: a platform artifact has one immutable
+	// GRUB command line, while its metadata drive supplies the distinct address
+	// each machine needs on a cluster segment. write_files still happens after
+	// the writable overlays and /var are ready.
+	userData, metaData := loadMetadata(s)
+	applyMachineConfig(&cfg, userData.Machine)
+
 	if err := knet.Up(s); err != nil {
 		return fmt.Errorf("net: %w", err)
 	}
@@ -715,10 +760,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		}
 	}
 
-	// Metadata is read after networking so a future HTTP source could work, and
-	// before the hostname is set so it can supply one. CAPI names machines, so
-	// its value wins over the cmdline default.
-	userData, metaData := loadMetadata(s)
+	// CAPI names machines, so metadata wins over the cmdline default.
 	hostname := cfg.Hostname
 	if metaData.Hostname != "" {
 		hostname = metaData.Hostname
@@ -834,4 +876,22 @@ wait:
 
 	logf("syncing and unmounting")
 	return shutdown.Do(shutdownAdapter{s}, how)
+}
+
+// applyMachineConfig overlays fields explicitly supplied by cloud-config. An
+// empty field means "keep the artifact default", matching cmdline parsing and
+// letting a drive set only the second NIC without restating DNS or the gateway.
+func applyMachineConfig(cfg *config.Config, machine metadata.MachineConfig) {
+	if machine.IP != "" {
+		cfg.IP = machine.IP
+	}
+	if machine.Iface != "" {
+		cfg.Iface = machine.Iface
+	}
+	if machine.Gateway != "" {
+		cfg.Gateway = machine.Gateway
+	}
+	if machine.DNS != "" {
+		cfg.DNS = machine.DNS
+	}
 }

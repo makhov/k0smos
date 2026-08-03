@@ -3,10 +3,11 @@
 //
 // It matters because nothing on a k0smos machine is designed to persist: with
 // Cluster API replacing machines rather than repairing them, and a KubeVirt
-// containerDisk discarding writes with the pod, every stop is effectively a
-// permanent departure. An etcd member that vanishes without leaving stays in the
-// member list and counts against quorum, so a three-controller cluster degrades
-// with each replacement instead of staying healthy.
+// node keeping mutable state on a replaceable data volume, every stop is
+// effectively a permanent departure. An etcd member that vanishes without
+// leaving stays in the member list and counts against quorum, so a
+// three-controller cluster degrades with each replacement instead of staying
+// healthy.
 //
 // This is the one place k0smos runs a command rather than interpreting one, and
 // it is not a contradiction of that rule: the binary is the workload k0smos is

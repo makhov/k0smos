@@ -59,10 +59,40 @@ jobs:
         run: |
           python3 -c "
           import yaml, sys
-          for f in ['examples/capi-kubevirt.yaml', 'image/kubevirt-vm.yaml']:
+          for f in ['examples/capi-kubevirt.yaml', 'examples/capi-metal3-image.yaml',
+                    'image/kubevirt-vm.yaml']:
               docs = [d for d in yaml.safe_load_all(open(f)) if d]
               print(f, len(docs), 'documents')
           "
+
+  # Boots the released bare-metal shape through real firmware. No -kernel or
+  # -initrd shortcut: this covers GPT, UEFI, GRUB, modular hardware discovery,
+  # the EROFS root partition, writable data partition, and k0s supervision.
+  metal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: install firmware test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ovmf qemu-system-x86 qemu-utils
+
+      - name: build metal artifact
+        env:
+          ARCH: x86_64
+          METAL_DATA_MB: "2048"
+        run: make metal
+
+      - name: boot through UEFI
+        run: |
+          make ctl
+          ./image/test-metal.sh dist/k0smos-metal-x86_64.qcow2
 
   # Boots k0smos under QEMU on both kernels. They cover different configurations
   # rather than the same one twice, and neither is redundant.
@@ -80,10 +110,9 @@ jobs:
   #   "works only where everything is built in" — loop being a module was found
   #   exactly here.
   #
-  #   It does not run the erofs tests, and cannot: Alpine builds no erofs in either
-  #   linux-virt or linux-lts (CONFIG_EROFS_FS unset, CONFIG_SQUASHFS=m). The
-  #   initramfs build detects that and embeds no root, and the erofs test skips with
-  #   a reason. A read-only root on an Alpine kernel would have to be squashfs.
+  #   Alpine 3.23 enables EROFS as a module. This leg still names the ext4 disk
+  #   explicitly to retain coverage of the writable-root path; the separate metal
+  #   job covers modular EROFS from a GPT partition.
   #
   # The legs run in parallel, so covering both costs no wall-clock.
   e2e:

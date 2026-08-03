@@ -78,8 +78,8 @@ if ! command -v "$mkfs_tool" >/dev/null 2>&1 || ! command -v apk >/dev/null 2>&1
   # script, and anything not listed here is silently lost on a macOS host.
   exec docker run --rm --platform "$platform" -v "$repo:/repo" -w /repo \
     -e K0S_BIN -e K0SMOS_BIN -e MODULES_DIR -e ARCH \
-    -e PAD_MB -e FSLABEL -e APK_PKGS -e ROOTFS \
-    alpine:3.20 sh -c 'apk add -q --no-cache '"$apk_build"' bash >/dev/null && exec bash image/mkrootfs.sh "$1"' _ "$img"
+    -e PAD_MB -e FSLABEL -e FSUUID -e APK_PKGS -e ROOTFS \
+    alpine:3.23 sh -c 'apk add -q --no-cache '"$apk_build"' bash >/dev/null && exec bash image/mkrootfs.sh "$1"' _ "$img"
 fi
 
 root=$(mktemp -d)
@@ -169,8 +169,9 @@ if [ "$rootfs" = erofs ]; then
   # -zlz4hc compresses well while staying cheap to read at random, which is what
   # a root filesystem does. -T0 pins timestamps so the same tree gives the same
   # bytes, keeping the initramfs that carries it reproducible.
-  mkfs.erofs -q -zlz4hc -T0 -U "${FSUUID:-c0dec0de-0000-4000-8000-k0smos00000}" "$img" "$root" >/dev/null 2>&1 ||
-    mkfs.erofs -zlz4hc -T0 "$img" "$root" >/dev/null
+  mkfs.erofs -zlz4hc -T0 \
+    -U "${FSUUID:-c0dec0de-0000-4000-8000-000000000001}" \
+    -L "${FSLABEL:-k0smos}" "$img" "$root" >/dev/null
   echo "wrote $img ($(du -m "$img" | cut -f1)M erofs, read-only, linux/$goarch)"
   exit 0
 fi
@@ -180,9 +181,9 @@ fi
 # runtime, and pulled container images land there too. Size it for the images a
 # node will pull, since that dominates.
 #
-# Nothing here is expected to persist. On KubeVirt a containerDisk is read-only
-# and the guest writes to an ephemeral overlay that is discarded with the pod;
-# on bare metal the disk does persist, but Cluster API replaces machines rather
+# Nothing here is expected to persist. This ext4 mode is for direct-kernel disk
+# boot; the default KubeVirt artifact uses an erofs root embedded in its initramfs.
+# On bare metal a disk would persist, but Cluster API replaces machines rather
 # than repairing them either way.
 #
 # The file is sparse, so a generous number costs little: a 3 GB pad over ~290 MB
@@ -190,8 +191,10 @@ fi
 pad_mb=${PAD_MB:-3072}
 size_mb=$(( $(du -sm "$root" | cut -f1) + pad_mb ))
 truncate -s "${size_mb}M" "$img"
-# -L so the root can be named as LABEL=k0smos on the kernel cmdline instead of
-# a device path, which is not dependable on real hardware where disks enumerate
-# as /dev/sda or /dev/nvme0n1 and can reorder between boots.
-mkfs.ext4 -q -L "${FSLABEL:-k0smos}" -d "$root" "$img"
+# -L gives PID1 the canonical LABEL=k0smos root it discovers automatically,
+# avoiding device paths that can reorder between boots. k0smos.root= remains an
+# override for non-canonical images.
+uuid_args=()
+[ -n "${FSUUID:-}" ] && uuid_args=(-U "$FSUUID")
+mkfs.ext4 -q -L "${FSLABEL:-k0smos}" "${uuid_args[@]}" -d "$root" "$img"
 echo "wrote $img (${size_mb}M apparent, $(du -m "$img" | cut -f1)M allocated, linux/$goarch, LABEL=${FSLABEL:-k0smos})"
