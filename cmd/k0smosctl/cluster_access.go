@@ -13,20 +13,6 @@ import (
 	"github.com/amakhov/k0smos/internal/control"
 )
 
-// resolveSocket picks the control socket to talk to: an explicit path wins,
-// otherwise the named guest's. QEMU listens on it and relays to the guest's
-// virtio-serial port, so the host connects as a client.
-func resolveSocket(socket, name string) (string, error) {
-	if socket == "" {
-		_, resolved, _, err := guestPaths(name)
-		if err != nil {
-			return "", err
-		}
-		socket = resolved
-	}
-	return socket, checkSocketPath(socket)
-}
-
 func kubeconfigCmd() *cobra.Command {
 	var (
 		name    string
@@ -178,76 +164,6 @@ membership on whoever holds it.`,
 // joinRoles are the roles a token can be minted for. Checked here as well as in
 // the guest so a typo fails at once rather than after a round trip.
 var joinRoles = []string{"controller", "worker"}
-
-// shutdownCmd builds the shutdown and reboot commands, which differ only in the
-// word they send.
-func shutdownCmd(verb string) *cobra.Command {
-	var (
-		name    string
-		socket  string
-		timeout time.Duration
-	)
-	word := control.PowerOff.String()
-	short := "Shut a running machine down cleanly"
-	if verb == "reboot" {
-		word = control.Reboot.String()
-		short = "Restart a running machine cleanly"
-	}
-	cmd := &cobra.Command{
-		Use:   verb,
-		Short: short,
-		Long: short + `.
-
-Use this rather than killing QEMU: a hard kill leaves the ext4 root with an
-unreplayed journal, which loses recent writes and makes the image read as empty
-afterwards.`,
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			socket, err := resolveSocket(socket, name)
-			if err != nil {
-				return err
-			}
-			data, err := request(socket, word, timeout)
-			if err != nil {
-				return fmt.Errorf("guest did not acknowledge %s: %w", word, err)
-			}
-			if len(data) != 0 {
-				return fmt.Errorf("unexpected %d-byte reply to %s", len(data), word)
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "sent %s to %s\n", word, socket)
-			return nil
-		},
-	}
-	f := cmd.Flags()
-	f.StringVar(&name, "name", defaultGuestName, "which guest")
-	f.StringVar(&socket, "socket", "", "control socket path, instead of resolving --name")
-	f.DurationVar(&timeout, "timeout", 5*time.Second, "how long to wait for the socket")
-	return cmd
-}
-
-func dial(socket string, timeout time.Duration) (net.Conn, error) {
-	conn, err := net.DialTimeout("unix", socket, timeout)
-	if err != nil {
-		return nil, fmt.Errorf("no control socket at %s — is the guest running? (%w)", socket, err)
-	}
-	return conn, nil
-}
-
-// request performs one request/response exchange against a node.
-func request(socket, name string, timeout time.Duration) ([]byte, error) {
-	conn, err := dial(socket, timeout)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	// A node that never answers must not hang the CLI: the port is reopened by
-	// the guest on EOF, so a request sent while it is between opens is simply
-	// lost, and waiting forever would hide that.
-	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
-		return nil, err
-	}
-	return control.Request(conn, name)
-}
 
 // serverField matches the API server URL k0s writes into a kubeconfig.
 var serverField = regexp.MustCompile(`(server:\s*https://)([^\s]+)`)
