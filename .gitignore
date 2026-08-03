@@ -1,8 +1,12 @@
 /dist/
 /build/
-# Built binaries, in case someone builds into the repo root rather than dist/.
+# Built binaries, for when a build lands next to the source instead of in dist/.
+# Spelled out rather than a bare "k0smosctl", which would also match the
+# cmd/k0smosctl source directory and hide it from git entirely.
 /k0smos
 /k0smosctl
+/cmd/k0smos/k0smos
+/cmd/k0smosctl/k0smosctl
 *.img
 *.qcow2
 vmlinuz*
