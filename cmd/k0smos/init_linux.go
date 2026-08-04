@@ -31,6 +31,7 @@ import (
 	"github.com/amakhov/k0smos/internal/power"
 	"github.com/amakhov/k0smos/internal/reaper"
 	"github.com/amakhov/k0smos/internal/shutdown"
+	"github.com/amakhov/k0smos/internal/status"
 	"github.com/amakhov/k0smos/internal/supervise"
 	"github.com/amakhov/k0smos/internal/switchroot"
 	"github.com/amakhov/k0smos/internal/sys"
@@ -86,6 +87,12 @@ const (
 
 	// metadataMount is where a cloud-init drive is mounted while being read.
 	metadataMount = "/run/k0smos/metadata"
+	// bootRecordPath holds the boot record, readable over the control port while
+	// the node runs and off the disk afterwards.
+	bootRecordPath = "/run/k0smos/boot.json"
+	// maxServedFile bounds a file served to the host, below the reply framing's
+	// own cap so an oversized file is reported rather than truncated.
+	maxServedFile = 4 << 20
 	// msReadOnly is MS_RDONLY: a metadata drive is never written to.
 	msReadOnly = 0x1
 
@@ -102,6 +109,32 @@ const (
 // report to, and a silent init is undebuggable when a boot goes wrong.
 func logf(format string, args ...any) {
 	fmt.Fprintf(os.Stdout, "k0smos: "+format+"\n", args...)
+}
+
+// rec is the boot record. The console shows a boot as it happens and then loses
+// it; this is what makes the same information answerable afterwards, over the
+// control port or off the disk. Starts sink-less so anything recorded before
+// /run exists is still kept in memory.
+var rec = status.New(nil)
+
+// step records the outcome of a boot stage. The console message stays where it
+// is: this adds a durable record, it does not replace the running commentary.
+func step(name string, err error, detail string) {
+	rec.Step(name, err, detail)
+}
+
+// recordTo points the recorder at a file once there is somewhere to write. The
+// path is under /run, so it is per-boot and never stale.
+func recordTo(path string) {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		logf("warn: boot record dir: %v", err)
+		return
+	}
+	rec = status.NewFrom(rec, func(b []byte) error {
+		// Written whole each time rather than appended: a truncated record is
+		// worse than a slightly stale one.
+		return os.WriteFile(path, b, 0644)
+	})
 }
 
 // shutdownAdapter lets *sys.Sys satisfy shutdown.Shutdowner, whose Mounts()
@@ -143,7 +176,7 @@ func findControlPort(name string) string {
 // The port is reopened on EOF: with no host client attached it reads EOF
 // immediately, so watching it once would stop listening before anyone could
 // send anything.
-func watchControlPort(ctx context.Context, cfg config.Config) <-chan control.Command {
+func watchControlPort(ctx context.Context, s *sys.Sys, cfg config.Config) <-chan control.Command {
 	dev := findControlPort(controlPortName)
 	if dev == "" {
 		logf("no control port; shutdown only via SIGTERM/SIGINT")
@@ -155,20 +188,53 @@ func watchControlPort(ctx context.Context, cfg config.Config) <-chan control.Com
 		// it read-only was enough while shutdown was the only thing it carried.
 		return os.OpenFile(dev, os.O_RDWR, 0)
 	}, controlRetry, func(request string) ([]byte, error) {
-		return answerRequest(cfg, request)
+		return answerRequest(s, cfg, request)
 	})
 }
 
 // answerRequest serves a host request for data from the node.
-func answerRequest(cfg config.Config, request string) ([]byte, error) {
+func answerRequest(s *sys.Sys, cfg config.Config, request string) ([]byte, error) {
 	verb, arg, _ := strings.Cut(request, " ")
 	switch verb {
 	case control.RequestKubeconfig:
 		return readKubeconfig()
 	case control.RequestToken:
 		return createJoinToken(cfg, strings.TrimSpace(arg))
+	case control.RequestStatus:
+		return rec.JSON()
+	case control.RequestDmesg:
+		return s.KernelLog()
+	case control.RequestCat:
+		return readForHost(strings.TrimSpace(arg))
 	}
 	return nil, fmt.Errorf("unknown request %q", request)
+}
+
+// readForHost serves one file to the host. This is how pod logs, the rendered
+// k0s config and /run state are reached on a machine with no shell.
+//
+// Refuses a directory rather than returning its raw bytes, and refuses anything
+// too large for the reply framing so the failure names the size instead of
+// arriving as a truncated file.
+func readForHost(path string) ([]byte, error) {
+	if path == "" {
+		return nil, fmt.Errorf("no path given; use %q", control.RequestCat+" /path")
+	}
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("path must be absolute: %q", path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("%s is a directory", path)
+	}
+	if info.Size() > maxServedFile {
+		return nil, fmt.Errorf("%s is %d bytes, over the %d-byte limit for a reply",
+			path, info.Size(), int64(maxServedFile))
+	}
+	return os.ReadFile(path)
 }
 
 // readKubeconfig returns the admin kubeconfig off the filesystem.
@@ -276,6 +342,7 @@ func configureDHCP(ctx context.Context, s *sys.Sys, cfg config.Config, iface str
 			return err
 		}
 		logf("%s configured %s gw %s (lease %s)", iface, l.CIDR(), gw, l.LeaseTime)
+		step("network", nil, fmt.Sprintf("%s dhcp %s gw %s", iface, l.CIDR(), gw))
 		return nil
 	}
 	if err := apply(lease); err != nil {
@@ -387,6 +454,7 @@ func openMetadata(s *sys.Sys, dev, label string) (metadata.Files, func(), error)
 	for _, fstype := range []string{"vfat", "ext4"} {
 		if err := s.Mount(dev, metadataMount, fstype, msReadOnly, ""); err == nil {
 			logf("mounted %s (%s, LABEL=%s) at %s", dev, fstype, label, metadataMount)
+			step("metadata", nil, fmt.Sprintf("%s (%s, LABEL=%s)", dev, fstype, label))
 			return metadata.Dir(metadataMount), func() {
 				if err := s.Unmount(metadataMount, 0); err != nil {
 					logf("warn: unmount %s: %v", metadataMount, err)
@@ -525,6 +593,7 @@ func rootDevice(s *sys.Sys, cfg config.Config) (string, error) {
 	}
 	if dev != rootSpec {
 		logf("resolved %s to %s", rootSpec, dev)
+		step("root", nil, fmt.Sprintf("%s -> %s", rootSpec, dev))
 	}
 	return dev, nil
 }
@@ -591,6 +660,7 @@ func loadModules(s *sys.Sys, cfg config.Config) error {
 	}
 	if len(names) == 0 {
 		logf("module loading disabled")
+		step("modules", nil, "disabled by k0smos.modules=none")
 		return nil
 	}
 	release, err := s.Release()
@@ -605,10 +675,13 @@ func loadModules(s *sys.Sys, cfg config.Config) error {
 		// Individual failures are collected rather than fatal: one undriveable
 		// device or one bad module must not cost the machine the others.
 		logf("warn: modules: %v", err)
+		step("modules", err, "")
 	}
 	if res.TreeFound {
 		logf("loaded %d kernel module(s) from %s, autoloaded %d driver(s) for %d device(s)",
 			res.Loaded, base, res.Autoloaded, res.Devices)
+		step("modules", nil, fmt.Sprintf("%d loaded, %d autoloaded for %d devices (%s)",
+			res.Loaded, res.Autoloaded, res.Devices, release))
 		return nil
 	}
 
@@ -624,9 +697,11 @@ func loadModules(s *sys.Sys, cfg config.Config) error {
 		logf("warn: %s has module trees %v but none for the running kernel %q — "+
 			"kernel and modules are out of step, so NO modules were loaded",
 			modulesRoot, have, release)
+		step("modules", fmt.Errorf("kernel %s has no module tree; found %v", release, have), "")
 		return nil
 	}
 	logf("no module tree; assuming a monolithic kernel")
+	step("modules", nil, "none needed; monolithic kernel")
 	return nil
 }
 
@@ -637,10 +712,16 @@ func loadModules(s *sys.Sys, cfg config.Config) error {
 // not attempt the switch a second time.
 func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	logf("starting as PID1 (switched-root=%t)", switched)
+	rec.SetSwitchedRoot(switched)
 	if err := mount.Ensure(s); err != nil {
+		step("mounts", err, "")
 		return fmt.Errorf("mounts: %w", err)
 	}
 	logf("pseudo-filesystems mounted")
+	step("mounts", nil, "")
+	// /run exists now, so the record can start persisting. Anything recorded
+	// above was held in memory and is carried over.
+	recordTo(bootRecordPath)
 
 	// Only readable now that /proc is mounted.
 	cfg := config.Parse(readCmdline(cmdlinePath))
@@ -710,9 +791,11 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	}
 
 	if err := cgroup.Setup(s); err != nil {
+		step("cgroup2", err, "")
 		return fmt.Errorf("cgroup: %w", err)
 	}
 	logf("cgroup2 hierarchy ready")
+	step("cgroup2", nil, "")
 
 	// Metadata is local block-device input, so it does not need networking. Read
 	// it before configuring interfaces: a platform artifact has one immutable
@@ -723,9 +806,11 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	applyMachineConfig(&cfg, userData.Machine)
 
 	if err := knet.Up(s); err != nil {
+		step("loopback", err, "")
 		return fmt.Errorf("net: %w", err)
 	}
 	logf("loopback up")
+	step("loopback", nil, "")
 
 	// Created here rather than just before the child starts, because the DHCP
 	// renewal goroutine below needs to be cancelled on shutdown too.
@@ -751,6 +836,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 			logf("warn: configure %s: %v", nic.Name, err)
 		} else {
 			logf("%s configured %s gw %s", nic.Name, nic.Addr, nic.Gateway)
+			step("network", nil, fmt.Sprintf("%s %s gw %s", nic.Name, nic.Addr, nic.Gateway))
 		}
 	}
 	if dns != "" {
@@ -769,6 +855,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		logf("warn: sethostname %q: %v", hostname, err)
 	} else {
 		logf("hostname set to %q", hostname)
+		rec.SetHostname(hostname)
 	}
 
 	// Reaper: SIGCHLD -> coalescing trigger -> drain wait4.
@@ -781,7 +868,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 
 	// Started before the child so a host shutdown request is never missed while
 	// k0s is coming up, which can take minutes.
-	hostCmds := watchControlPort(runCtx, cfg)
+	hostCmds := watchControlPort(runCtx, s, cfg)
 	powerBtn := watchPowerButton(runCtx)
 
 	// runcmd is interpreted, never executed: k0smos does not exec binaries named
@@ -809,6 +896,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	}
 
 	logf("supervising %v", workloadCmd)
+	rec.SetChild(workloadCmd)
 	childDone := make(chan struct{})
 	go func() {
 		defer close(childDone)
@@ -817,7 +905,10 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 			Args:       workloadCmd[1:],
 			Env:        plan.Env,
 			MaxBackoff: 10 * time.Second,
-			OnExit:     func(err error) { logf("child exited: %v", err) },
+			OnExit: func(err error) {
+				logf("child exited: %v", err)
+				rec.ChildExited(err)
+			},
 		})
 	}()
 

@@ -173,6 +173,26 @@ func (s *Sys) Sync() { unix.Sync() }
 
 func (s *Sys) Reboot(cmd int) error { return unix.Reboot(cmd) }
 
+// KernelLog returns the kernel ring buffer, the same content dmesg prints.
+//
+// klogctl rather than reading /dev/kmsg: that is a stream which blocks once
+// drained, so serving it to a host request would hang. SYSLOG_ACTION_READ_ALL
+// returns what is buffered and stops.
+func (s *Sys) KernelLog() ([]byte, error) {
+	const readAll = 3 // SYSLOG_ACTION_READ_ALL
+	// Ask the kernel how much it is holding rather than guessing a size.
+	size, err := unix.Klogctl(10 /* SYSLOG_ACTION_SIZE_BUFFER */, nil)
+	if err != nil || size <= 0 {
+		size = 256 << 10
+	}
+	buf := make([]byte, size)
+	n, err := unix.Klogctl(readAll, buf)
+	if err != nil {
+		return nil, err
+	}
+	return buf[:n], nil
+}
+
 // KillAll signals every process except this one. kill(-1, sig) as PID1 reaches
 // everything else on the machine, which is how an init clears the way before
 // unmounting.

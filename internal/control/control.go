@@ -71,9 +71,36 @@ const RequestKubeconfig = "kubeconfig"
 // machine and read its disk, so this grants nothing new to whoever holds it.
 const RequestToken = "token"
 
+// The diagnostic requests below exist because a k0smos node reports through its
+// console and nothing else. That is enough to watch a boot and not enough to
+// diagnose one: the console scrolls away, does not survive a reboot, and cannot
+// be asked a question. These three make a running node answerable.
+//
+// They carry the same exposure as RequestKubeconfig — anything able to write to
+// this port can already stop the machine and read its disk — but note that
+// RequestCat makes that reach explicit rather than implied.
+
+// RequestStatus asks for the boot record: which root and data devices were
+// chosen, which modules loaded, whether a configuration drive was found, and how
+// the supervised workload is faring. JSON, as written by internal/status.
+const RequestStatus = "status"
+
+// RequestCat asks for a file from the node, as "cat /path". This is how pod
+// logs, the rendered k0s config and /run state are reached on a machine with no
+// shell, without shutting it down to read its disk.
+const RequestCat = "cat"
+
+// RequestDmesg asks for the kernel ring buffer. Kernel messages never reach the
+// console when console= is wrong or the failure precedes PID 1, and on real
+// hardware they are where driver and disk-controller problems appear.
+const RequestDmesg = "dmesg"
+
 // requests are the data requests a node answers. The verb is the first field of
 // the line; anything after it is an argument.
-var requests = []string{RequestKubeconfig, RequestToken}
+var requests = []string{
+	RequestKubeconfig, RequestToken,
+	RequestStatus, RequestCat, RequestDmesg,
+}
 
 // isRequest reports whether a line asks for data rather than a power command.
 func isRequest(line string) bool {
