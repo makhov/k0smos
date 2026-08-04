@@ -2,14 +2,28 @@
 
 k0smos follows an appliance lifecycle: configure, boot, observe, replace.
 
-## Observe through the console
+## Observe
 
 There is no SSH daemon or shell. Every boot stage and the supervised k0s process
-write to the machine console.
+write to the machine console:
 
 - local QEMU: `k0smosctl machine logs -f`
 - KubeVirt: VMI serial console and Kubernetes events
 - bare metal: serial-over-LAN or the BMC console
+
+For a local machine you can also ask it directly rather than reading scrollback:
+
+```bash
+k0smosctl machine status --name node-1   # what the init decided, and workload restarts
+k0smosctl machine dmesg  --name node-1   # kernel ring buffer
+k0smosctl machine cat    --name node-1 /etc/k0s/k0s.yaml
+```
+
+These use the control port, which `k0smosctl` attaches locally. On KubeVirt and
+bare metal the serial console is the channel; the same boot record is on the
+machine at `/run/k0smos/boot.json`.
+
+See [troubleshooting](../troubleshooting.md) for how to read them.
 
 Container workload logs remain Kubernetes logs and should be collected through
 the cluster logging stack.

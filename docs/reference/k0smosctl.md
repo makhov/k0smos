@@ -165,6 +165,61 @@ corrupts it.
 | `-h, --help` | help for rm |
 | `--name string` | which guest (default "default") |
 
+### k0smosctl machine status
+
+Asks a running machine for its boot record: which root and data devices were
+chosen, which modules loaded, whether a configuration drive was found, and how
+the supervised workload is faring, including its restart count.
+
+The console shows a boot as it happens and then loses it. This reports the same
+conclusions durably, and the record is also written inside the machine at
+`/run/k0smos/boot.json`, so it can be read off the disk when the machine will not
+boot far enough to answer.
+
+| Flag | Description |
+|---|---|
+| `-h, --help` | help for status |
+| `--json` | print the raw record instead of a summary |
+| `--name string` | which machine (default "default") |
+| `--socket string` | control socket path, instead of resolving `--name` |
+| `--timeout duration` | how long to wait for the machine to answer (default 10s) |
+
+### k0smosctl machine dmesg
+
+Asks a running machine for its kernel ring buffer.
+
+Kernel messages do not reach the console when `console=` is wrong or the failure
+precedes PID 1, and on real hardware they are where driver, disk-controller and
+firmware problems appear.
+
+| Flag | Description |
+|---|---|
+| `-h, --help` | help for dmesg |
+| `--name string` | which machine (default "default") |
+| `--socket string` | control socket path, instead of resolving `--name` |
+| `--timeout duration` | how long to wait for the machine to answer (default 10s) |
+
+### k0smosctl machine cat
+
+Reads one file from a running machine over the control port — container logs under
+`/var/log/pods`, the k0s configuration as it was rendered, `/run` state,
+`/etc/resolv.conf`.
+
+The path must be absolute. Directories are refused, as is anything over 4 MiB, so
+an oversized file is reported by name and size rather than arriving truncated.
+
+This makes the control port a general file-read channel. That is not a new
+exposure — whoever can write to it already obtains cluster-admin and can stop the
+machine — but the port should not be exposed anywhere the disk is not.
+
+| Flag | Description |
+|---|---|
+| `-h, --help` | help for cat |
+| `--name string` | which machine (default "default") |
+| `-o, --output string` | where to write it, or `-` for stdout |
+| `--socket string` | control socket path, instead of resolving `--name` |
+| `--timeout duration` | how long to wait for the machine to answer (default 10s) |
+
 ## k0smosctl cluster
 
 Create and access Kubernetes clusters on k0smos machines. Takes no flags of its
