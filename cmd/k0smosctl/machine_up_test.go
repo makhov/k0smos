@@ -88,12 +88,17 @@ func TestArtifactBootUsesFirmwareAndOneMachineDisk(t *testing.T) {
 		"if=pflash,format=raw,unit=0,readonly=on,file=",
 		"machine.qcow2,if=virtio,format=qcow2",
 		"name=k0smos.control",
-		"hostfwd=tcp::6443-:6443",
-		"dns=" + guestDNS,
+		"hostfwd=tcp:127.0.0.1:6443-:6443",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("artifact boot args are missing %q:\n%s", want, joined)
 		}
+	}
+	// slirp must not be told to answer on the resolver the guest uses: dns=
+	// moves slirp's own DNS proxy to that address, and that proxy takes queries
+	// without answering them on macOS, so every image pull failed to resolve.
+	if strings.Contains(joined, "dns="+guestDNS) {
+		t.Errorf("slirp claims %s, so the guest's resolver reaches its proxy instead:\n%s", guestDNS, joined)
 	}
 	for _, forbidden := range []string{"-kernel", "-initrd", "-append"} {
 		if slices.Contains(args, forbidden) {
@@ -254,7 +259,7 @@ func TestBootAttachesTheControlPort(t *testing.T) {
 			t.Errorf("qemu args are missing %q", want)
 		}
 	}
-	if !strings.Contains(joined, "hostfwd=tcp::6443-:6443") {
+	if !strings.Contains(joined, "hostfwd=tcp:127.0.0.1:6443-:6443") {
 		t.Error("6443 is not forwarded, so kubectl cannot reach the API server")
 	}
 }
@@ -406,7 +411,7 @@ func TestBootInteractiveRejectsAConsoleFile(t *testing.T) {
 // A second guest needs its own forwarded port, and 0 must forward nothing.
 func TestBootApiPortIsConfigurable(t *testing.T) {
 	got := strings.Join(argsFor(t, func(s *bootSpec) { s.apiPort = 7443 }), " ")
-	if !strings.Contains(got, "hostfwd=tcp::7443-:6443") {
+	if !strings.Contains(got, "hostfwd=tcp:127.0.0.1:7443-:6443") {
 		t.Errorf("api port not forwarded as asked:\n%s", got)
 	}
 	none := strings.Join(argsFor(t, func(s *bootSpec) { s.apiPort = 0 }), " ")

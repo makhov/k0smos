@@ -146,7 +146,7 @@ fi
 netdev_args=(-netdev user,id=n0 -device virtio-net-pci,netdev=n0)
 if [ -n "${API_PORT:-}" ]; then
   netdev_args=(
-    -netdev "user,id=n0,hostfwd=tcp::$API_PORT-:6443"
+    -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:$API_PORT-:6443"
     -device virtio-net-pci,netdev=n0
   )
 fi

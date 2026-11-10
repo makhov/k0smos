@@ -220,6 +220,11 @@ guest down cleanly rather than killing it.`,
 			if err := checkSocketPath(socket); err != nil {
 				return err
 			}
+			if !dryRun {
+				if err := checkAPIPort(apiPort); err != nil {
+					return err
+				}
+			}
 			if console == "" && !attach && !interactive {
 				console = stateConsole
 			}
@@ -537,13 +542,22 @@ func qemuArgs(g guest, s bootSpec) ([]string, error) {
 			"-device", "virtserialport,chardev=k0smosctl,name=k0smos.control")
 	}
 
-	// Artifact boots use DHCP, unlike the direct-kernel development path. Tell
-	// slirp to advertise the same reachable resolver the latter puts on the
-	// cmdline; its default 10.0.2.3 accepted queries but never answered them on
-	// macOS in repeated image-pull tests.
-	netdev := "user,id=n0,dns=" + guestDNS
+	// Slirp's own resolver is left where it is. Pointing its dns= at guestDNS
+	// also moved slirp's DNS proxy to that address, so the guest's
+	// `nameserver 1.1.1.1` reached the proxy rather than Cloudflare — and that
+	// proxy accepts queries without answering them on macOS, which is every
+	// image pull failing as "lookup quay.io: i/o timeout". Unclaimed, the
+	// address is NATed out like any other and resolves.
+	netdev := "user,id=n0"
 	if s.apiPort != 0 {
-		netdev += fmt.Sprintf(",hostfwd=tcp::%d-:6443", s.apiPort)
+		// Bound to 127.0.0.1, not the wildcard: `kubeconfig` points at
+		// 127.0.0.1, and macOS lets a wildcard bind succeed next to another
+		// process's bind of 127.0.0.1 — so QEMU started while every connection
+		// went to that process's API server instead, and every wait timed out
+		// against a CA that could not verify. Pinned, QEMU fails the rule
+		// outright and waitUntilUp reports it. It also stops the guest's API
+		// server being reachable from the rest of the network.
+		netdev += fmt.Sprintf(",hostfwd=tcp:127.0.0.1:%d-:6443", s.apiPort)
 	}
 	args = append(args, "-netdev", netdev, "-device", "virtio-net-pci,netdev=n0")
 	if s.clusterNet != "" {
@@ -812,7 +826,11 @@ func waitUntilUp(q *exec.Cmd, socket string, timeout time.Duration) error {
 			return errors.New("qemu exited immediately")
 		default:
 		}
-		if socket == "" || fileExists(socket) {
+		// Dialled, not merely stat'ed: QEMU creates the chardev socket before it
+		// parses the rest of its arguments, so a run that then dies — a bound
+		// host port, a locked disk — leaves the file behind and a stat call
+		// reported a guest that was already gone.
+		if socket == "" || guestIsLive(socket) {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -820,11 +838,6 @@ func waitUntilUp(q *exec.Cmd, socket string, timeout time.Duration) error {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 // lastLines returns the tail of a file, so a failure to start can show what QEMU
