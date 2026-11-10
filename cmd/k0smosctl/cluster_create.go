@@ -85,7 +85,7 @@ kubeconfig before returning.`,
 	f.IntVar(&o.memory, "memory", 4096, "memory per machine in MiB")
 	f.IntVar(&o.cpus, "cpus", 2, "CPUs per machine")
 	f.StringVarP(&o.kubeconfig, "output", "o", "kubeconfig", "where to write the admin kubeconfig")
-	f.DurationVar(&o.timeout, "timeout", 10*time.Minute, "time allowed for the cluster to become ready")
+	f.DurationVar(&o.timeout, "timeout", 15*time.Minute, "time allowed for the cluster to become ready")
 	f.BoolVar(&o.dryRun, "dry-run", false, "print the machine plan without starting anything")
 	return cmd
 }
@@ -138,6 +138,11 @@ func createCluster(cmd *cobra.Command, o clusterCreateOptions) error {
 		if _, err := os.Stat(machineDir); err == nil {
 			return fmt.Errorf("machine %q already exists; remove it with `k0smosctl machine rm --name %s` before creating this cluster", machine.Name, machine.Name)
 		} else if !os.IsNotExist(err) {
+			return err
+		}
+		// Every controller's port up front: a conflict found once the first
+		// machine has booted leaves a half-built cluster to clean up.
+		if err := checkAPIPort(machine.APIPort); err != nil {
 			return err
 		}
 	}

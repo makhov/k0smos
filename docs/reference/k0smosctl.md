@@ -255,7 +255,7 @@ kubeconfig before returning.
 | `--name string` | cluster name; machine names are derived from it (default "dev") |
 | `-o, --output string` | where to write the admin kubeconfig (default "kubeconfig") |
 | `--release string` | k0s-tagged GitHub release to use when --image is omitted: latest or vX.Y.Z+k0s.N (default "latest") |
-| `--timeout duration` | time allowed for the cluster to become ready (default 10m0s) |
+| `--timeout duration` | time allowed for the cluster to become ready (default 15m0s) |
 | `--workers int` | number of worker-only machines |
 
 ### k0smosctl cluster kubeconfig

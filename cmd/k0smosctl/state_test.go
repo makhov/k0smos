@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,6 +131,33 @@ func TestGuestArtifactUsesASeparateQCOW2StateDisk(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(disk); string(got) != "firmware artifact" {
 		t.Errorf("artifact clone = %q", got)
+	}
+}
+
+// An API port another process holds has to be refused before QEMU starts: its
+// hostfwd rule would fail while the guest still looked alive long enough to be
+// reported as running, and the cluster then waited on a stranger's API server.
+func TestAPIPortInUseIsRejected(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	if err := checkAPIPort(port); err == nil {
+		t.Fatal("accepted a port another listener holds")
+	} else if !strings.Contains(err.Error(), "--api-port") {
+		t.Errorf("error = %v, want it to suggest a way out", err)
+	}
+
+	// A port nothing holds must pass, and 0 forwards nothing at all.
+	ln.Close()
+	if err := checkAPIPort(port); err != nil {
+		t.Errorf("rejected a free port: %v", err)
+	}
+	if err := checkAPIPort(0); err != nil {
+		t.Errorf("rejected a disabled forward: %v", err)
 	}
 }
 

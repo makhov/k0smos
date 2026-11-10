@@ -3,9 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -112,6 +114,29 @@ func checkSocketPath(socket string) error {
 			len(socket), maxSocketPath)
 	}
 	return nil
+}
+
+// checkAPIPort refuses a host port something else already holds.
+//
+// QEMU forwards the API port on 127.0.0.1, which is also where `kubeconfig`
+// points. When another process — a Lima or Docker Kubernetes VM — already binds
+// 127.0.0.1:6443, QEMU fails the rule and exits, but it creates the control
+// socket before it gets that far, so the guest briefly looks alive and the
+// failure only surfaced as a cluster that waited for an API server belonging to
+// someone else until it timed out.
+//
+// shortcut: a probe bind, so a listener appearing in the gap before QEMU starts
+// is still only caught by QEMU itself; tighten only if that race shows up.
+func checkAPIPort(port int) error {
+	if port == 0 {
+		return nil
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		return fmt.Errorf("host port %d is already in use: %w\n"+
+			"something else is serving on 127.0.0.1:%d — stop it, or pass --api-port with a free port", port, err, port)
+	}
+	return ln.Close()
 }
 
 // validGuestName keeps a name usable as a single directory component.
