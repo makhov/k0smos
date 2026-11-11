@@ -1,0 +1,1453 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A minimal Go PID1 that boots k0s Kubernetes nodes.">
+      
+      
+      
+        <link rel="canonical" href="https://makhov.github.io/k0smos/head/design/decisions/">
+      
+      
+        <link rel="prev" href="../boot-chain/">
+      
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
+    
+    
+      
+        <title>Design decisions - k0smos</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.84d31ad4.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#design-decisions" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+          <aside class="md-banner md-banner--warning">
+            <div class="md-banner__inner md-grid md-typeset">
+              
+You are not viewing the documentation for the current stable release of k0smos.
+<a href="../../..">
+  <strong>Click here for the current stable release.</strong>
+</a>
+
+            </div>
+            <script>var el=document.querySelector("[data-md-component=outdated]"),base=new URL("../.."),outdated=__md_get("__outdated",sessionStorage,base);!0===outdated&&el&&(el.hidden=!1)</script>
+          </aside>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="k0smos" class="md-header__button md-logo" aria-label="k0smos" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            k0smos
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Design decisions
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 7H7a5 5 0 0 0-5 5 5 5 0 0 0 5 5h10a5 5 0 0 0 5-5 5 5 0 0 0-5-5m0 8a3 3 0 0 1-3-3 3 3 0 0 1 3-3 3 3 0 0 1 3 3 3 3 0 0 1-3 3"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 6H7c-3.31 0-6 2.69-6 6s2.69 6 6 6h10c3.31 0 6-2.69 6-6s-2.69-6-6-6m0 10H7c-2.21 0-4-1.79-4-4s1.79-4 4-4h10c2.21 0 4 1.79 4 4s-1.79 4-4 4M7 9c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/makhov/k0smos" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="k0smos" class="md-nav__button md-logo" aria-label="k0smos" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    k0smos
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/makhov/k0smos" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../install/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Get started
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Use locally
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Use locally
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/cluster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Local clusters
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/boot/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Local machines
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/cloud-init/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Machine configuration
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Deploy
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Deploy
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/artifacts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Artifacts and releases
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/kubevirt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    KubeVirt and Cluster API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/bare-metal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Bare metal and Metal3
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/operating/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Operate
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../known-limitations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Limits
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Reference
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/k0smosctl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    k0smosctl
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cmdline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Kernel parameters
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Internals
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            Internals
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../boot-chain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Boot chain
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Design decisions
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    Design decisions
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#why-a-read-only-root-works-at-all" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why a read-only root works at all
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-an-initramfs-at-all" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why an initramfs at all
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-switch_root-and-why-after-module-loading" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why switch_root, and why after module loading
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-the-root-is-named-by-uuidlabel" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why the root is named by UUID/LABEL
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-networking-is-configured-in-userspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why networking is configured in userspace
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-pid1-must-export-a-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why PID1 must export a PATH
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-so-many-kernel-modules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why so many kernel modules
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Why so many kernel modules">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#and-why-a-named-list-is-not-enough" class="md-nav__link">
+    <span class="md-ellipsis">
+      And why a named list is not enough
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-runcmd-is-interpreted-and-never-executed" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why runcmd is interpreted and never executed
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-there-are-two-shutdown-triggers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why there are two shutdown triggers
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-etcd-is-left-before-anything-is-stopped" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why etcd is left before anything is stopped
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-shutdown-kills-everything-before-touching-filesystems" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why shutdown kills everything before touching filesystems
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#why-a-read-only-root-works-at-all" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why a read-only root works at all
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-an-initramfs-at-all" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why an initramfs at all
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-switch_root-and-why-after-module-loading" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why switch_root, and why after module loading
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-the-root-is-named-by-uuidlabel" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why the root is named by UUID/LABEL
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-networking-is-configured-in-userspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why networking is configured in userspace
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-pid1-must-export-a-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why PID1 must export a PATH
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-so-many-kernel-modules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why so many kernel modules
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Why so many kernel modules">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#and-why-a-named-list-is-not-enough" class="md-nav__link">
+    <span class="md-ellipsis">
+      And why a named list is not enough
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-runcmd-is-interpreted-and-never-executed" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why runcmd is interpreted and never executed
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-there-are-two-shutdown-triggers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why there are two shutdown triggers
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-etcd-is-left-before-anything-is-stopped" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why etcd is left before anything is stopped
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-shutdown-kills-everything-before-touching-filesystems" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why shutdown kills everything before touching filesystems
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="design-decisions">Design decisions<a class="headerlink" href="#design-decisions" title="Permanent link">#</a></h1>
+<h2 id="why-a-read-only-root-works-at-all">Why a read-only root works at all<a class="headerlink" href="#why-a-read-only-root-works-at-all" title="Permanent link">#</a></h2>
+<p>The block-backed root exists because kubelet cannot run on a ramfs: cadvisor asks the kernel
+for filesystem statistics about the root device and a ramfs reports none. That
+constraint is about the root being <em>block-backed</em>, not about it being <em>writable</em> — so
+a read-only erofs image, loop-attached, satisfies it. That is how Talos ships its own
+root, and it is why the OS can travel inside the initramfs instead of as a second
+artifact.</p>
+<p>What a read-only root does force is a writable layer for the paths that are written,
+and the useful distinction is between paths that need to <em>exist</em> and paths that need
+to be <em>written</em>:</p>
+<table>
+<thead>
+<tr>
+<th>path</th>
+<th>how</th>
+<th>why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/var/run</code> → <code>/run</code></td>
+<td>symlink in the image</td>
+<td>containerd's NRI socket; a <code>mkdir</code> here is fatal</td>
+</tr>
+<tr>
+<td><code>/lib/modules</code></td>
+<td>empty dir in the image</td>
+<td>kubelet bind-mounts it into kube-router, even with no modules</td>
+</tr>
+<tr>
+<td><code>/usr/libexec/kubernetes/…</code></td>
+<td>dirs in the image</td>
+<td>the plugin prober only needs them present</td>
+</tr>
+<tr>
+<td><code>/etc</code></td>
+<td>tmpfs overlay</td>
+<td>k0s creates and <code>chmod</code>s <code>/etc/k0s</code>; cloud-init writes here</td>
+</tr>
+<tr>
+<td><code>/usr/libexec</code></td>
+<td>tmpfs overlay</td>
+<td>kubelet creates <code>/usr/libexec/k0s</code></td>
+</tr>
+<tr>
+<td><code>/opt</code> → <code>/var/opt</code></td>
+<td>symlink to the data volume</td>
+<td>CNI binaries are tens of MB — disk, not RAM</td>
+</tr>
+<tr>
+<td><code>/var</code></td>
+<td>the data volume itself</td>
+<td>kubelet writes <code>/var/lib/kubelet</code>, not just <code>/var/lib/k0s</code></td>
+</tr>
+</tbody>
+</table>
+<p>Overlays rather than plain tmpfs mounts, so the image's own <code>/etc/passwd</code> and baked
+<code>k0s.yaml</code> stay visible underneath; a file written at runtime shadows them, which is
+exactly what a user-supplied config wants.</p>
+<p>Every row came from a boot that failed without it, which is why the list is this
+shape rather than "mount tmpfs over everything".</p>
+<p>For the platform packaging and disk layout, see
+<a href="../../deployment/artifacts/">Artifacts and releases</a>.</p>
+<h2 id="why-an-initramfs-at-all">Why an initramfs at all<a class="headerlink" href="#why-an-initramfs-at-all" title="Permanent link">#</a></h2>
+<p>The original design booted <code>root=/dev/vda init=/sbin/k0smos</code> directly. That
+cannot work on a stock distro kernel: Alpine's <code>linux-virt</code> builds
+<code>CONFIG_VIRTIO_BLK=m</code> and <code>CONFIG_EXT4_FS=m</code>, so the kernel cannot see the disk
+or mount ext4 until something loads those modules. Every distro kernel is like
+this, which is why every distro ships an initramfs.</p>
+<p><code>CONFIG_BLK_DEV_INITRD=y</code> is universal, so booting k0smos from an initramfs
+works everywhere and needs no cooperation from the kernel build.</p>
+<h2 id="why-switch_root-and-why-after-module-loading">Why switch_root, and why after module loading<a class="headerlink" href="#why-switch_root-and-why-after-module-loading" title="Permanent link">#</a></h2>
+<p>kubelet cannot run on an initramfs. cadvisor asks the kernel for filesystem
+statistics about the root device, and a ramfs root reports none, so kubelet dies
+with:</p>
+<div class="highlight"><pre><span></span><code>Failed to start ContainerManager: failed to get rootfs info:
+cannot find filesystem info for device &quot;rootfs&quot;
+</code></pre></div>
+<p>k0s then restarts it every ~15 seconds, forever. The fix is a real filesystem as
+<code>/</code>, which is what <code>switch_root</code> provides.</p>
+<p>The ordering is forced: modules must load <strong>before</strong> the switch, because the
+kernel cannot see the root device until its storage drivers are in.</p>
+<h2 id="why-the-root-is-named-by-uuidlabel">Why the root is named by UUID/LABEL<a class="headerlink" href="#why-the-root-is-named-by-uuidlabel" title="Permanent link">#</a></h2>
+<p>On real hardware disks enumerate as <code>/dev/sda</code> or <code>/dev/nvme0n1</code> and can reorder
+between boots, so a hard-coded path is not dependable.</p>
+<p>Resolution reads ext4 superblocks directly instead of looking in
+<code>/dev/disk/by-uuid</code>, because those symlinks are created by udev and k0smos runs
+no udev. The device nodes themselves do exist — devtmpfs creates them. Block
+devices are enumerated from <code>/sys/class/block</code>.</p>
+<p>Resolution retries for ~15s: <code>virtio_blk</code> and friends probe asynchronously, so
+the root can appear slightly after its module loads.</p>
+<h2 id="why-networking-is-configured-in-userspace">Why networking is configured in userspace<a class="headerlink" href="#why-networking-is-configured-in-userspace" title="Permanent link">#</a></h2>
+<p>The kernel's own <code>ip=</code> autoconfiguration is a <code>late_initcall</code> — it runs before
+<code>/init</code>, so it cannot see a NIC whose driver k0smos loads as a module. On top of
+that, Alpine's kernel does not build <code>CONFIG_IP_PNP</code> at all, so <code>ip=dhcp</code> is
+inert regardless of driver timing.</p>
+<p>That leaves userspace. Shipping <code>udhcpc</code> would add a second binary and in
+practice a shell to an image specified to have neither, so k0smos includes a
+small DHCPv4 client.</p>
+<p><strong>It avoids AF_PACKET.</strong> The usual way to speak DHCP without an address is a raw
+packet socket, which means hand-building IP and UDP headers and checksums.
+Instead the client sets the BOOTP broadcast flag, which RFC 2131 requires
+servers to honour by broadcasting their reply — so a plain UDP socket bound to
+<code>0.0.0.0:68</code> with <code>SO_BINDTODEVICE</code> can complete the exchange with no address
+configured. <code>SO_BINDTODEVICE</code> is the key ingredient: it lets the kernel send to
+<code>255.255.255.255</code> from <code>0.0.0.0</code> with no route present. This also avoids needing
+the <code>af_packet</code> module (<code>CONFIG_PACKET=m</code> on this kernel).</p>
+<p>Renewal follows RFC 2131: unicast to the issuing server at T1, broadcast rebind
+at T2, full re-acquisition if the lease lapses. T1/T2 default to ½ and ⅞ of the
+lease when the server omits them.</p>
+<p>Note the ordering difference: DHCP needs the link <strong>up first</strong>, whereas static
+addressing sets the address and then brings the link up.</p>
+<p><code>k0smos.dns=</code> overrides the lease's resolver. This is not cosmetic — QEMU's
+slirp offers <code>10.0.2.3</code>, which accepts queries and never answers them on a macOS
+host, so without the override every image pull fails with <code>i/o timeout</code>.</p>
+<h2 id="why-pid1-must-export-a-path">Why PID1 must export a PATH<a class="headerlink" href="#why-pid1-must-export-a-path" title="Permanent link">#</a></h2>
+<p>PID1 inherits no environment from anyone. With an empty <code>PATH</code>, k0s cannot exec
+the binaries it stages into <code>/var/lib/k0s/bin</code> at runtime — it logs <code>Failed to
+detect iptables mode</code> and kubelet reports <code>No iptables support on this system</code>.
+<code>k0smos.path</code> therefore includes the staging directory.</p>
+<h2 id="why-so-many-kernel-modules">Why so many kernel modules<a class="headerlink" href="#why-so-many-kernel-modules" title="Permanent link">#</a></h2>
+<p>k0s needs more of the kernel than is obvious, and a missing module usually
+surfaces as a confusing userspace error rather than "module not found":</p>
+<ul>
+<li><strong><code>nf_tables</code> + <code>nft_compat</code></strong> — k0s selects iptables-nft mode. Without these
+  kube-proxy dies with <code>iptables: Failed to initialize nft: Protocol not
+  supported</code>.</li>
+<li><strong>REJECT (<code>nft_reject*</code>, <code>ipt_REJECT</code>, <code>nf_reject_ipv4</code>)</strong> — kube-proxy's
+  <code>KUBE-SERVICES</code> chain rejects traffic to services with no endpoints. Missing
+  REJECT makes <code>iptables-restore</code> fail the <em>entire batch</em> with <code>RULE_APPEND
+  failed (No such file or directory)</code>, so no service rules are programmed at all.</li>
+<li><strong><code>xt_nfacct</code></strong> — <code>KUBE-FORWARD</code> counts invalid-conntrack drops with
+  <code>-m nfacct</code>. <code>nfnetlink_acct</code> alone is not enough; the match module is what
+  iptables needs.</li>
+<li><strong><code>overlay</code></strong> — containerd's default snapshotter.</li>
+<li><strong><code>button</code> + <code>evdev</code></strong> — the ACPI power button (below).</li>
+</ul>
+<p>A downstream symptom worth remembering: kube-router crashlooping with <code>failed to
+synchronize cache: 1m0s timeout</code> was <strong>not</strong> a kube-router problem. With no
+service rules programmed, the <code>kubernetes</code> ClusterIP did not work, so it could
+not reach the API. Chasing kube-router directly would have been chasing the
+wrong component.</p>
+<p>Module loading honours <code>modules.dep</code> for hard dependencies <strong>and
+<code>modules.softdep</code></strong> for soft ones, resolving names through <code>modules.alias</code>.
+Soft dependencies are not optional in practice: <code>libcrc32c</code> fails with ENOENT
+("unknown symbol") unless <code>crc32c</code> — provided by the <code>crc32c_generic</code> module via
+an alias — is loaded first. A module that fails is logged and skipped rather
+than aborting the list, so one bad module cannot cost you ext4, overlayfs and
+netfilter.</p>
+<h3 id="and-why-a-named-list-is-not-enough">And why a named list is not enough<a class="headerlink" href="#and-why-a-named-list-is-not-enough" title="Permanent link">#</a></h3>
+<p>The list above is hand-written, which works for virtio and cannot work for real
+hardware: it names 50 modules, and no list enumerates the NICs and HBAs of an
+arbitrary machine. So after loading it, k0smos does what udev does — reads each
+device's <code>modalias</code> from <code>/sys/devices</code> and matches it against the glob patterns
+in <code>modules.alias</code>, which is the kernel's own index of what drives what:</p>
+<div class="highlight"><pre><span></span><code>alias virtio:d00000002v*                    virtio_blk
+alias pci:v00008086d000010D3sv*sd*bc*sc*i*  e1000e
+</code></pre></div>
+<p>Two things about this were not obvious until the real file was read:</p>
+<ul>
+<li><strong>The patterns are globs</strong>, so the exact-match lookup used for <code>crc32c</code> cannot
+  serve them. Device aliases and name aliases live in the same file and need
+  different treatment.</li>
+<li><strong>Discovery is not one-shot.</strong> <code>virtio_pci</code> is <em>built into</em> Alpine's kernel and
+  has no alias at all; the virtio devices it enumerates then appear with
+  <code>virtio:…</code> modaliases, and those are what <code>virtio_blk</code> binds to. Where the
+  transport is itself a module (<code>virtio_mmio</code>), its children do not exist until it
+  is loaded. udev sees this as a stream of events; with no udev, the equivalent is
+  to re-enumerate after each round and stop when nothing new loads.</li>
+</ul>
+<p>Named and discovered modules share one pass of bookkeeping. Two independent
+passes would re-submit an already-loaded driver, get <code>EEXIST</code> — which counts as
+success — and report it as autoloaded, overstating the one thing the number
+exists to measure. On a QEMU guest the honest figure is 2 drivers beyond the
+named set, not the 5 the double-counting version claimed.</p>
+<h2 id="why-runcmd-is-interpreted-and-never-executed">Why runcmd is interpreted and never executed<a class="headerlink" href="#why-runcmd-is-interpreted-and-never-executed" title="Permanent link">#</a></h2>
+<p>Cluster API hands a machine its identity as cloud-init user-data: a bootstrap
+provider (kubeadm, or k0smotron for k0s) renders a cloud-config, and the
+infrastructure provider attaches it as a NoCloud ISO (<code>cidata</code>) or an OpenStack
+config-drive (<code>config-2</code>). Reading it is what tells a machine whether it is a
+control plane or a worker, and with which join token.</p>
+<p>The same drive may carry a small <code>k0smos</code> network section. PID1 reads metadata
+before bringing interfaces up, so clones of one immutable artifact can receive
+different addresses without patching GRUB or rebuilding the root. Metadata is
+still applied after the writable overlays and <code>/var</code> mount, because its
+<code>write_files</code> entries must land on writable paths before k0s starts.</p>
+<p>The drive is read <strong>without being mounted</strong>. <code>internal/iso9660</code> parses the image
+straight off the block device: primary volume descriptor at sector 16, root
+directory extent, directory records, and the Rock Ridge <code>NM</code> entries that carry
+real filenames. It is read-only and needs no kernel filesystem support, so
+<code>CONFIG_ISO9660_FS</code> is not a requirement — which is what makes monolithic guest
+kernels usable, Kata's included. Malformed images must fail rather than panic,
+because this parses a device PID1 does not control and a panic there is a boot
+failure.</p>
+<p>A drive that cannot be read is reported, and is deliberately distinguished from
+one that simply does not carry a given file. The latter is normal — a drive
+carries the NoCloud layout or the config-drive one, not both — so warning about it
+would make every boot look broken. The former is not, and silence there is the
+worst outcome available: a machine whose bootstrap data was dropped comes up
+configured as though none was supplied, joins nothing, and offers no explanation.
+<code>internal/iso9660</code> wraps <code>fs.ErrNotExist</code> for genuine absence so the two can be
+told apart, and <code>TestCorruptCloudInitDriveStillBoots</code> boots a drive whose root
+directory points past the end of the image to prove both halves: the warning
+appears, and PID1 still reaches <code>supervising</code>.</p>
+<p>This covers every config-drive k0smos will realistically meet, Ironic's included.
+The spec permits ISO9660 or vfat, and the tooling only produces ISO9660: nova
+defaults to it, openstacksdk builds Ironic's config-drives with
+<code>genisoimage</code>/<code>mkisofs</code>/<code>xorrisofs</code>, and KubeVirt uses <code>xorrisofs</code>. A vfat drive
+would fall back to <code>mount</code> and fail, since no vfat module is shipped — one line in
+<code>internal/module</code> if one ever appears, as Alpine has vfat and the <code>nls_*</code>
+codepages as modules.</p>
+<p>But cloud-init assumes a machine k0smos deliberately is not: one with a shell
+and a service manager. Rather than acquiring those, k0smos <strong>interprets</strong>
+user-data instead of executing it — the same stance Talos takes, which supports
+no cloud-init and no arbitrary boot-time commands at all, because machine state
+should be a function of declared configuration.</p>
+<p>Concretely:</p>
+<ul>
+<li><strong><code>k0s install &lt;role&gt; …</code> followed by <code>k0s start</code></strong> is how providers register a
+  systemd unit. k0smos supervises one child, so the install form is translated
+  into the equivalent foreground command and service-manager calls are dropped.</li>
+<li><strong>File verbs are interpreted, not run.</strong> <code>mkdir</code>, <code>chmod</code>, <code>chown</code> and <code>ln -s</code>
+  become typed actions carried out with syscalls. This is why the image needs no
+  coreutils: an earlier version exec'd them and every entry failed with
+  <code>mkdir: executable file not found in $PATH</code>.</li>
+<li><strong>Everything else is refused and logged.</strong> <code>curl</code>, <code>sed</code>, a custom script — all
+  reported as <code>UNSUPPORTED runcmd</code> and skipped. Nothing named in user-data is
+  ever exec'd.</li>
+<li><strong>The k0sleave shell blocks are skipped</strong>, but what they were for is done
+  natively: k0smos runs <code>k0s etcd leave</code> on shutdown (see below). That is the one
+  command k0smos executes, and it is not user-data driven — the binary is the
+  workload already being supervised and the subcommand is fixed in code.</li>
+<li><strong>Shell syntax is refused.</strong> A bare-string runcmd is meant for a shell; one
+  containing <code>|</code>, <code>&gt;</code>, <code>&amp;&amp;</code>, <code>$(…)</code> and so on is skipped with a warning rather
+  than mis-executed by naive word splitting.</li>
+</ul>
+<p>The trade-off is deliberate: some provider's user-data may ask for something
+k0smos ignores. A loud console line is better than half-applying a bootstrap, and
+far better than shipping a scripting substrate into an image specified to have
+none.</p>
+<h2 id="why-there-are-two-shutdown-triggers">Why there are two shutdown triggers<a class="headerlink" href="#why-there-are-two-shutdown-triggers" title="Permanent link">#</a></h2>
+<p>A guest must be stoppable cleanly, or its filesystem is corrupted on every stop.</p>
+<p><strong>The power button</strong> (<code>internal/power</code>) is the mechanism on real hardware and
+hypervisors: the ACPI button driver raises the press, evdev exposes it as
+<code>/dev/input/eventN</code>, and k0smos watches every such device. This covers bare
+metal, <code>virsh shutdown</code>, and a cloud provider's "stop instance".</p>
+<p><strong>The control port</strong> (<code>internal/control</code>) exists because the power button is
+<em>unavailable</em> under QEMU's arm64 <code>virt</code> machine with direct kernel boot: there
+is no UEFI, therefore no ACPI, therefore nothing for <code>system_powerdown</code> to
+deliver. QEMU's device tree does expose a gpio-keys poweroff button, but
+Alpine's kernel builds neither <code>CONFIG_GPIO_KEYS</code> nor <code>CONFIG_INPUT_KEYBOARD</code>.
+<code>CONFIG_VIRTIO_CONSOLE=y</code> is built into every stock kernel, so a virtio-serial
+port needs no module and works regardless.</p>
+<p>Two non-obvious details in the control port:</p>
+<ul>
+<li>It is <strong>reopened on EOF</strong>. With no host client attached the port reads EOF
+  immediately, so watching it once stops listening before anyone can send
+  anything.</li>
+<li>A <strong>closed channel is not a command</strong>. Receiving from a closed Go channel
+  yields the zero value; treating that as a request powered the machine off
+  seconds into boot on the first attempt. The same hazard applies to the power
+  button channel.</li>
+</ul>
+<h2 id="why-etcd-is-left-before-anything-is-stopped">Why etcd is left before anything is stopped<a class="headerlink" href="#why-etcd-is-left-before-anything-is-stopped" title="Permanent link">#</a></h2>
+<p>Nothing on a k0smos machine persists, and Cluster API replaces machines rather
+than repairing them, so every stop is effectively a permanent departure. An etcd
+member that disappears without leaving stays in the member list and counts
+against quorum — a three-controller cluster would degrade with each replacement.</p>
+<p>So <code>k0s etcd leave</code> runs first, before the child is signalled: a controller
+cannot give up its membership once it has been stopped. It is bounded by a
+timeout, because a cluster that has lost quorum cannot process the removal and
+must not be able to keep the machine alive. Skipped for workers (no membership)
+and for <code>--single</code>, which is kine-backed rather than etcd.</p>
+<p>Verified on a single-node cluster, where etcd correctly <em>refuses</em>: <code>rejecting
+member remove; started member will be less than quorum</code>. That is the request
+reaching etcd and being declined on quorum grounds, not a plumbing failure —
+k0smos logs it and shuts down cleanly regardless.</p>
+<h2 id="why-shutdown-kills-everything-before-touching-filesystems">Why shutdown kills everything before touching filesystems<a class="headerlink" href="#why-shutdown-kills-everything-before-touching-filesystems" title="Permanent link">#</a></h2>
+<p><code>/</code> cannot be unmounted, so the only way to leave the root consistent is to
+remount it read-only, which checkpoints the ext4 journal. That remount fails
+with <code>EBUSY</code> while any process still holds the root — and k0s's children
+(containerd, kubelet, pods) do. So the sequence is:</p>
+<ol>
+<li><code>kill(-1, SIGTERM)</code> — let daemons flush.</li>
+<li>Grace period.</li>
+<li><code>kill(-1, SIGKILL)</code> — anything that ignored it.</li>
+<li><code>sync</code>.</li>
+<li>Unmount writable filesystems <strong>deepest-first</strong> (a child mount must be
+   detached before its parent), skipping pseudo-filesystems and <code>/</code>.</li>
+<li><code>sync</code>.</li>
+<li>Remount <code>/</code> read-only.</li>
+<li><code>reboot(2)</code>.</li>
+</ol>
+<p>The evidence that this works is that a read-only <code>e2fsck -fn</code> of the image
+afterwards is completely silent — <strong>no journal left to replay</strong>. If the remount
+had quietly failed, there would be one.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../..", "features": ["toc.autohide", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "stable", "provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.f55a23d4.min.js"></script>
+      
+    
+  </body>
+</html>

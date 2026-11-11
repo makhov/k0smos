@@ -1,0 +1,14 @@
+/* k0smos blue, applied to the header, links and footer. */
+:root {
+  --md-primary-fg-color:        #326ce5;
+  --md-accent-fg-color:         #326ce5;
+}
+
+:root > * {
+  --md-footer-bg-color:         #326ce5;
+}
+
+/* The version selector overflows once there are more than a few releases. */
+.md-version__list {
+  overflow: auto;
+}

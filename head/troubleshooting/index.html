@@ -1,0 +1,1245 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A minimal Go PID1 that boots k0s Kubernetes nodes.">
+      
+      
+      
+        <link rel="canonical" href="https://makhov.github.io/k0smos/head/troubleshooting/">
+      
+      
+        <link rel="prev" href="../known-limitations/">
+      
+      
+        <link rel="next" href="../reference/k0smosctl/">
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
+    
+    
+      
+        <title>Troubleshooting - k0smos</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.84d31ad4.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#troubleshooting" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+          <aside class="md-banner md-banner--warning">
+            <div class="md-banner__inner md-grid md-typeset">
+              
+You are not viewing the documentation for the current stable release of k0smos.
+<a href="../..">
+  <strong>Click here for the current stable release.</strong>
+</a>
+
+            </div>
+            <script>var el=document.querySelector("[data-md-component=outdated]"),base=new URL(".."),outdated=__md_get("__outdated",sessionStorage,base);!0===outdated&&el&&(el.hidden=!1)</script>
+          </aside>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="k0smos" class="md-header__button md-logo" aria-label="k0smos" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            k0smos
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Troubleshooting
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 7H7a5 5 0 0 0-5 5 5 5 0 0 0 5 5h10a5 5 0 0 0 5-5 5 5 0 0 0-5-5m0 8a3 3 0 0 1-3-3 3 3 0 0 1 3-3 3 3 0 0 1 3 3 3 3 0 0 1-3 3"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 6H7c-3.31 0-6 2.69-6 6s2.69 6 6 6h10c3.31 0 6-2.69 6-6s-2.69-6-6-6m0 10H7c-2.21 0-4-1.79-4-4s1.79-4 4-4h10c2.21 0 4 1.79 4 4s-1.79 4-4 4M7 9c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/makhov/k0smos" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="k0smos" class="md-nav__button md-logo" aria-label="k0smos" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    k0smos
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/makhov/k0smos" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Get started
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Use locally
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Use locally
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../usage/cluster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Local clusters
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../usage/boot/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Local machines
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../usage/cloud-init/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Machine configuration
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Deploy
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Deploy
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment/artifacts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Artifacts and releases
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment/kubevirt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    KubeVirt and Cluster API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment/bare-metal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Bare metal and Metal3
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment/operating/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Operate
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../known-limitations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Limits
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#start-with-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      Start with status
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-machine-does-not-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      The machine does not start
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-release-cannot-be-downloaded" class="md-nav__link">
+    <span class="md-ellipsis">
+      The release cannot be downloaded
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-machine-boots-but-the-node-never-becomes-ready" class="md-nav__link">
+    <span class="md-ellipsis">
+      The machine boots but the node never becomes Ready
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#something-hardware-related" class="md-nav__link">
+    <span class="md-ellipsis">
+      Something hardware-related
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#console-messages-worth-knowing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Console messages worth knowing
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#kubeconfig-is-not-ready" class="md-nav__link">
+    <span class="md-ellipsis">
+      Kubeconfig is not ready
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-machine-will-not-shut-down" class="md-nav__link">
+    <span class="md-ellipsis">
+      A machine will not shut down
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#on-kubevirt-and-bare-metal" class="md-nav__link">
+    <span class="md-ellipsis">
+      On KubeVirt and bare metal
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#access-is-a-cluster-admin-channel" class="md-nav__link">
+    <span class="md-ellipsis">
+      Access is a cluster-admin channel
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Reference
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/k0smosctl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    k0smosctl
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/cmdline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Kernel parameters
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Internals
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            Internals
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../design/boot-chain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Boot chain
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../design/decisions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Design decisions
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#start-with-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      Start with status
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-machine-does-not-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      The machine does not start
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-release-cannot-be-downloaded" class="md-nav__link">
+    <span class="md-ellipsis">
+      The release cannot be downloaded
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-machine-boots-but-the-node-never-becomes-ready" class="md-nav__link">
+    <span class="md-ellipsis">
+      The machine boots but the node never becomes Ready
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#something-hardware-related" class="md-nav__link">
+    <span class="md-ellipsis">
+      Something hardware-related
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#console-messages-worth-knowing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Console messages worth knowing
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#kubeconfig-is-not-ready" class="md-nav__link">
+    <span class="md-ellipsis">
+      Kubeconfig is not ready
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-machine-will-not-shut-down" class="md-nav__link">
+    <span class="md-ellipsis">
+      A machine will not shut down
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#on-kubevirt-and-bare-metal" class="md-nav__link">
+    <span class="md-ellipsis">
+      On KubeVirt and bare metal
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#access-is-a-cluster-admin-channel" class="md-nav__link">
+    <span class="md-ellipsis">
+      Access is a cluster-admin channel
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">#</a></h1>
+<p>A k0smos machine has no shell and no SSH, so you ask it questions instead of
+logging into it. Four commands cover almost everything:</p>
+<div class="highlight"><pre><span></span><code>k0smosctl<span class="w"> </span>machine<span class="w"> </span>logs<span class="w">   </span>--name<span class="w"> </span>&lt;machine&gt;<span class="w"> </span>-f<span class="w">   </span><span class="c1"># the console, as it happens</span>
+k0smosctl<span class="w"> </span>machine<span class="w"> </span>status<span class="w"> </span>--name<span class="w"> </span>&lt;machine&gt;<span class="w">      </span><span class="c1"># what the init decided</span>
+k0smosctl<span class="w"> </span>machine<span class="w"> </span>dmesg<span class="w">  </span>--name<span class="w"> </span>&lt;machine&gt;<span class="w">      </span><span class="c1"># what the kernel saw</span>
+k0smosctl<span class="w"> </span>machine<span class="w"> </span>cat<span class="w">    </span>--name<span class="w"> </span>&lt;machine&gt;<span class="w"> </span>&lt;path&gt;<span class="w">   </span><span class="c1"># any file on the machine</span>
+</code></pre></div>
+<p><code>logs</code> shows the boot as it happens; every PID 1 message starts with <code>k0smos:</code>,
+and k0s writes to the same console once it starts. <code>status</code> reports the same
+conclusions after the fact, which is what you want when the interesting part has
+already scrolled past.</p>
+<h2 id="start-with-status">Start with status<a class="headerlink" href="#start-with-status" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>k0smosctl<span class="w"> </span>machine<span class="w"> </span>status<span class="w"> </span>--name<span class="w"> </span>node-1
+boot<span class="w">        </span><span class="m">2026</span>-08-04T14:46:36Z
+hostname<span class="w">    </span>node-1
+switched<span class="w">    </span><span class="nb">true</span>
+workload<span class="w">    </span>/usr/local/bin/k0s<span class="w"> </span>controller<span class="w"> </span>--single<span class="w"> </span><span class="o">(</span>running,<span class="w"> </span><span class="nv">restarts</span><span class="o">=</span><span class="m">0</span><span class="o">)</span>
+
+steps
+<span class="w">  </span>ok<span class="w">       </span>mounts
+<span class="w">  </span>ok<span class="w">       </span>modules<span class="w">                </span><span class="m">48</span><span class="w"> </span>loaded,<span class="w"> </span><span class="m">6</span><span class="w"> </span>autoloaded<span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="m">9</span><span class="w"> </span>devices<span class="w"> </span><span class="o">(</span><span class="m">6</span>.18.35<span class="o">)</span>
+<span class="w">  </span>ok<span class="w">       </span>hostfs<span class="w">                 </span>no<span class="w"> </span>/dev/hugepages
+<span class="w">  </span>ok<span class="w">       </span>root<span class="w">                   </span><span class="nv">LABEL</span><span class="o">=</span>k0smos<span class="w"> </span>-&gt;<span class="w"> </span>/dev/vda2
+<span class="w">  </span>ok<span class="w">       </span>data<span class="w">                   </span>/dev/vda3<span class="w"> </span>-&gt;<span class="w"> </span>/var
+<span class="w">  </span>ok<span class="w">       </span>cgroup2<span class="w">                </span>cpu<span class="w"> </span>memory<span class="w"> </span>pids<span class="w"> </span>io<span class="w"> </span>cpuset<span class="w"> </span>hugetlb
+<span class="w">  </span>ok<span class="w">       </span>loopback
+<span class="w">  </span>ok<span class="w">       </span>network<span class="w">                </span>eth0<span class="w"> </span>dhcp<span class="w"> </span><span class="m">10</span>.0.2.15/24<span class="w"> </span>gw<span class="w"> </span><span class="m">10</span>.0.2.2
+<span class="w">  </span>ok<span class="w">       </span>metadata<span class="w">               </span>/dev/vdb<span class="w"> </span><span class="o">(</span>iso9660,<span class="w"> </span><span class="nv">LABEL</span><span class="o">=</span>cidata<span class="o">)</span>
+</code></pre></div>
+<p>Read it top to bottom: the first <code>FAILED</code> step is the thing to fix, and a high
+<code>restarts</code> count with a <code>last exit</code> line means the machine booted but the
+workload will not stay up.</p>
+<p>Two steps carry detail worth reading even when they pass. <code>hostfs</code> is the
+optional filesystems a sandbox host needs — configfs for creating TCMU targets,
+hugetlbfs for hugepage-backed VM memory — and names any this kernel did not
+have, <code>no /dev/hugepages</code> above. It comes after <code>modules</code> because configfs is
+itself a module on a stock kernel. <code>cgroup2</code> lists the controllers actually
+delegated, so a missing <code>cpuset</code> there explains a sandbox that cannot be pinned
+to a core.</p>
+<p>Add <code>--json</code> to get the record as data. The same record is written inside the
+machine at <code>/run/k0smos/boot.json</code>, so it is also readable with <code>machine cat</code>, or
+off the disk if the machine never gets far enough to answer.</p>
+<h2 id="the-machine-does-not-start">The machine does not start<a class="headerlink" href="#the-machine-does-not-start" title="Permanent link">#</a></h2>
+<p>Nothing has booted yet, so this is a host-side problem. Inspect what would be
+run:</p>
+<div class="highlight"><pre><span></span><code>k0smosctl<span class="w"> </span>machine<span class="w"> </span>up<span class="w"> </span>--name<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--dry-run
+</code></pre></div>
+<p>Common causes: missing QEMU, missing UEFI firmware, an architecture mismatch, or
+an API port already in use.</p>
+<h2 id="the-release-cannot-be-downloaded">The release cannot be downloaded<a class="headerlink" href="#the-release-cannot-be-downloaded" title="Permanent link">#</a></h2>
+<p>Pin a known release, or use a local image:</p>
+<div class="highlight"><pre><span></span><code>k0smosctl<span class="w"> </span>machine<span class="w"> </span>up<span class="w"> </span>--release<span class="w"> </span>v1.36.3+k0s.0
+k0smosctl<span class="w"> </span>machine<span class="w"> </span>up<span class="w"> </span>--image<span class="w"> </span>./k0smos-metal-x86_64.qcow2
+</code></pre></div>
+<p>Set <code>GITHUB_TOKEN</code> or <code>GH_TOKEN</code> for a private repository or to lift API rate
+limits. An already-verified cached image stays usable when GitHub is unreachable.</p>
+<h2 id="the-machine-boots-but-the-node-never-becomes-ready">The machine boots but the node never becomes Ready<a class="headerlink" href="#the-machine-boots-but-the-node-never-becomes-ready" title="Permanent link">#</a></h2>
+<p><code>status</code> will show the init finished, so the problem is in k0s. Its components
+log to disk, not to the console, and <code>machine cat</code> is how you read them:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># what k0s was actually configured with</span>
+k0smosctl<span class="w"> </span>machine<span class="w"> </span>cat<span class="w"> </span>/etc/k0s/k0s.yaml
+
+<span class="c1"># a specific component</span>
+k0smosctl<span class="w"> </span>machine<span class="w"> </span>cat<span class="w"> </span>/var/log/pods/kube-system_kube-proxy-x2tbg/kube-proxy/0.log
+</code></pre></div>
+<p>Two failures worth recognising, because the message names the wrong component:</p>
+<ul>
+<li><strong><code>iptables-restore</code> reporting <code>RULE_APPEND failed (No such file or directory)</code></strong>
+  is a missing kernel module for a match or target, not a rules problem.</li>
+<li><strong>kube-router reporting <code>failed to synchronize cache: 1m0s timeout</code></strong> usually
+  means kube-proxy programmed no rules, so the <code>kubernetes</code> service address never
+  worked. Check kube-proxy first.</li>
+</ul>
+<h2 id="something-hardware-related">Something hardware-related<a class="headerlink" href="#something-hardware-related" title="Permanent link">#</a></h2>
+<p>Kernel messages never reach the console when <code>console=</code> is wrong or the failure
+precedes PID 1, and on real hardware they are where driver, disk-controller and
+firmware problems appear:</p>
+<div class="highlight"><pre><span></span><code>k0smosctl<span class="w"> </span>machine<span class="w"> </span>dmesg<span class="w"> </span>--name<span class="w"> </span>node-1<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-i<span class="w"> </span>-e<span class="w"> </span>virtio<span class="w"> </span>-e<span class="w"> </span>nvme<span class="w"> </span>-e<span class="w"> </span>eth
+</code></pre></div>
+<h2 id="console-messages-worth-knowing">Console messages worth knowing<a class="headerlink" href="#console-messages-worth-knowing" title="Permanent link">#</a></h2>
+<table>
+<thead>
+<tr>
+<th>Console message</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>no module tree; assuming a monolithic kernel</code></td>
+<td>normal for the VM kernel</td>
+</tr>
+<tr>
+<td><code>kernel and modules are out of step</code></td>
+<td>the kernel and initramfs came from different builds; no modules were loaded</td>
+</tr>
+<tr>
+<td><code>metadata: could not read user-data</code></td>
+<td>the configuration drive was found but could not be applied</td>
+</tr>
+<tr>
+<td><code>UNSUPPORTED runcmd</code></td>
+<td>the cloud-init asks for a command k0smos deliberately does not execute</td>
+</tr>
+<tr>
+<td><code>warn: dhcp</code></td>
+<td>the interface did not get a lease</td>
+</tr>
+<tr>
+<td><code>refusing to guess: N blank devices</code></td>
+<td><code>k0smos.data=auto</code> found several candidate disks; name one explicitly</td>
+</tr>
+</tbody>
+</table>
+<h2 id="kubeconfig-is-not-ready">Kubeconfig is not ready<a class="headerlink" href="#kubeconfig-is-not-ready" title="Permanent link">#</a></h2>
+<p><code>cluster kubeconfig</code> fails until k0s has created its admin configuration. For a
+machine started on its own, wait for the API server or raise the timeout:</p>
+<div class="highlight"><pre><span></span><code>k0smosctl<span class="w"> </span>cluster<span class="w"> </span>kubeconfig<span class="w"> </span>--name<span class="w"> </span>node-1<span class="w"> </span>--timeout<span class="w"> </span>30s<span class="w"> </span>-o<span class="w"> </span>kubeconfig
+</code></pre></div>
+<p><code>cluster create</code> already waits for readiness and writes the kubeconfig itself.</p>
+<h2 id="a-machine-will-not-shut-down">A machine will not shut down<a class="headerlink" href="#a-machine-will-not-shut-down" title="Permanent link">#</a></h2>
+<p>Check that the console reached <code>listening for host commands</code> and that the
+machine's control socket still exists, then retry:</p>
+<div class="highlight"><pre><span></span><code>k0smosctl<span class="w"> </span>machine<span class="w"> </span>shutdown<span class="w"> </span>--name<span class="w"> </span>&lt;machine&gt;<span class="w"> </span>--timeout<span class="w"> </span>30s
+</code></pre></div>
+<p>Avoid deleting state or killing QEMU while it is writing <code>/var</code>.</p>
+<h2 id="on-kubevirt-and-bare-metal">On KubeVirt and bare metal<a class="headerlink" href="#on-kubevirt-and-bare-metal" title="Permanent link">#</a></h2>
+<p>The commands above need the control port, which is attached by <code>k0smosctl</code> for
+local machines. Elsewhere the serial console is the channel: the VMI console on
+KubeVirt, serial-over-LAN or the BMC on bare metal. Everything PID 1 prints
+appears there, and <code>/run/k0smos/boot.json</code> is readable from the disk.</p>
+<h2 id="access-is-a-cluster-admin-channel">Access is a cluster-admin channel<a class="headerlink" href="#access-is-a-cluster-admin-channel" title="Permanent link">#</a></h2>
+<p>Anything able to write to a machine's control port can read any file on it, fetch
+its kubeconfig, and stop it. That is not a new exposure — the port is the
+hypervisor's channel into the guest — but do not expose it anywhere the machine's
+disk is not equally exposed.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "..", "features": ["toc.autohide", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "stable", "provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.f55a23d4.min.js"></script>
+      
+    
+  </body>
+</html>
