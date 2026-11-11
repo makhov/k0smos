@@ -799,12 +799,16 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		}
 	}
 
-	if err := cgroup.Setup(s); err != nil {
+	enabled, err := cgroup.Setup(s)
+	if err != nil {
 		step("cgroup2", err, "")
 		return fmt.Errorf("cgroup: %w", err)
 	}
-	logf("cgroup2 hierarchy ready")
-	step("cgroup2", nil, "")
+	// The controllers are named, not counted: a sandbox that cannot be pinned to
+	// a core needs this line to show whether cpuset was ever delegated.
+	controllers := strings.Join(enabled, " ")
+	logf("cgroup2 hierarchy ready: %s", controllers)
+	step("cgroup2", nil, controllers)
 
 	// Metadata is local block-device input, so it does not need networking. Read
 	// it before configuring interfaces: a platform artifact has one immutable

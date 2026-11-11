@@ -309,3 +309,34 @@ func TestCleanShutdownLeavesFilesystemClean(t *testing.T) {
 	}
 	requireFsckClean(t, disk)
 }
+
+// The host plumbing a microVM sandbox needs. Neither half is inspectable from
+// the host afterwards, so both are reported on the console: the cgroup
+// controllers actually delegated, and any optional filesystem this kernel did
+// not have. Asserted on the init-only boot because it is the cheap one.
+func TestBootReportsSandboxHostPlumbing(t *testing.T) {
+	requireArtifacts(t, "dist/k0smos-initramfs.gz")
+	v := boot(t, bootOpts{Exec: "/init", Mem: "1024"})
+
+	report := v.waitFor(`cgroup2 hierarchy ready: .*`, bootTimeout)
+	for _, want := range []string{"cpu", "memory", "pids"} {
+		if !strings.Contains(report, want) {
+			t.Errorf("cgroup report %q is missing %s, which kubelet needs to limit a pod", report, want)
+		}
+	}
+	// A kernel without configfs or hugetlbfs must still reach its workload —
+	// that is the whole point of marking those mounts optional.
+	v.waitFor(`supervising \[/init\]`, bootTimeout)
+	for _, line := range strings.Split(v.k0smosLines(), "\n") {
+		if !strings.Contains(line, "this kernel has no") {
+			continue
+		}
+		rest := line
+		for _, optional := range []string{"/sys/kernel/config", "/dev/hugepages"} {
+			rest = strings.ReplaceAll(rest, optional, "")
+		}
+		if strings.Contains(rest, "/") {
+			t.Errorf("a filesystem the boot depends on was skipped instead of fatal: %q", line)
+		}
+	}
+}

@@ -35,13 +35,16 @@ type Controller interface {
 }
 
 // Setup mounts the cgroup2 unified hierarchy and delegates the core
-// controllers to child cgroups so containerd/kubelet/runc can use them.
-func Setup(c Controller) error {
+// controllers to child cgroups so containerd/kubelet/runc can use them. It
+// returns the controllers it enabled, which is the only way to tell afterwards
+// whether this kernel had cpuset and hugetlb -- the files say what is delegated
+// now, not what was asked for.
+func Setup(c Controller) ([]string, error) {
 	if err := c.Mkdir(root, 0755); err != nil {
-		return fmt.Errorf("mkdir cgroup root: %w", err)
+		return nil, fmt.Errorf("mkdir cgroup root: %w", err)
 	}
 	if err := c.Mount("cgroup2", root, "cgroup2", 0, "nsdelegate"); err != nil {
-		return fmt.Errorf("mount cgroup2: %w", err)
+		return nil, fmt.Errorf("mount cgroup2: %w", err)
 	}
 	// Only what this kernel advertises. The write is all-or-nothing — one
 	// unavailable controller fails the whole string with EINVAL and takes the
@@ -49,22 +52,23 @@ func Setup(c Controller) error {
 	// turn a missing feature into a node with no cgroup delegation at all.
 	have, err := c.ReadFile(available)
 	if err != nil {
-		return fmt.Errorf("read available controllers: %w", err)
+		return nil, fmt.Errorf("read available controllers: %w", err)
 	}
 	offered := strings.Fields(string(have))
 	for _, need := range Required {
 		if !slices.Contains(offered, need) {
-			return fmt.Errorf("kernel offers no %s controller (has %v), so kubelet cannot limit pods", need, offered)
+			return nil, fmt.Errorf("kernel offers no %s controller (has %v), so kubelet cannot limit pods", need, offered)
 		}
 	}
-	var enable []string
+	var enabled, enable []string
 	for _, want := range Wanted {
 		if slices.Contains(offered, want) {
+			enabled = append(enabled, want)
 			enable = append(enable, "+"+want)
 		}
 	}
 	if err := c.WriteFile(subtree, []byte(strings.Join(enable, " ")), 0644); err != nil {
-		return fmt.Errorf("enable controllers %v: %w", enable, err)
+		return nil, fmt.Errorf("enable controllers %v: %w", enable, err)
 	}
-	return nil
+	return enabled, nil
 }
