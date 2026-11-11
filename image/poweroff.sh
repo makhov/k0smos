@@ -9,5 +9,8 @@ sock=${1:-dist/control.sock}
 cmd=${CMD:-poweroff}
 
 [ -S "$sock" ] || { echo "no control socket at $sock (is the guest running?)" >&2; exit 1; }
-printf '%s\n' "$cmd" | nc -U "$sock"
+# -w: nc reads until the guest closes the socket, and a guest that takes the
+# command without closing hangs the caller indefinitely. The reply is discarded
+# anyway, so there is nothing to wait for beyond the write.
+printf '%s\n' "$cmd" | nc -w 5 -U "$sock"
 echo "sent $cmd to $sock"
