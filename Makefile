@@ -1,12 +1,14 @@
 BIN := dist/k0smos
 TARGET_MACHINE := $(if $(ARCH),$(ARCH),$(shell uname -m))
 TARGET_GOARCH := $(if $(filter arm64 aarch64,$(TARGET_MACHINE)),arm64,amd64)
+# Upstream release assets (firecracker) use the uname spelling, not Go's.
+TARGET_FCARCH := $(if $(filter arm64 aarch64,$(TARGET_MACHINE)),aarch64,x86_64)
 TARGET_APKARCH := $(if $(filter arm64 aarch64,$(TARGET_MACHINE)),aarch64,x86_64)
 # k0smos only runs as a linux init, so always cross-compile for the target —
 # a host build on macOS would just produce the "linux only" stub.
 GO_BUILD := GOOS=linux GOARCH=$(TARGET_GOARCH) CGO_ENABLED=0 go build -ldflags '-extldflags "-static"'
 
-.PHONY: build ctl test vet kernel kernel-alpine kernel-metal k0s initramfs root rootfs disk artifacts verify-artifacts metal e2e-artifacts boot smoke oci e2e e2e-full accept clean-dist
+.PHONY: build ctl test vet kernel kernel-alpine kernel-metal k0s firecracker initramfs root rootfs disk artifacts verify-artifacts metal e2e-artifacts boot smoke oci e2e e2e-full accept clean-dist
 build:
 	$(GO_BUILD) -o $(BIN) ./cmd/k0smos
 
@@ -51,6 +53,13 @@ kernel-metal:
 k0s:
 	./image/fetch-k0s.sh
 
+# Firecracker VMM + jailer for a node that hosts microVM sandboxes (~5MB, both
+# statically linked). Only the release root depends on this: the e2e roots skip
+# it, because nothing in the suite can boot a microVM inside a QEMU guest
+# without nested virtualisation.
+firecracker:
+	./image/fetch-firecracker.sh
+
 # Initramfs with k0smos as /init. Set K0S_BIN=dist/k0s-<arch> to bake in k0s.
 #
 # Rebuilding this ALONE is not enough after changing k0smos, and with an embedded
@@ -69,9 +78,10 @@ initramfs:
 # The canonical, platform-independent OS payload. Platform-specific kernel
 # modules belong in the initramfs wrapper, never in this image, so KubeVirt and
 # Metal3 can prove they carry the same root bytes.
-root: k0s
+root: k0s firecracker
 	ROOTFS=erofs MODULES_DIR=dist/no-platform-modules \
-		K0S_BIN=dist/k0s-$(TARGET_GOARCH) ./image/mkrootfs.sh dist/k0smos.erofs
+		K0S_BIN=dist/k0s-$(TARGET_GOARCH) \
+		FIRECRACKER_DIR=dist/firecracker-$(TARGET_FCARCH) ./image/mkrootfs.sh dist/k0smos.erofs
 
 # The root k0smos switch_roots onto in kernel-matrix tests. kubelet cannot run on the initramfs itself
 # (cadvisor finds no filesystem info for a ramfs root), but it is satisfied by a

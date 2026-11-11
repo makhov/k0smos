@@ -78,7 +78,7 @@ if ! command -v "$mkfs_tool" >/dev/null 2>&1 || ! command -v apk >/dev/null 2>&1
   # script, and anything not listed here is silently lost on a macOS host.
   exec docker run --rm --platform "$platform" -v "$repo:/repo" -w /repo \
     -e K0S_BIN -e K0SMOS_BIN -e MODULES_DIR -e ARCH \
-    -e PAD_MB -e FSLABEL -e FSUUID -e APK_PKGS -e ROOTFS \
+    -e PAD_MB -e FSLABEL -e FSUUID -e APK_PKGS -e ROOTFS -e FIRECRACKER_DIR \
     alpine:3.23 sh -c 'apk add -q --no-cache '"$apk_build"' bash >/dev/null && exec bash image/mkrootfs.sh "$1"' _ "$img"
 fi
 
@@ -140,6 +140,15 @@ fi
 install -m 0755 "$K0SMOS_BIN" "$root/sbin/k0smos"
 install -m 0755 "$k0s_bin" "$root/usr/local/bin/k0s"
 install -m 0644 "$here/k0s.yaml" "$root/etc/k0s/k0s.yaml"
+# The sandbox VMM, when the build fetched one. Both binaries are statically
+# linked, so they need nothing else in the image. Absent -- an e2e or a
+# contributor build that skipped `make firecracker` -- this is simply a plain
+# k0s node, which is why it is tolerated rather than required.
+if [ -n "${FIRECRACKER_DIR:-}" ] && [ -d "$FIRECRACKER_DIR" ]; then
+  install -m 0755 "$FIRECRACKER_DIR/firecracker" "$root/usr/local/bin/firecracker"
+  install -m 0755 "$FIRECRACKER_DIR/jailer" "$root/usr/local/bin/jailer"
+  echo "installed firecracker $(cat "$FIRECRACKER_DIR/VERSION" 2>/dev/null || echo '(unknown version)')"
+fi
 printf 'k0smos\n' > "$root/etc/hostname"
 printf '127.0.0.1 localhost\n' > "$root/etc/hosts"
 printf 'nameserver 1.1.1.1\n' > "$root/etc/resolv.conf"
