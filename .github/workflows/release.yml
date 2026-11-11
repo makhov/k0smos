@@ -115,7 +115,7 @@ jobs:
       - name: Install release tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-utils zstd
+          sudo apt-get install -y --no-install-recommends qemu-utils zstd
 
       - name: Build canonical root and platform wrappers
         run: |
@@ -129,7 +129,7 @@ jobs:
       - name: Smoke-test firmware boot
         if: matrix.arch == 'x86_64'
         run: |
-          sudo apt-get install -y ovmf qemu-system-x86
+          sudo apt-get install -y --no-install-recommends ovmf qemu-system-x86
           make ctl
           ./image/test-metal.sh dist/k0smos-metal-x86_64.qcow2
 
