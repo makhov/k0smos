@@ -12,8 +12,11 @@ import (
 type fakeMounter struct {
 	existing  []sys.MountPoint
 	mountsErr error
-	mounted   []string
-	mkdirs    []string
+	// failFS makes Mount fail for these filesystem types, standing in for a
+	// kernel built without them.
+	failFS  map[string]bool
+	mounted []string
+	mkdirs  []string
 	// calls records the full arguments, which the overlay tests need; mounted
 	// stays a list of targets so the older tests read as they did.
 	calls []mountCall
@@ -30,6 +33,9 @@ func (f *fakeMounter) Mkdir(p string, _ os.FileMode) error {
 	return nil
 }
 func (f *fakeMounter) Mount(source, target, fstype string, flags uintptr, data string) error {
+	if f.failFS[fstype] {
+		return os.ErrInvalid
+	}
 	f.mounted = append(f.mounted, target)
 	f.calls = append(f.calls, mountCall{source, target, fstype, data, flags})
 	return nil
@@ -40,7 +46,7 @@ func (f *fakeMounter) Mount(source, target, fstype string, flags uintptr, data s
 // unreadable mount table means "nothing is mounted yet", not a fatal error.
 func TestEnsureProceedsWhenMountTableUnreadable(t *testing.T) {
 	f := &fakeMounter{mountsErr: os.ErrNotExist}
-	if err := Ensure(f); err != nil {
+	if _, err := Ensure(f); err != nil {
 		t.Fatalf("Ensure = %v, want nil when mount table is unreadable", err)
 	}
 	if len(f.mounted) != len(Default) {
@@ -53,7 +59,7 @@ func TestEnsureProceedsWhenMountTableUnreadable(t *testing.T) {
 
 func TestEnsureMountsMissingSkipsExisting(t *testing.T) {
 	f := &fakeMounter{existing: []sys.MountPoint{{Target: "/proc"}}}
-	if err := Ensure(f); err != nil {
+	if _, err := Ensure(f); err != nil {
 		t.Fatal(err)
 	}
 	for _, tgt := range f.mounted {
@@ -77,6 +83,38 @@ func TestEnsureMountsMissingSkipsExisting(t *testing.T) {
 // A read-only root cannot serve the paths k0s and cloud-init write to. The overlay
 // has to be built so the image's own contents still show through: a plain tmpfs
 // would hide /etc/passwd and the baked k0s.yaml, and k0s needs both.
+// The same k0smos boots a stock guest kernel and a bare-metal one, so the
+// filesystems only a sandbox host needs cannot be allowed to end a boot that
+// does not have them. They are reported instead, because a TCMU setup failing
+// much later is otherwise impossible to connect back to a missing configfs.
+func TestEnsureStepsOverAnAbsentOptionalFilesystem(t *testing.T) {
+	f := &fakeMounter{failFS: map[string]bool{"configfs": true, "hugetlbfs": true}}
+	skipped, err := Ensure(f)
+	if err != nil {
+		t.Fatalf("Ensure = %v, want nil: an optional filesystem must not end the boot", err)
+	}
+	if len(skipped) != 2 {
+		t.Fatalf("skipped = %v, want both optional targets named", skipped)
+	}
+	if !strings.Contains(strings.Join(skipped, " "), "/sys/kernel/config") {
+		t.Errorf("skipped = %v, want it to name the configfs target", skipped)
+	}
+	// Everything the boot does depend on must still be mounted.
+	for _, want := range []string{"/proc", "/sys", "/dev", "/run", "/tmp"} {
+		if !strings.Contains(strings.Join(f.mounted, " "), want) {
+			t.Errorf("required %s was not mounted: %v", want, f.mounted)
+		}
+	}
+}
+
+// A filesystem the boot genuinely needs must still be fatal.
+func TestEnsureFailsOnARequiredFilesystem(t *testing.T) {
+	f := &fakeMounter{failFS: map[string]bool{"proc": true}}
+	if _, err := Ensure(f); err == nil {
+		t.Fatal("Ensure = nil, want an error when /proc cannot be mounted")
+	}
+}
+
 func TestMakeWritableOverlaysWithLowerdir(t *testing.T) {
 	f := &fakeMounter{}
 	if err := MakeWritable(f, []string{"/etc", "/usr/libexec"}); err != nil {

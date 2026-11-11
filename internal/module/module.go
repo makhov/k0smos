@@ -86,6 +86,25 @@ var Default = []string{
 	// driver raises the press and evdev exposes it as /dev/input/eventN. Absent
 	// these, a power button or `virsh shutdown` does nothing at all.
 	"button", "evdev",
+
+	// A host that runs microVM sandboxes — Firecracker or Cloud Hypervisor —
+	// next to the k0s workload. None of these is reached by modalias
+	// autoloading: KVM binds no PCI device, and the rest are pure software
+	// drivers with no device to match, so naming them here is the only way they
+	// load. Absent from the kernel they are skipped like anything else, so a
+	// plain guest kernel is unaffected.
+	//
+	// kvm_intel and kvm_amd both appear because one image boots both vendors;
+	// the wrong one simply is not there. tun carries the VM's network, and
+	// vhost_net moves that datapath into the kernel — without it Firecracker
+	// still runs, at a few times the per-packet cost.
+	"kvm", "kvm_intel", "kvm_amd", "tun", "vhost_net", "vhost_vsock",
+
+	// Block devices served from userspace, which is how an image snapshotter
+	// hands a VM its root without a loop device per sandbox: target_core_user
+	// plus tcm_loop for the TCMU path, ublk_drv for the newer one. Which of the
+	// two is used is the snapshotter's choice, so both are named.
+	"target_core_user", "tcm_loop", "ublk_drv",
 }
 
 // Result reports what Load did, so the caller can tell a monolithic kernel from

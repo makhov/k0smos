@@ -23,6 +23,11 @@ type Spec struct {
 	Flags  uintptr
 	Data   string
 	Perm   os.FileMode
+	// Optional marks a filesystem the boot does not depend on. Failing to mount
+	// one is reported and stepped over instead of ending the boot, because
+	// whether the kernel has it is not something this image controls: the same
+	// k0smos boots a stock guest kernel and a bare-metal one.
+	Optional bool
 }
 
 // Default is the base set every PID1 boot needs. cgroup2 is handled separately
@@ -35,15 +40,28 @@ var Default = []Spec{
 	{Source: "tmpfs", Target: "/dev/shm", FSType: "tmpfs", Perm: 0755},
 	{Source: "tmpfs", Target: "/run", FSType: "tmpfs", Perm: 0755},
 	{Source: "tmpfs", Target: "/tmp", FSType: "tmpfs", Perm: 01777},
+
+	// For a host that runs microVM sandboxes beside the k0s workload. configfs
+	// is how a userspace block device is configured at all — TCMU targets are
+	// created by writing into /sys/kernel/config/target — and hugetlbfs is
+	// where a VM's backing memory comes from when it is given hugepages.
+	//
+	// Both optional: a kernel built without CONFIG_CONFIGFS_FS or
+	// CONFIG_HUGETLBFS must still boot. hugetlbfs in particular mounts fine
+	// with no pages reserved, and is simply empty until the cmdline asks for
+	// some, so it costs a node that wants neither nothing but the mount.
+	{Source: "configfs", Target: "/sys/kernel/config", FSType: "configfs", Perm: 0755, Optional: true},
+	{Source: "hugetlbfs", Target: "/dev/hugepages", FSType: "hugetlbfs", Perm: 0755, Optional: true},
 }
 
-// Ensure mounts every Default spec not already present.
+// Ensure mounts every Default spec not already present, returning the optional
+// targets this kernel could not provide.
 //
 // A mount table we cannot read is treated as an empty one rather than an
 // error: on a cold boot Mounts() reads /proc/self/mountinfo, which does not
 // exist until /proc is mounted, so the first call necessarily fails. /proc is
 // first in Default, so the table becomes readable right after.
-func Ensure(m Mounter) error {
+func Ensure(m Mounter) ([]string, error) {
 	existing, err := m.Mounts()
 	if err != nil {
 		existing = nil
@@ -52,18 +70,29 @@ func Ensure(m Mounter) error {
 	for _, mp := range existing {
 		have[mp.Target] = true
 	}
+	var skipped []string
 	for _, s := range Default {
 		if have[s.Target] {
 			continue
 		}
 		if err := m.Mkdir(s.Target, s.Perm); err != nil {
-			return fmt.Errorf("mkdir %s: %w", s.Target, err)
+			if s.Optional {
+				skipped = append(skipped, s.Target)
+				continue
+			}
+			return skipped, fmt.Errorf("mkdir %s: %w", s.Target, err)
 		}
 		if err := m.Mount(s.Source, s.Target, s.FSType, s.Flags, s.Data); err != nil {
-			return fmt.Errorf("mount %s: %w", s.Target, err)
+			if s.Optional {
+				// Named, not silent: a sandbox host whose TCMU setup fails later
+				// needs this line to know the kernel never offered configfs.
+				skipped = append(skipped, s.Target)
+				continue
+			}
+			return skipped, fmt.Errorf("mount %s: %w", s.Target, err)
 		}
 	}
-	return nil
+	return skipped, nil
 }
 
 // rwScratch holds the upper and work directories for the overlays below. /run is
