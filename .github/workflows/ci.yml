@@ -81,7 +81,7 @@ jobs:
       - name: install firmware test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ovmf qemu-system-x86 qemu-utils
+          sudo apt-get install -y --no-install-recommends ovmf qemu-system-x86 qemu-utils
 
       - name: build metal artifact
         env:
@@ -132,7 +132,7 @@ jobs:
       - name: install qemu
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-utils xorriso e2fsprogs
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils xorriso e2fsprogs
           # Without KVM, QEMU drops to TCG and the boot timeouts will not hold.
           ls -l /dev/kvm || echo "::warning::no /dev/kvm — boots will be slow"
 
@@ -190,7 +190,7 @@ jobs:
       - name: install qemu
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-utils xorriso e2fsprogs
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils xorriso e2fsprogs
           ls -l /dev/kvm || echo "::warning::no /dev/kvm — boots will be slow"
 
       # Both are cached on the same key: the airgap bundle is ~350MB and pinned to
