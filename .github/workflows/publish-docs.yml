@@ -77,7 +77,16 @@ jobs:
           mike alias -u head main
           STABLE=$(gh release list -L 100 --exclude-drafts --exclude-pre-releases \
             --json tagName --jq '.[].tagName' | sort -V | tail -1)
-          if [ -n "$STABLE" ]; then
+          # Only alias a version whose docs are actually on the site. A release
+          # published while this workflow was failing has none, and `mike alias`
+          # to a missing identifier fails the whole run -- which is how a broken
+          # build kept head docs from publishing long after the build was fixed.
+          # Self-healing: the next release deploys its own docs and sets stable.
+          if [ -z "$STABLE" ]; then
+            echo "no published release yet; leaving stable alone"
+          elif ! mike list "$STABLE" >/dev/null 2>&1; then
+            echo "release $STABLE has no deployed docs; leaving stable alone"
+          else
             mike alias -u "$STABLE" stable
             mike set-default --push stable
           fi
