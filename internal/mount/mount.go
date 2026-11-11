@@ -54,14 +54,30 @@ var Default = []Spec{
 	{Source: "hugetlbfs", Target: "/dev/hugepages", FSType: "hugetlbfs", Perm: 0755, Optional: true},
 }
 
-// Ensure mounts every Default spec not already present, returning the optional
-// targets this kernel could not provide.
+// Ensure mounts the required Default specs not already present. The optional
+// ones are Late's job, because they must wait for module loading.
 //
 // A mount table we cannot read is treated as an empty one rather than an
 // error: on a cold boot Mounts() reads /proc/self/mountinfo, which does not
 // exist until /proc is mounted, so the first call necessarily fails. /proc is
 // first in Default, so the table becomes readable right after.
-func Ensure(m Mounter) ([]string, error) {
+func Ensure(m Mounter) error {
+	_, err := mountSet(m, false)
+	return err
+}
+
+// Late mounts the optional filesystems and returns the targets this kernel
+// could not provide.
+//
+// It runs after module loading, not with the rest: configfs is a module on a
+// stock Alpine kernel, and k0smos has no modprobe for the kernel to call, so
+// mounted any earlier it could only ever fail. Nothing before that point needs
+// either filesystem.
+func Late(m Mounter) ([]string, error) {
+	return mountSet(m, true)
+}
+
+func mountSet(m Mounter, optional bool) ([]string, error) {
 	existing, err := m.Mounts()
 	if err != nil {
 		existing = nil
@@ -72,7 +88,7 @@ func Ensure(m Mounter) ([]string, error) {
 	}
 	var skipped []string
 	for _, s := range Default {
-		if have[s.Target] {
+		if s.Optional != optional || have[s.Target] {
 			continue
 		}
 		if err := m.Mkdir(s.Target, s.Perm); err != nil {

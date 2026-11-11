@@ -46,11 +46,17 @@ func (f *fakeMounter) Mount(source, target, fstype string, flags uintptr, data s
 // unreadable mount table means "nothing is mounted yet", not a fatal error.
 func TestEnsureProceedsWhenMountTableUnreadable(t *testing.T) {
 	f := &fakeMounter{mountsErr: os.ErrNotExist}
-	if _, err := Ensure(f); err != nil {
+	if err := Ensure(f); err != nil {
 		t.Fatalf("Ensure = %v, want nil when mount table is unreadable", err)
 	}
-	if len(f.mounted) != len(Default) {
-		t.Fatalf("mounted %d targets (%v), want all %d", len(f.mounted), f.mounted, len(Default))
+	required := 0
+	for _, spec := range Default {
+		if !spec.Optional {
+			required++
+		}
+	}
+	if len(f.mounted) != required {
+		t.Fatalf("mounted %d targets (%v), want all %d required", len(f.mounted), f.mounted, required)
 	}
 	if f.mounted[0] != "/proc" {
 		t.Errorf("first mount = %q, want /proc so the table becomes readable", f.mounted[0])
@@ -59,7 +65,7 @@ func TestEnsureProceedsWhenMountTableUnreadable(t *testing.T) {
 
 func TestEnsureMountsMissingSkipsExisting(t *testing.T) {
 	f := &fakeMounter{existing: []sys.MountPoint{{Target: "/proc"}}}
-	if _, err := Ensure(f); err != nil {
+	if err := Ensure(f); err != nil {
 		t.Fatal(err)
 	}
 	for _, tgt := range f.mounted {
@@ -87,11 +93,14 @@ func TestEnsureMountsMissingSkipsExisting(t *testing.T) {
 // filesystems only a sandbox host needs cannot be allowed to end a boot that
 // does not have them. They are reported instead, because a TCMU setup failing
 // much later is otherwise impossible to connect back to a missing configfs.
-func TestEnsureStepsOverAnAbsentOptionalFilesystem(t *testing.T) {
+func TestLateStepsOverAnAbsentOptionalFilesystem(t *testing.T) {
 	f := &fakeMounter{failFS: map[string]bool{"configfs": true, "hugetlbfs": true}}
-	skipped, err := Ensure(f)
+	if err := Ensure(f); err != nil {
+		t.Fatal(err)
+	}
+	skipped, err := Late(f)
 	if err != nil {
-		t.Fatalf("Ensure = %v, want nil: an optional filesystem must not end the boot", err)
+		t.Fatalf("Late = %v, want nil: an optional filesystem must not end the boot", err)
 	}
 	if len(skipped) != 2 {
 		t.Fatalf("skipped = %v, want both optional targets named", skipped)
@@ -107,10 +116,33 @@ func TestEnsureStepsOverAnAbsentOptionalFilesystem(t *testing.T) {
 	}
 }
 
+// configfs is a module on a stock kernel, so Ensure -- which runs before the
+// modules are loaded -- must leave it alone. Mounting it there would fail every
+// time and report a kernel feature as absent when it was only early.
+func TestEnsureLeavesTheOptionalFilesystemsToLate(t *testing.T) {
+	f := &fakeMounter{}
+	if err := Ensure(f); err != nil {
+		t.Fatal(err)
+	}
+	for _, early := range []string{"/sys/kernel/config", "/dev/hugepages"} {
+		if strings.Contains(strings.Join(f.mounted, " "), early) {
+			t.Errorf("Ensure mounted %s before the modules that provide it: %v", early, f.mounted)
+		}
+	}
+	if _, err := Late(f); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"/sys/kernel/config", "/dev/hugepages"} {
+		if !strings.Contains(strings.Join(f.mounted, " "), want) {
+			t.Errorf("Late did not mount %s: %v", want, f.mounted)
+		}
+	}
+}
+
 // A filesystem the boot genuinely needs must still be fatal.
 func TestEnsureFailsOnARequiredFilesystem(t *testing.T) {
 	f := &fakeMounter{failFS: map[string]bool{"proc": true}}
-	if _, err := Ensure(f); err == nil {
+	if err := Ensure(f); err == nil {
 		t.Fatal("Ensure = nil, want an error when /proc cannot be mounted")
 	}
 }
