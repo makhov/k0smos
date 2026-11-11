@@ -103,7 +103,8 @@ var Default = []string{
 	// Block devices served from userspace, which is how an image snapshotter
 	// hands a VM its root without a loop device per sandbox: target_core_user
 	// plus tcm_loop for the TCMU path, ublk_drv for the newer one. Which of the
-	// two is used is the snapshotter's choice, so both are named.
+	// two is used is the snapshotter's choice, so both are named -- but only TCMU
+	// is portable: Alpine's lts config has no CONFIG_BLK_DEV_UBLK on aarch64.
 	"target_core_user", "tcm_loop", "ublk_drv",
 }
 
