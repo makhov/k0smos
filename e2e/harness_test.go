@@ -17,6 +17,7 @@ package e2e
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -331,7 +332,14 @@ func (v *vm) stop() {
 	default:
 	}
 	if _, err := os.Stat(v.control); err == nil {
-		cmd := exec.Command("bash", filepath.Join(v.root, "image", "poweroff.sh"), v.control)
+		// Bounded, because poweroff.sh ends in `nc -U`, which reads until the
+		// guest closes the connection. A guest that took the command without
+		// closing left cmd.Run() blocked for the whole 40m test budget, so the
+		// 90s guard below never ran and the run died at the Go test timeout
+		// with no useful output.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "bash", filepath.Join(v.root, "image", "poweroff.sh"), v.control)
 		cmd.Dir = v.root
 		cmd.Run()
 	}
