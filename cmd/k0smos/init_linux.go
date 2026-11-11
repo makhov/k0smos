@@ -713,21 +713,12 @@ func loadModules(s *sys.Sys, cfg config.Config) error {
 func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	logf("starting as PID1 (switched-root=%t)", switched)
 	rec.SetSwitchedRoot(switched)
-	skipped, err := mount.Ensure(s)
-	if err != nil {
+	if err := mount.Ensure(s); err != nil {
 		step("mounts", err, "")
 		return fmt.Errorf("mounts: %w", err)
 	}
-	detail := ""
-	if len(skipped) > 0 {
-		// On the console and in the boot record both: a sandbox host that cannot
-		// create a TCMU target later needs to know the kernel never offered
-		// configfs, and by then the console has scrolled away.
-		logf("this kernel has no %v; skipped", skipped)
-		detail = "no " + strings.Join(skipped, " ")
-	}
 	logf("pseudo-filesystems mounted")
-	step("mounts", nil, detail)
+	step("mounts", nil, "")
 	// /run exists now, so the record can start persisting. Anything recorded
 	// above was held in memory and is carried over.
 	recordTo(bootRecordPath)
@@ -748,6 +739,26 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	// functionality built in, in which case there is nothing to load.
 	if err := loadModules(s, cfg); err != nil {
 		logf("warn: modules: %v", err)
+	}
+
+	// configfs and hugetlbfs come after the modules that provide them, and are
+	// never fatal: a kernel built without either must still boot a plain k0s
+	// node. Reported on the console and in the boot record both, because a
+	// sandbox host that cannot create a TCMU target later needs to know the
+	// kernel never offered configfs, and by then the console has scrolled away.
+	hostfs, err := mount.Late(s)
+	if err != nil {
+		logf("warn: host filesystems: %v", err)
+		step("hostfs", err, "")
+	} else {
+		detail := "none skipped"
+		if len(hostfs) > 0 {
+			logf("this kernel has no %v; skipped", hostfs)
+			detail = "no " + strings.Join(hostfs, " ")
+		} else {
+			logf("host filesystems mounted")
+		}
+		step("hostfs", nil, detail)
 	}
 
 	// Leave the initramfs for the real root. kubelet cannot

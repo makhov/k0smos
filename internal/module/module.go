@@ -100,6 +100,13 @@ var Default = []string{
 	// still runs, at a few times the per-packet cost.
 	"kvm", "kvm_intel", "kvm_amd", "tun", "vhost_net", "vhost_vsock",
 
+	// configfs is a module on a stock Alpine kernel, and mount(2) only
+	// autoloads a filesystem module by asking the kernel to run modprobe, which
+	// this image does not ship -- so without naming it here mount.Late can only
+	// ever report /sys/kernel/config as missing, and the TCMU path below has
+	// nowhere to create a target.
+	"configfs",
+
 	// Block devices served from userspace, which is how an image snapshotter
 	// hands a VM its root without a loop device per sandbox: target_core_user
 	// plus tcm_loop for the TCMU path, ublk_drv for the newer one. Which of the

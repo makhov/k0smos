@@ -324,6 +324,10 @@ func TestBootReportsSandboxHostPlumbing(t *testing.T) {
 			t.Errorf("cgroup report %q is missing %s, which kubelet needs to limit a pod", report, want)
 		}
 	}
+	// The optional filesystems are mounted after the modules that provide them,
+	// and the step reports either way — a silent one would mean it never ran.
+	v.waitForAny(bootTimeout, `host filesystems mounted`, `this kernel has no `)
+
 	// A kernel without configfs or hugetlbfs must still reach its workload —
 	// that is the whole point of marking those mounts optional.
 	v.waitFor(`supervising \[/init\]`, bootTimeout)
