@@ -12,10 +12,10 @@ raw=${1:-dist/k0smos-metal.raw}
 arch=${ARCH:-$(uname -m)}
 case "$arch" in
   arm64 | aarch64)
-    goarch=arm64; platform=linux/arm64; grub_target=arm64-efi; efi_name=BOOTAA64.EFI
+    goarch=arm64; platform=linux/arm64; grub_target=arm64-efi; efi_name=BOOTAA64.EFI; serial=ttyAMA0
     ;;
   x86_64 | amd64)
-    goarch=amd64; platform=linux/amd64; grub_target=x86_64-efi; efi_name=BOOTX64.EFI
+    goarch=amd64; platform=linux/amd64; grub_target=x86_64-efi; efi_name=BOOTX64.EFI; serial=ttyS0
     ;;
   *) echo "unsupported ARCH=$arch" >&2; exit 1 ;;
 esac
@@ -83,7 +83,12 @@ efi=$tmp/$efi_name
 truncate -s "${esp_mb}M" "$esp"
 mkfs.vfat -F 32 -n K0SMOSBOOT -i C0DE0001 "$esp" >/dev/null
 
-kernel_args=${METAL_KERNEL_ARGS:-console=tty0 console=ttyS0 k0smos.data=LABEL=k0smos-data k0smos.ip=dhcp}
+# The serial console is per-arch: aarch64 virt has no ttyS0, so a baked-in
+# console=ttyS0 left tty0 as the preferred console -- and qemu -display none
+# throws tty0 away. Every line k0smos and k0s wrote went nowhere, which is why
+# a guest stuck on DNS looked like a guest stuck in init. Serial comes last
+# because the last console= wins /dev/console.
+kernel_args=${METAL_KERNEL_ARGS:-console=tty0 console=$serial k0smos.data=LABEL=k0smos-data k0smos.ip=dhcp}
 cat > "$cfg" <<EOF
 search --no-floppy --label K0SMOSBOOT --set=root
 linux /boot/vmlinuz $kernel_args
