@@ -25,11 +25,11 @@ switched    true
 workload    /usr/local/bin/k0s controller --single (running, restarts=0)
 
 steps
-  ok       mounts
+  ok       mounts                 no /dev/hugepages
   ok       modules                48 loaded, 6 autoloaded for 9 devices (6.18.35)
   ok       root                   LABEL=k0smos -> /dev/vda2
   ok       data                   /dev/vda3 -> /var
-  ok       cgroup2
+  ok       cgroup2                cpu memory pids io cpuset hugetlb
   ok       loopback
   ok       network                eth0 dhcp 10.0.2.15/24 gw 10.0.2.2
   ok       metadata               /dev/vdb (iso9660, LABEL=cidata)
@@ -38,6 +38,12 @@ steps
 Read it top to bottom: the first `FAILED` step is the thing to fix, and a high
 `restarts` count with a `last exit` line means the machine booted but the
 workload will not stay up.
+
+Two steps carry detail worth reading even when they pass. `mounts` names any
+optional filesystem this kernel did not have — `no /dev/hugepages` above — which
+is the first thing to check when a sandbox cannot get hugepage-backed memory.
+`cgroup2` lists the controllers actually delegated, so a missing `cpuset` there
+explains a sandbox that cannot be pinned to a core.
 
 Add `--json` to get the record as data. The same record is written inside the
 machine at `/run/k0smos/boot.json`, so it is also readable with `machine cat`, or

@@ -26,7 +26,7 @@ func (f *fakeCgroup) ReadFile(string) ([]byte, error) { return []byte(f.offered)
 
 func TestSetupMountsAndEnablesControllers(t *testing.T) {
 	f := &fakeCgroup{writes: map[string]string{}, offered: strings.Join(Wanted, " ")}
-	if err := Setup(f); err != nil {
+	if _, err := Setup(f); err != nil {
 		t.Fatal(err)
 	}
 	if f.mountedTarget != "/sys/fs/cgroup" {
@@ -45,8 +45,14 @@ func TestSetupMountsAndEnablesControllers(t *testing.T) {
 // or hugetlb must still get the ones it does have.
 func TestSetupEnablesOnlyWhatTheKernelOffers(t *testing.T) {
 	f := &fakeCgroup{writes: map[string]string{}, offered: "cpu memory pids io"}
-	if err := Setup(f); err != nil {
+	enabled, err := Setup(f)
+	if err != nil {
 		t.Fatal(err)
+	}
+	// The report is what the console and `machine status` show, so it has to
+	// match what was delegated rather than what was wanted.
+	if strings.Join(enabled, " ") != "cpu memory pids io" {
+		t.Errorf("enabled = %v, want only the four the kernel offers", enabled)
 	}
 	got := f.writes["/sys/fs/cgroup/cgroup.subtree_control"]
 	for _, want := range []string{"+cpu", "+memory", "+pids", "+io"} {
@@ -65,7 +71,7 @@ func TestSetupEnablesOnlyWhatTheKernelOffers(t *testing.T) {
 // kubelet cannot apply a pod limit at all, so say so instead of booting into it.
 func TestSetupRefusesAKernelWithoutTheCoreControllers(t *testing.T) {
 	f := &fakeCgroup{writes: map[string]string{}, offered: "cpu pids io"}
-	err := Setup(f)
+	_, err := Setup(f)
 	if err == nil {
 		t.Fatal("Setup = nil, want an error when the memory controller is absent")
 	}
