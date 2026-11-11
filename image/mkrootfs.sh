@@ -140,10 +140,10 @@ fi
 install -m 0755 "$K0SMOS_BIN" "$root/sbin/k0smos"
 install -m 0755 "$k0s_bin" "$root/usr/local/bin/k0s"
 install -m 0644 "$here/k0s.yaml" "$root/etc/k0s/k0s.yaml"
-# The sandbox VMM, when the build fetched one. Both binaries are statically
-# linked, so they need nothing else in the image. Absent -- an e2e or a
-# contributor build that skipped `make firecracker` -- this is simply a plain
-# k0s node, which is why it is tolerated rather than required.
+# The sandbox VMM, for a sandbox-host image built with FIRECRACKER_DIR set. The
+# released images do not set it: a VMM in every node is weight and attack
+# surface for a capability most of them never use. Both binaries are statically
+# linked, so they need nothing else in the image when they are included.
 if [ -n "${FIRECRACKER_DIR:-}" ] && [ -d "$FIRECRACKER_DIR" ]; then
   install -m 0755 "$FIRECRACKER_DIR/firecracker" "$root/usr/local/bin/firecracker"
   install -m 0755 "$FIRECRACKER_DIR/jailer" "$root/usr/local/bin/jailer"

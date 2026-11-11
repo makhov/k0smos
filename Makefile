@@ -1,8 +1,6 @@
 BIN := dist/k0smos
 TARGET_MACHINE := $(if $(ARCH),$(ARCH),$(shell uname -m))
 TARGET_GOARCH := $(if $(filter arm64 aarch64,$(TARGET_MACHINE)),arm64,amd64)
-# Upstream release assets (firecracker) use the uname spelling, not Go's.
-TARGET_FCARCH := $(if $(filter arm64 aarch64,$(TARGET_MACHINE)),aarch64,x86_64)
 TARGET_APKARCH := $(if $(filter arm64 aarch64,$(TARGET_MACHINE)),aarch64,x86_64)
 # k0smos only runs as a linux init, so always cross-compile for the target —
 # a host build on macOS would just produce the "linux only" stub.
@@ -53,10 +51,13 @@ kernel-metal:
 k0s:
 	./image/fetch-k0s.sh
 
-# Firecracker VMM + jailer for a node that hosts microVM sandboxes (~5MB, both
-# statically linked). Only the release root depends on this: the e2e roots skip
-# it, because nothing in the suite can boot a microVM inside a QEMU guest
-# without nested virtualisation.
+# Firecracker VMM + jailer for a node meant to host microVM sandboxes (~5MB,
+# both statically linked). Nothing depends on this: the released images are
+# plain k0s nodes. To build a sandbox host, fetch it and point the root build at
+# it yourself:
+#
+#	make firecracker
+#	FIRECRACKER_DIR=dist/firecracker-$$(uname -m) make root
 firecracker:
 	./image/fetch-firecracker.sh
 
@@ -78,10 +79,9 @@ initramfs:
 # The canonical, platform-independent OS payload. Platform-specific kernel
 # modules belong in the initramfs wrapper, never in this image, so KubeVirt and
 # Metal3 can prove they carry the same root bytes.
-root: k0s firecracker
+root: k0s
 	ROOTFS=erofs MODULES_DIR=dist/no-platform-modules \
-		K0S_BIN=dist/k0s-$(TARGET_GOARCH) \
-		FIRECRACKER_DIR=dist/firecracker-$(TARGET_FCARCH) ./image/mkrootfs.sh dist/k0smos.erofs
+		K0S_BIN=dist/k0s-$(TARGET_GOARCH) ./image/mkrootfs.sh dist/k0smos.erofs
 
 # The root k0smos switch_roots onto in kernel-matrix tests. kubelet cannot run on the initramfs itself
 # (cadvisor finds no filesystem info for a ramfs root), but it is satisfied by a
