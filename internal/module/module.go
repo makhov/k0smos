@@ -95,7 +95,7 @@ var Default = []string{
 	// plain guest kernel is unaffected.
 	//
 	// kvm_intel and kvm_amd both appear because one image boots both vendors;
-	// the wrong one simply is not there. tun carries the VM's network, and
+	// the wrong one refuses with EOPNOTSUPP, which Load skips. tun carries the VM's network, and
 	// vhost_net moves that datapath into the kernel — without it Firecracker
 	// still runs, at a few times the per-packet cost.
 	"kvm", "kvm_intel", "kvm_amd", "tun", "vhost_net", "vhost_vsock",
@@ -298,7 +298,14 @@ func (r *resolver) load(name string) {
 		return
 	}
 	// EEXIST means the kernel already has it — the desired end state either way.
-	if err := r.l.InitModule(image, ""); err != nil && !errors.Is(err, syscall.EEXIST) {
+	// ENODEV and EOPNOTSUPP mean it is not for this machine: kvm_intel on AMD, a
+	// driver whose hardware is absent. One image boots many machines, so that is
+	// expected, not a failure.
+	err = r.l.InitModule(image, "")
+	if errors.Is(err, syscall.ENODEV) || errors.Is(err, syscall.EOPNOTSUPP) {
+		return
+	}
+	if err != nil && !errors.Is(err, syscall.EEXIST) {
 		r.errs = append(r.errs, fmt.Errorf("load module %s: %w", key, err))
 		return
 	}
@@ -310,10 +317,12 @@ func (r *resolver) load(name string) {
 // "crc32c" algorithm is provided by the crc32c_generic module). It returns ""
 // when nothing matches.
 func (r *resolver) resolve(name string) string {
+	name = canonical(name)
 	if _, ok := r.deps[name]; ok {
 		return name
 	}
 	if target, ok := r.alias[name]; ok {
+		target = canonical(target)
 		if _, ok := r.deps[target]; ok {
 			return target
 		}
@@ -452,13 +461,19 @@ func matchDevices(entries []aliasEntry, modaliases []string) []string {
 }
 
 // nameOf turns a module path into its module name: kernel/fs/ext4/ext4.ko.gz
-// becomes ext4.
+// becomes ext4, and kernel/arch/x86/kvm/kvm-amd.ko.gz becomes kvm_amd.
 func nameOf(p string) string {
 	name := path.Base(p)
 	name = strings.TrimSuffix(name, ".gz")
 	name = strings.TrimSuffix(name, ".xz")
 	name = strings.TrimSuffix(name, ".zst")
-	return strings.TrimSuffix(name, ".ko")
+	return canonical(strings.TrimSuffix(name, ".ko"))
+}
+
+// canonical is the kernel's spelling of a module name: it treats '-' and '_' as
+// the same character and reports '_', so kvm-amd.ko is the module kvm_amd.
+func canonical(name string) string {
+	return strings.ReplaceAll(name, "-", "_")
 }
 
 // decompress unwraps a gzipped module. init_module(2) needs the raw ELF, and

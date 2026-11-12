@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"errors"
 	"slices"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -426,5 +427,46 @@ func TestLoadAllWithNoModulesDepIsNoOp(t *testing.T) {
 	}
 	if res.TreeFound || res.Loaded != 0 || res.Autoloaded != 0 {
 		t.Errorf("res = %+v, want zero", res)
+	}
+}
+
+// Module files may spell a name with '-' where the kernel and every caller use
+// '_': kvm-amd.ko is kvm_amd. A miss here is silent -- it looks like a built-in
+// -- which is how a node shipped with svm visible and no /dev/kvm.
+func TestLoadMatchesHyphenatedModuleFiles(t *testing.T) {
+	f := newFake(t)
+	f.files["/lib/modules/test/modules.dep"] = []byte(depFile +
+		"kernel/arch/x86/kvm/kvm-amd.ko.gz: kernel/arch/x86/kvm/kvm.ko.gz\n" +
+		"kernel/arch/x86/kvm/kvm.ko.gz:\n")
+	f.files["/lib/modules/test/kernel/arch/x86/kvm/kvm-amd.ko.gz"] = gz(t, "kvm_amd")
+	f.files["/lib/modules/test/kernel/arch/x86/kvm/kvm.ko.gz"] = gz(t, "kvm")
+
+	if _, err := Load(f, "/lib/modules/test", []string{"kvm_amd"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"kvm", "kvm_amd"}; !slices.Equal(f.loaded, want) {
+		t.Errorf("loaded = %v, want %v", f.loaded, want)
+	}
+}
+
+// One image boots AMD and Intel, real and virtual hardware: the other vendor's
+// kvm module refuses with EOPNOTSUPP and an absent device's driver with ENODEV.
+// Neither is a failure, and neither may hide a real one beside it.
+func TestLoadSkipsModulesNotForThisMachine(t *testing.T) {
+	f := newFake(t)
+	f.errs = map[string]error{
+		"virtio_blk": syscall.EOPNOTSUPP,
+		"virtio_net": syscall.ENODEV,
+		"ext4":       syscall.EIO,
+	}
+	res, err := Load(f, "/lib/modules/test", []string{"virtio_blk", "virtio_net", "ext4"})
+	if err == nil || !strings.Contains(err.Error(), "ext4") {
+		t.Fatalf("Load = %v, want only the ext4 failure", err)
+	}
+	if strings.Contains(err.Error(), "virtio") {
+		t.Errorf("Load reported a module not for this machine: %v", err)
+	}
+	if res.Loaded != 2 { // failover and net_failover, virtio_net's dependencies
+		t.Errorf("Loaded = %d, want 2", res.Loaded)
 	}
 }
