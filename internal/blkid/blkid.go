@@ -149,13 +149,13 @@ func Blank(p Prober) ([]string, error) {
 
 // blankLen is how much of a device must be zero for it to count as blank. Every
 // format k0smos might meet on a used disk -- MBR and GPT, LVM, XFS, btrfs, swap,
-// md, and the four filesystems probed here -- writes its signature within it.
+// md, and every filesystem probed here -- writes its signature within it.
 const blankLen = 1 << 20
 
 // IsBlank reports whether dev has never been used: its first MiB is all zero.
 //
-// Not merely "no recognised filesystem": the probes know four filesystems, so a
-// disk holding XFS, LVM or just a partition table -- a bare-metal boot disk among
+// Not merely "no recognised filesystem": the probes know a handful, so a
+// disk holding btrfs, LVM or just a partition table -- a bare-metal boot disk among
 // them -- would look empty and be formatted. A device that cannot be read in full
 // is not blank either. Formatting is the one irreversible thing k0smos does, so
 // a false "not blank" costs a wipe and a false "blank" costs someone's data.

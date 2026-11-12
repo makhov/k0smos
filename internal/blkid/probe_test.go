@@ -196,3 +196,39 @@ func TestEROFSIsNotBlank(t *testing.T) {
 		t.Errorf("Blank = %v, want nothing — an erofs image has a filesystem", got)
 	}
 }
+
+// xfsImage is an XFS superblock as mkfs.xfs writes it: big-endian, at offset 0.
+func xfsImage(blockSize uint32, uuid [16]byte, label string) []byte {
+	img := make([]byte, 4096)
+	binary.BigEndian.PutUint32(img[0:], xfsMagic)
+	binary.BigEndian.PutUint32(img[xfsBlockOff:], blockSize)
+	copy(img[xfsUUIDOff:], uuid[:])
+	copy(img[xfsLabelOff:], label)
+	return img
+}
+
+// An XFS disk -- what sandbox runtimes keep their data on -- is found by label
+// and UUID, and is never mistaken for a blank one.
+func TestIdentifyRecognisesXFS(t *testing.T) {
+	p := &fakeProber{devs: []string{"nvme1n1"}, images: map[string][]byte{"nvme1n1": xfsImage(4096, uuidA, "sbx-data")}}
+	info, ok := Identify(p, "nvme1n1")
+	if !ok || info.FSType != "xfs" || info.Label != "sbx-data" || info.UUID != formatUUID(uuidA[:]) {
+		t.Fatalf("Identify = %+v, %v", info, ok)
+	}
+	if dev, err := Resolve(p, "LABEL=sbx-data"); err != nil || dev != "/dev/nvme1n1" {
+		t.Errorf("Resolve(LABEL=sbx-data) = %q, %v", dev, err)
+	}
+	if IsBlank(p, "nvme1n1") {
+		t.Error("an XFS disk counted as blank")
+	}
+}
+
+// The four magic bytes are not enough: an implausible block size means this is
+// not an XFS superblock, whatever else it is.
+func TestXFSProbeChecksTheBlockSize(t *testing.T) {
+	for _, bs := range []uint32{0, 256, 3000, 1 << 17} {
+		if _, _, ok := probeXFS(xfsImage(bs, uuidA, "x")); ok {
+			t.Errorf("block size %d accepted", bs)
+		}
+	}
+}

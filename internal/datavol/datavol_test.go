@@ -62,11 +62,11 @@ func (f *fakeVol) Mount(source, target, fstype string, flags uintptr, _ string) 
 	return nil
 }
 
-// used is a disk k0smos cannot read but must not touch: XFS here, standing in
-// for a partition table, LVM, btrfs -- anything written to its first MiB.
+// used is a disk k0smos cannot read but must not touch: a GPT here, standing in
+// for LVM, btrfs, md -- anything written to its first MiB.
 func used() []byte {
 	img := blank()
-	copy(img, "XFSB")
+	copy(img[512:], "EFI PART")
 	return img
 }
 
@@ -229,7 +229,7 @@ func iso(vol string) []byte {
 	return img
 }
 
-// A bare-metal disk with XFS, LVM or a partition table has no filesystem the
+// A bare-metal disk with LVM or just a partition table has no filesystem the
 // probes know, which used to make it "blank" and the data volume -- formatted.
 func TestPrepareNeverFormatsAnUnrecognisedUsedDisk(t *testing.T) {
 	f := &fakeVol{

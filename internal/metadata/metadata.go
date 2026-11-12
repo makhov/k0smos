@@ -253,8 +253,8 @@ func parseFSSetup(cc cloudConfig, warn []string) ([]FSSetup, []string) {
 			warn = append(warn, fmt.Sprintf("fs_setup %s: overwrite is not supported, skipped", f.Device))
 		case f.Partition != nil && p != "none" && p != "auto" && p != "any":
 			warn = append(warn, fmt.Sprintf("fs_setup %s: partition %s is not supported, name the partition's own device; skipped", f.Device, p))
-		case f.Filesystem != "ext4":
-			warn = append(warn, fmt.Sprintf("fs_setup %s: k0smos can only create ext4, not %q; skipped", f.Device, f.Filesystem))
+		case f.Filesystem != "ext4" && f.Filesystem != "xfs":
+			warn = append(warn, fmt.Sprintf("fs_setup %s: k0smos can only create ext4 or xfs, not %q; skipped", f.Device, f.Filesystem))
 		default:
 			out = append(out, FSSetup{Device: f.Device, Filesystem: f.Filesystem, Label: f.Label})
 		}

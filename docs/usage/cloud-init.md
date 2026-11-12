@@ -86,7 +86,7 @@ boots on real hardware. A label cannot.
 zero, as on a disk that has never been used. A disk holding anything (a
 filesystem, a partition table, LVM) is never formatted:
 
-- one with a filesystem k0smos recognises (ext4, vfat) is left as it is, so
+- one with a filesystem k0smos recognises (ext4, XFS, vfat) is left as it is, so
   the entry is harmless on every later boot;
 - any other is refused with `refusing to format`. Wipe it first if it is meant
   for this node.
@@ -95,7 +95,7 @@ Supported:
 
 | Key | Supported | Not supported (warned and skipped) |
 |---|---|---|
-| `fs_setup` | `device` (a `/dev` path), `filesystem: ext4`, `label` | other filesystems, `overwrite`, `partition` other than `none`/`auto`/`any`, aliases such as `ephemeral0` |
+| `fs_setup` | `device` (a `/dev` path), `filesystem: ext4` or `xfs`, `label` | other filesystems, `overwrite`, `partition` other than `none`/`auto`/`any`, aliases such as `ephemeral0` |
 | `mounts` | device as `/dev/...`, `sdb`, `LABEL=` or `UUID=`; mount point; filesystem type or `auto`; options `defaults`, `nofail`, `rw`, `ro` | swap, other options |
 | `disk_setup` | | partitioning: give `fs_setup` a whole disk or an existing partition |
 

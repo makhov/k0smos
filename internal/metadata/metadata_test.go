@@ -250,6 +250,7 @@ func TestParseUserDataFSSetupAndMounts(t *testing.T) {
 	doc := `#cloud-config
 fs_setup:
   - {device: /dev/nvme1n1, filesystem: ext4, label: sbx-data, partition: none}
+  - {device: /dev/nvme2n1, filesystem: xfs, label: scratch}
 mounts:
   - [LABEL=sbx-data, /srv/sandboxes-data, ext4, "defaults,nofail"]
   - [sdc, /mnt/ro, auto, ro]
@@ -259,7 +260,10 @@ mounts:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []FSSetup{{Device: "/dev/nvme1n1", Filesystem: "ext4", Label: "sbx-data"}}; !slices.Equal(got.FSSetup, want) {
+	if want := []FSSetup{
+		{Device: "/dev/nvme1n1", Filesystem: "ext4", Label: "sbx-data"},
+		{Device: "/dev/nvme2n1", Filesystem: "xfs", Label: "scratch"},
+	}; !slices.Equal(got.FSSetup, want) {
 		t.Errorf("fs_setup = %+v, want %+v", got.FSSetup, want)
 	}
 	want := []Mount{
@@ -284,7 +288,7 @@ disk_setup:
 fs_setup:
   - {device: /dev/sdb, filesystem: ext4, overwrite: true}
   - {device: /dev/sdb, filesystem: ext4, partition: 1}
-  - {device: /dev/sdb, filesystem: xfs}
+  - {device: /dev/sdb, filesystem: btrfs}
   - {device: ephemeral0, filesystem: ext4}
 mounts:
   - [/dev/sdc, none, swap]
@@ -301,7 +305,7 @@ mounts:
 	if len(got.Mounts) != 1 || got.Mounts[0].Spec != "/dev/sde" {
 		t.Errorf("mounts = %+v, want only /dev/sde", got.Mounts)
 	}
-	for _, w := range []string{"disk_setup", "overwrite", "partition 1", `"xfs"`, "ephemeral0", `"none"`, "needs a device", `"noatime" ignored`} {
+	for _, w := range []string{"disk_setup", "overwrite", "partition 1", `"btrfs"`, "ephemeral0", `"none"`, "needs a device", `"noatime" ignored`} {
 		if !slices.ContainsFunc(got.Warnings, func(s string) bool { return strings.Contains(s, w) }) {
 			t.Errorf("no warning mentioning %s in %q", w, got.Warnings)
 		}

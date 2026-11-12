@@ -98,7 +98,7 @@ func format(v Volume, dev, fstype, label string) (bool, error) {
 	}
 	if !blkid.IsBlank(v, name) {
 		return false, fmt.Errorf("refusing to format %s: it is not blank but holds no filesystem "+
-			"k0smos recognises (a partition table, LVM, XFS...); wipe it first if it is meant for this", dev)
+			"k0smos recognises (a partition table, LVM, btrfs...); wipe it first if it is meant for this", dev)
 	}
 	if err := v.Mkfs(dev, fstype, label); err != nil {
 		return false, fmt.Errorf("format %s as %s: %w", dev, fstype, err)
