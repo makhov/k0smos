@@ -25,7 +25,7 @@ func TestCloudInitFormatsAndMountsAnExtraDisk(t *testing.T) {
 	used := blankVolume(t, "used")
 	xfs := blankVolume(t, "xfs")
 	writeDisk(t, extra, nil)
-	writeDisk(t, used, gpt)
+	writeDisk(t, used, gptOnly)
 	writeDisk(t, xfs, nil)
 
 	// Attached in order after the cloud-init drive: vda, then vdb, vdc, vdd.
@@ -55,8 +55,8 @@ mounts:
 		t.Fatal(err)
 	}
 	defer f.Close()
-	head := make([]byte, len(gpt))
-	if _, err := f.ReadAt(head, 0); err != nil || !bytes.Equal(head, gpt) {
+	head := make([]byte, len(gptOnly))
+	if _, err := f.ReadAt(head, 0); err != nil || !bytes.Equal(head, gptOnly) {
 		t.Errorf("the used disk was written to: %v", err)
 	}
 
@@ -69,9 +69,9 @@ mounts:
 	v.stop()
 }
 
-// gpt is the start of a disk with a GPT and nothing else: a protective MBR
+// gptOnly is the start of a disk with a GPT and nothing else: a protective MBR
 // signature and the "EFI PART" header in the next sector.
-var gpt = func() []byte {
+var gptOnly = func() []byte {
 	b := make([]byte, 520)
 	b[510], b[511] = 0x55, 0xaa
 	copy(b[512:], "EFI PART")

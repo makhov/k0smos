@@ -3,9 +3,14 @@ package datavol
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io/fs"
+	"os"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/amakhov/k0smos/internal/gpt"
 )
 
 // ext4 image, enough for blkid's probe to recognise it.
@@ -229,6 +234,132 @@ func iso(vol string) []byte {
 	return img
 }
 
+// fakeGrower is a disk vda (a temp file with a GPT) whose third partition holds
+// an ext4 filesystem of fsBlocks 4 KiB blocks. Resizes are recorded and applied
+// back, as the kernel would: the partition and the filesystem then report the
+// new size.
+type fakeGrower struct {
+	t        *testing.T
+	disk     string // path of vda's backing file
+	sizes    map[string]int64
+	fsBlocks uint64
+	part     bool // whether the volume is vda3 or the whole of vda
+	resized  []string
+}
+
+func (f *fakeGrower) ReadAt(dev string, p []byte, off int64) error {
+	sb := make([]byte, 2048)
+	binary.LittleEndian.PutUint32(sb[1024+0x04:], uint32(f.fsBlocks))
+	binary.LittleEndian.PutUint32(sb[1024+0x18:], 2) // 1024 << 2: 4 KiB blocks
+	copy(p, sb[off:])
+	return nil
+}
+
+func (f *fakeGrower) PartitionOf(name string) (string, int, bool) {
+	if f.part && name == "vda3" {
+		return "vda", 3, true
+	}
+	return "", 0, false
+}
+
+func (f *fakeGrower) DeviceSize(name string) (int64, error) { return f.sizes[name], nil }
+func (f *fakeGrower) SectorSize(string) (int64, error)      { return 512, nil }
+func (f *fakeGrower) OpenDisk(string) (*os.File, error)     { return os.OpenFile(f.disk, os.O_RDWR, 0) }
+
+func (f *fakeGrower) ResizePartition(disk string, part int, start, length int64) error {
+	f.resized = append(f.resized, fmt.Sprintf("%s%d:%d+%d", disk, part, start, length))
+	f.sizes["vda3"] = length
+	return nil
+}
+
+func (f *fakeGrower) ResizeExt4(mp string, blocks uint64) error {
+	f.resized = append(f.resized, fmt.Sprintf("ext4 %s:%d", mp, blocks))
+	f.fsBlocks = blocks
+	return nil
+}
+
+// newGrower is a 64 MiB vda -- an image written for 16 MiB, then grown -- with
+// partition 3 at sectors 2048..34815 and a filesystem filling it.
+func newGrower(t *testing.T, part bool) *fakeGrower {
+	t.Helper()
+	path := t.TempDir() + "/vda"
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if err := file.Truncate(16 << 20); err != nil {
+		t.Fatal(err)
+	}
+	if err := gpt.Create(file, 16<<20, 512, [2]uint64{40, 1023}, [2]uint64{1024, 2047}, [2]uint64{2048, 32767 - 33 - 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(64 << 20); err != nil {
+		t.Fatal(err)
+	}
+	partBytes := int64(32767-33-1-2048+1) * 512
+	f := &fakeGrower{t: t, disk: path, part: part, sizes: map[string]int64{"vda": 64 << 20, "vda3": partBytes}}
+	if part {
+		f.fsBlocks = uint64(partBytes) / 4096
+	} else {
+		f.fsBlocks = 16 << 20 / 4096
+	}
+	return f
+}
+
+// The metal image on a bigger disk: the table grows partition 3, the kernel is
+// told, and the filesystem fills it. Every later boot finds nothing to do.
+func TestGrowExtendsTheDataPartitionThenTheFilesystem(t *testing.T) {
+	f := newGrower(t, true)
+	did, err := Grow(f, "/dev/vda3", "/var", "ext4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newEnd := uint64(64<<20/512) - 1 - 32 - 1
+	length := int64(newEnd-2048+1) * 512
+	want := []string{fmt.Sprintf("vda3:%d+%d", 2048*512, length), fmt.Sprintf("ext4 /var:%d", length/4096)}
+	if !slices.Equal(f.resized, want) {
+		t.Errorf("resized = %v, want %v", f.resized, want)
+	}
+	if !strings.Contains(did, "grew partition 3 of vda") || !strings.Contains(did, "grew the filesystem at /var") {
+		t.Errorf("Grow said %q", did)
+	}
+
+	f.resized = nil
+	if did, err := Grow(f, "/dev/vda3", "/var", "ext4"); err != nil || did != "" || len(f.resized) != 0 {
+		t.Errorf("second Grow = %q, %v, resized %v; want nothing done", did, err, f.resized)
+	}
+}
+
+// KubeVirt's data disk is a filesystem on a whole disk: an expanded volume needs
+// no table, only the filesystem grown.
+func TestGrowAWholeDiskFilesystem(t *testing.T) {
+	f := newGrower(t, false)
+	if _, err := Grow(f, "/dev/vda", "/var", "ext4"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{fmt.Sprintf("ext4 /var:%d", 64<<20/4096)}; !slices.Equal(f.resized, want) {
+		t.Errorf("resized = %v, want %v", f.resized, want)
+	}
+}
+
+// mkfs leaves a filesystem a few blocks short of its device: a fresh node must
+// not "grow" it by those every first boot.
+func TestGrowIgnoresTheMkfsRemainder(t *testing.T) {
+	f := newGrower(t, false)
+	f.fsBlocks = 64<<20/4096 - 3
+	if did, err := Grow(f, "/dev/vda", "/var", "ext4"); did != "" || err != nil || len(f.resized) != 0 {
+		t.Errorf("Grow = %q, %v, resized %v; want a no-op", did, err, f.resized)
+	}
+}
+
+func TestGrowLeavesOtherFilesystemsAlone(t *testing.T) {
+	f := newGrower(t, true)
+	if did, err := Grow(f, "/dev/vda3", "/var", "xfs"); did != "" || err != nil || len(f.resized) != 0 {
+		t.Errorf("Grow(xfs) = %q, %v, resized %v; want a no-op", did, err, f.resized)
+	}
+}
+
 // A bare-metal disk with LVM or just a partition table has no filesystem the
 // probes know, which used to make it "blank" and the data volume -- formatted.
 func TestPrepareNeverFormatsAnUnrecognisedUsedDisk(t *testing.T) {
@@ -320,5 +451,22 @@ func TestPrepareAutoSkipsDisksClaimedByFSSetup(t *testing.T) {
 	}
 	if len(f.mkfs) != 1 || !strings.HasPrefix(f.mkfs[0], "/dev/vdb:") {
 		t.Errorf("mkfs = %v, want only /dev/vdb", f.mkfs)
+	}
+}
+
+// A partition on an MBR disk is not grown, and that is not an error -- but a
+// filesystem smaller than its partition is still grown into it.
+func TestGrowFillsThePartitionOnAnMBRDisk(t *testing.T) {
+	f := newGrower(t, true)
+	if err := os.WriteFile(f.disk, make([]byte, 4096), 0644); err != nil { // no GPT left
+		t.Fatal(err)
+	}
+	f.fsBlocks /= 2
+	did, err := Grow(f, "/dev/vda3", "/var", "ext4")
+	if err != nil {
+		t.Fatalf("Grow = %v, want no error for an MBR disk", err)
+	}
+	if want := []string{fmt.Sprintf("ext4 /var:%d", f.sizes["vda3"]/4096)}; !slices.Equal(f.resized, want) {
+		t.Errorf("resized = %v, want %v (%s)", f.resized, want, did)
 	}
 }
