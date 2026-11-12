@@ -1169,6 +1169,10 @@ firmware problems appear:</p>
 <td><code>k0smos.data=auto</code> found several candidate disks; name one explicitly</td>
 </tr>
 <tr>
+<td><code>warn: grow data volume: ... not the last on the disk</code></td>
+<td>the disk grew, but another partition follows the data partition, so it cannot be extended; the filesystem still fills the partition it has</td>
+</tr>
+<tr>
 <td><code>refusing to format /dev/...</code></td>
 <td>the disk is not blank but holds nothing k0smos recognises (a partition table, LVM, btrfs); wipe it if it is meant for this node</td>
 </tr>
