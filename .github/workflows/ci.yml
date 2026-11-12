@@ -133,8 +133,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils xorriso e2fsprogs
-          # Without KVM, QEMU drops to TCG and the boot timeouts will not hold.
-          ls -l /dev/kvm || echo "::warning::no /dev/kvm — boots will be slow"
+          # The runner has /dev/kvm, but root:kvm 0660 and the runner user is not
+          # in kvm, so run-qemu.sh's -w test fails and QEMU silently drops to TCG.
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+          [ -w /dev/kvm ] || echo "::warning::/dev/kvm is not writable — QEMU will use TCG and boots will be slow"
 
       # Keyed on the fetch script, which carries the pinned version and digests:
       # bumping either invalidates the cache, and nothing else does.
@@ -191,7 +197,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils xorriso e2fsprogs
-          ls -l /dev/kvm || echo "::warning::no /dev/kvm — boots will be slow"
+          # The runner has /dev/kvm, but root:kvm 0660 and the runner user is not
+          # in kvm, so run-qemu.sh's -w test fails and QEMU silently drops to TCG.
+          # The three-node cluster cannot form under TCG inside its timeout.
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+          [ -w /dev/kvm ] || echo "::warning::/dev/kvm is not writable — QEMU will use TCG and boots will be slow"
 
       # Both are cached on the same key: the airgap bundle is ~350MB and pinned to
       # the same k0s release as the binary, so they go stale together.
