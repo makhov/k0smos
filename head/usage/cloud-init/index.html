@@ -495,6 +495,15 @@ You are not viewing the documentation for the current stable release of k0smos.
 </li>
         
           <li class="md-nav__item">
+  <a href="#network-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      network-config
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#extra-disks-fs_setup-and-mounts" class="md-nav__link">
     <span class="md-ellipsis">
       Extra disks: fs_setup and mounts
@@ -977,6 +986,15 @@ You are not viewing the documentation for the current stable release of k0smos.
 </li>
         
           <li class="md-nav__item">
+  <a href="#network-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      network-config
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#extra-disks-fs_setup-and-mounts" class="md-nav__link">
     <span class="md-ellipsis">
       Extra disks: fs_setup and mounts
@@ -1041,6 +1059,10 @@ configuration agent to modify a running node.</p>
 <li>a NoCloud ISO labelled <code>cidata</code>; or</li>
 <li>an OpenStack config-drive labelled <code>config-2</code>.</li>
 </ul>
+<p>Either label may be upper case (<code>CIDATA</code>), as standard-following ISO writers
+produce it, and the drive may be a virtio disk or a cdrom on virtio-scsi, as
+libvirt usually attaches a seed. A cdrom needs a kernel with a
+CD-ROM driver: the metal image's has one; Kata's guest kernel does not.</p>
 <p>k0smos reads both formats directly in userspace. This is the same interface used
 by local <code>k0smosctl</code> machines and by Cluster API providers.</p>
 <h2 id="generate-a-local-configuration-drive">Generate a local configuration drive<a class="headerlink" href="#generate-a-local-configuration-drive" title="Permanent link">#</a></h2>
@@ -1080,6 +1102,29 @@ cloud-config sets machine networking:</p>
 <span class="w">  </span><span class="nt">dns</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10.20.0.53</span>
 </code></pre></div>
 <p>Values supplied here override the corresponding kernel command-line fields.</p>
+<h3 id="network-config"><code>network-config</code><a class="headerlink" href="#network-config" title="Permanent link">#</a></h3>
+<p>A NoCloud drive's <code>network-config</code> file, as <code>cloud-localds -N</code> writes it, configures interfaces in netplan's version 2
+format, with or without a top-level <code>network:</code> key:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">network</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<span class="w">  </span><span class="nt">ethernets</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">eth0</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">mtu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">9000</span>
+<span class="w">      </span><span class="nt">addresses</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">10.20.0.12/32</span><span class="p p-Indicator">]</span>
+<span class="w">      </span><span class="nt">routes</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">to</span><span class="p">:</span><span class="w"> </span><span class="nv">default</span><span class="p p-Indicator">,</span><span class="nt"> via</span><span class="p">:</span><span class="w"> </span><span class="nv">10.20.0.1</span><span class="p p-Indicator">}</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">to</span><span class="p">:</span><span class="w"> </span><span class="nv">10.20.0.1/32</span><span class="p p-Indicator">,</span><span class="nt"> scope</span><span class="p">:</span><span class="w"> </span><span class="nv">link</span><span class="p p-Indicator">}</span>
+<span class="w">      </span><span class="nt">nameservers</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">addresses</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">10.20.0.53</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">1.1.1.1</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+<p>Supported per <code>ethernets</code> entry: the key as the interface name, or
+<code>match: {macaddress: ...}</code>; <code>dhcp4</code>; one IPv4 address; <code>gateway4</code> or a default
+route with <code>via</code> (and <code>on-link</code>); routes with <code>scope: link</code>, which make a
+gateway outside the address's prefix reachable; <code>nameservers</code>; <code>mtu</code>. Bonds,
+VLANs, bridges, IPv6, other routes and version 1 are reported on the console
+and skipped.</p>
+<p>It overrides the kernel command line (the metal image's fixed
+<code>k0smos.ip=dhcp</code>), and the <code>k0smos</code> section of user-data overrides it.</p>
 <h3 id="extra-disks-fs_setup-and-mounts">Extra disks: <code>fs_setup</code> and <code>mounts</code><a class="headerlink" href="#extra-disks-fs_setup-and-mounts" title="Permanent link">#</a></h3>
 <p>The data volume at <code>/var</code> holds k0s and its containers. A disk for anything
 else (a second NVMe on a bare-metal machine, a disk attached in libvirt or
