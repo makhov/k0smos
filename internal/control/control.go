@@ -144,8 +144,9 @@ func WatchReopen(ctx context.Context, open func() (io.ReadWriteCloser, error), r
 	out := make(chan Command)
 	go func() {
 		defer close(out)
+		var st portState
 		for ctx.Err() == nil {
-			if !readOnce(ctx, open, out, respond) {
+			if !readOnce(ctx, open, out, respond, &st) {
 				// Nothing was read; pause so a permanently failing port cannot
 				// spin the CPU for the lifetime of the machine.
 				select {
@@ -159,19 +160,61 @@ func WatchReopen(ctx context.Context, open func() (io.ReadWriteCloser, error), r
 	return out
 }
 
+// Logf, when set, reports what the port does: open failures, read errors and
+// every line received. A power command that never arrived is otherwise
+// indistinguishable from one that arrived and was ignored, and both look like
+// a guest that will not shut down.
+var Logf func(format string, args ...any)
+
+func logf(format string, args ...any) {
+	if Logf != nil {
+		Logf(format, args...)
+	}
+}
+
+// portState is what WatchReopen remembers between opens, so the console says
+// when something changes rather than once a second while nothing does.
+type portState struct {
+	lastOpenErr string
+	idle        int // opens since the last one that read anything
+}
+
 // readOnce opens the port and forwards commands until it ends, reporting
 // whether anything was forwarded.
-func readOnce(ctx context.Context, open func() (io.ReadWriteCloser, error), out chan<- Command, respond Responder) bool {
+func readOnce(ctx context.Context, open func() (io.ReadWriteCloser, error), out chan<- Command, respond Responder, st *portState) bool {
 	rc, err := open()
 	if err != nil {
+		if msg := err.Error(); msg != st.lastOpenErr {
+			logf("control port: open: %v", err)
+			st.lastOpenErr = msg
+		}
 		return false
 	}
+	st.lastOpenErr = ""
 	defer rc.Close()
 
 	// Requests are answered here rather than forwarded, because the answer goes
 	// back down this same port and the caller has no handle on it.
 	forwarded := false
-	for ev := range watchEvents(ctx, rc) {
+	lines := 0
+	defer func() {
+		if lines == 0 {
+			st.idle++
+			return
+		}
+		st.idle = 0
+	}()
+	for ev := range watchEvents(ctx, rc, func(line string, err error) {
+		if err != nil {
+			logf("control port: read: %v", err)
+			return
+		}
+		if lines == 0 {
+			logf("control port: data after %d idle open(s)", st.idle)
+		}
+		lines++
+		logf("control port: got %q", truncate(line, 64))
+	}) {
 		if ev.request != "" {
 			serveRequest(rc, ev.request, respond)
 			forwarded = true // the port is alive; do not back off
@@ -261,12 +304,25 @@ type event struct {
 
 // watchEvents reads the port until EOF or ctx is done. Requests are reported
 // alongside commands so the caller can answer them on the same connection.
-func watchEvents(ctx context.Context, r io.Reader) <-chan event {
+//
+// seen, when non-nil, is told about every line and about the error that ended
+// the scan, if any. It runs on the scanning goroutine.
+func watchEvents(ctx context.Context, r io.Reader, seen func(line string, err error)) <-chan event {
 	out := make(chan event)
 	go func() {
 		defer close(out)
 		scanner := bufio.NewScanner(r)
+		if seen != nil {
+			defer func() {
+				if err := scanner.Err(); err != nil {
+					seen("", err)
+				}
+			}()
+		}
 		for scanner.Scan() {
+			if seen != nil {
+				seen(scanner.Text(), nil)
+			}
 			line := strings.ToLower(strings.TrimSpace(scanner.Text()))
 			var ev event
 			switch {
@@ -335,4 +391,11 @@ func Watch(ctx context.Context, r io.Reader) <-chan Command {
 		}
 	}()
 	return out
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }

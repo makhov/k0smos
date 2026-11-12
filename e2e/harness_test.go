@@ -331,6 +331,7 @@ func (v *vm) stop() {
 		return // already gone
 	default:
 	}
+	delivery := "no control socket, so no poweroff was sent"
 	if _, err := os.Stat(v.control); err == nil {
 		// Bounded, because poweroff.sh ends in `nc -U`, which reads until the
 		// guest closes the connection. A guest that took the command without
@@ -341,12 +342,17 @@ func (v *vm) stop() {
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "bash", filepath.Join(v.root, "image", "poweroff.sh"), v.control)
 		cmd.Dir = v.root
-		cmd.Run()
+		// Kept rather than discarded: when the guest then fails to power off, this
+		// is the only record of whether the command was even delivered.
+		start := time.Now()
+		out, err := cmd.CombinedOutput()
+		delivery = fmt.Sprintf("poweroff.sh returned after %s: err=%v output=%q",
+			time.Since(start).Round(100*time.Millisecond), err, strings.TrimSpace(string(out)))
 	}
 	select {
 	case <-v.done:
 	case <-time.After(90 * time.Second):
-		v.t.Errorf("guest did not power off within 90s; killing (image may be dirty)")
+		v.t.Errorf("guest did not power off within 90s; killing (image may be dirty); %s", delivery)
 		if v.cmd.Process != nil {
 			v.cmd.Process.Kill()
 		}
