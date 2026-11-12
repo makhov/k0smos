@@ -95,6 +95,9 @@ const (
 	maxServedFile = 4 << 20
 	// msReadOnly is MS_RDONLY: a metadata drive is never written to.
 	msReadOnly = 0x1
+	// msRecShared is MS_REC|MS_SHARED: what systemd sets on / at boot, and what a
+	// Bidirectional hostPath mount (CSI node plugins, for one) requires.
+	msRecShared = 0x4000 | 0x100000
 
 	// childGrace is how long the k0s child gets to exit after ctx cancellation
 	// before we start detaching filesystems under it.
@@ -678,6 +681,9 @@ func loadModules(s *sys.Sys, cfg config.Config) error {
 		logf("warn: modules: %v", err)
 		step("modules", err, "")
 	}
+	if len(res.NotForThisMachine) > 0 {
+		logf("modules not for this machine: %s", strings.Join(res.NotForThisMachine, ", "))
+	}
 	if res.TreeFound {
 		logf("loaded %d kernel module(s) from %s, autoloaded %d driver(s) for %d device(s)",
 			res.Loaded, base, res.Autoloaded, res.Devices)
@@ -740,6 +746,14 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	// functionality built in, in which case there is nothing to load.
 	if err := loadModules(s, cfg); err != nil {
 		logf("warn: modules: %v", err)
+	}
+	// devtmpfs creates these 0600 root, and there is no udev to relax them. A
+	// VMM running as an unprivileged user needs both; 0666 is what systemd's
+	// default udev rules give them.
+	for _, dev := range []string{"/dev/kvm", "/dev/net/tun"} {
+		if err := s.Chmod(dev, 0o666); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logf("warn: chmod %s: %v", dev, err)
+		}
 	}
 
 	// configfs and hugetlbfs come after the modules that provide them, and are
@@ -809,6 +823,11 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		if err := s.MkdirAll("/var/opt", 0755); err != nil {
 			logf("warn: mkdir /var/opt: %v", err)
 		}
+	}
+
+	// After every mount above, so each is made shared; later ones inherit it.
+	if err := s.Mount("", "/", "", msRecShared, ""); err != nil {
+		logf("warn: make / shared: %v", err)
 	}
 
 	enabled, err := cgroup.Setup(s)
