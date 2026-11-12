@@ -369,8 +369,32 @@ func configureDHCP(ctx context.Context, s *sys.Sys, cfg config.Config, iface str
 	return "", nil
 }
 
-// loadMetadata finds a cloud-init drive, applies its write_files, and returns
-// what it said. This is how Cluster API hands a machine its identity: a
+// extraVolumes formats and mounts the disks user-data's fs_setup and mounts ask
+// for. Never fatal: a node whose extra disk is missing still boots, and says so.
+func extraVolumes(s *sys.Sys, ud metadata.UserData) {
+	if len(ud.FSSetup) == 0 && len(ud.Mounts) == 0 {
+		return
+	}
+	formats := make([]datavol.Format, 0, len(ud.FSSetup))
+	for _, f := range ud.FSSetup {
+		formats = append(formats, datavol.Format{Device: f.Device, FSType: f.Filesystem, Label: f.Label})
+	}
+	mounts := make([]datavol.Mount, 0, len(ud.Mounts))
+	for _, m := range ud.Mounts {
+		mounts = append(mounts, datavol.Mount{Spec: m.Spec, MountPoint: m.MountPoint, FSType: m.FSType, ReadOnly: m.ReadOnly})
+	}
+	done, err := datavol.Extra(s, formats, mounts)
+	for _, d := range done {
+		logf("volumes: %s", d)
+	}
+	if err != nil {
+		logf("warn: volumes: %v", err)
+	}
+	step("volumes", err, strings.Join(done, "; "))
+}
+
+// loadMetadata finds a cloud-init drive and returns what it said. Its
+// write_files are applied separately, by applyWriteFiles, once /var is mounted. This is how Cluster API hands a machine its identity: a
 // bootstrap provider renders a cloud-config, and the infrastructure provider
 // attaches it as a NoCloud ISO or an OpenStack config-drive.
 //
@@ -407,14 +431,20 @@ func loadMetadata(s *sys.Sys) (metadata.UserData, metadata.MetaData) {
 	for _, w := range ud.Warnings {
 		logf("metadata: %s", w)
 	}
-	if len(ud.WriteFiles) > 0 {
-		if err := metadata.Apply(ud, s.Mkdir, s.WriteFile); err != nil {
-			logf("warn: apply write_files: %v", err)
-		} else {
-			logf("wrote %d file(s) from user-data", len(ud.WriteFiles))
-		}
-	}
 	return ud, md
+}
+
+// applyWriteFiles writes user-data's write_files. After the data volume, since
+// they commonly land under /var/lib/k0s.
+func applyWriteFiles(s *sys.Sys, ud metadata.UserData) {
+	if len(ud.WriteFiles) == 0 {
+		return
+	}
+	if err := metadata.Apply(ud, s.Mkdir, s.WriteFile); err != nil {
+		logf("warn: apply write_files: %v", err)
+	} else {
+		logf("wrote %d file(s) from user-data", len(ud.WriteFiles))
+	}
 }
 
 // openMetadata returns a reader for the files on a cloud-init drive, plus a
@@ -802,6 +832,19 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		}
 	}
 
+	// Metadata is local block-device input, so it does not need networking. Read
+	// it before configuring interfaces: a platform artifact has one immutable
+	// GRUB command line, while its metadata drive supplies the distinct address
+	// each machine needs on a cluster segment. And before the data volume, so
+	// that k0smos.data=auto does not claim a blank disk fs_setup names for
+	// something else.
+	userData, metaData := loadMetadata(s)
+	applyMachineConfig(&cfg, userData.Machine)
+	claimed := make([]string, 0, len(userData.FSSetup))
+	for _, f := range userData.FSSetup {
+		claimed = append(claimed, f.Device)
+	}
+
 	// The mutable data volume, mounted before k0s can touch its data directory.
 	// Not fatal: without one, k0s falls back to the root filesystem, which is how
 	// a machine with no data volume already behaves.
@@ -810,6 +853,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		Label:      cfg.DataLabel,
 		FSType:     cfg.DataFSType,
 		MountPoint: cfg.DataDir,
+		Exclude:    claimed,
 	}); err != nil {
 		logf("warn: data volume: %v", err)
 	} else if res.Device != "" {
@@ -841,13 +885,9 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	logf("cgroup2 hierarchy ready: %s", controllers)
 	step("cgroup2", nil, controllers)
 
-	// Metadata is local block-device input, so it does not need networking. Read
-	// it before configuring interfaces: a platform artifact has one immutable
-	// GRUB command line, while its metadata drive supplies the distinct address
-	// each machine needs on a cluster segment. write_files still happens after
-	// the writable overlays and /var are ready.
-	userData, metaData := loadMetadata(s)
-	applyMachineConfig(&cfg, userData.Machine)
+	// write_files, then fs_setup and mounts, in cloud-init's order.
+	applyWriteFiles(s, userData)
+	extraVolumes(s, userData)
 
 	if err := knet.Up(s); err != nil {
 		step("loopback", err, "")

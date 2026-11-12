@@ -20,6 +20,7 @@ to be *written*:
 | `/usr/libexec/kubernetes/…` | dirs in the image | the plugin prober only needs them present |
 | `/etc` | tmpfs overlay | k0s creates and `chmod`s `/etc/k0s`; cloud-init writes here |
 | `/usr/libexec` | tmpfs overlay | kubelet creates `/usr/libexec/k0s` |
+| `/srv`, `/mnt` | tmpfs overlay | mount points for extra disks from cloud-init `mounts` |
 | `/opt` → `/var/opt` | symlink to the data volume | CNI binaries are tens of MB — disk, not RAM |
 | `/var` | the data volume itself | kubelet writes `/var/lib/kubelet`, not just `/var/lib/k0s` |
 
