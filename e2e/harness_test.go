@@ -505,7 +505,13 @@ func makeCidataNamed(t *testing.T, name, userData, metaData string) string {
 func makeCidataOpts(t *testing.T, name, userData, metaData string, isoFlags []string) string {
 	t.Helper()
 	root := repoRoot(t)
-	src := t.TempDir()
+	// Under the repo, not t.TempDir(): Colima shares only $HOME with docker, so a
+	// /var/folders bind mount arrives empty and xorriso builds an empty drive.
+	src, err := os.MkdirTemp(filepath.Join(root, "dist"), "cidata-src-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(src) })
 	if err := os.WriteFile(filepath.Join(src, "user-data"), []byte(userData), 0644); err != nil {
 		t.Fatal(err)
 	}

@@ -95,9 +95,10 @@ var Default = []string{
 	// plain guest kernel is unaffected.
 	//
 	// kvm_intel and kvm_amd both appear because one image boots both vendors;
-	// the wrong one simply is not there. tun carries the VM's network, and
-	// vhost_net moves that datapath into the kernel — without it Firecracker
-	// still runs, at a few times the per-packet cost.
+	// the wrong one refuses with EOPNOTSUPP and is reported as not for this
+	// machine. tun carries the VM's network, and vhost_net moves that datapath
+	// into the kernel — without it Firecracker still runs, at a few times the
+	// per-packet cost.
 	"kvm", "kvm_intel", "kvm_amd", "tun", "vhost_net", "vhost_vsock",
 
 	// configfs is a module on a stock Alpine kernel, and mount(2) only
@@ -129,6 +130,11 @@ type Result struct {
 	Autoloaded int
 	// Devices is how many device modaliases were considered.
 	Devices int
+	// NotForThisMachine lists modules the kernel refused because they do not
+	// apply here, with the reason: kvm_intel on AMD, or kvm_amd with SVM off in
+	// firmware. Expected on an image that boots many machines, so not an error,
+	// but worth a line when /dev/kvm is missing.
+	NotForThisMachine []string
 }
 
 // Load loads each named module along with its dependencies, dependencies first.
@@ -149,7 +155,7 @@ func Load(l Loader, base string, names []string) (Result, error) {
 	for _, name := range names {
 		r.load(name)
 	}
-	return Result{TreeFound: true, Loaded: r.loaded}, errors.Join(r.errs...)
+	return Result{TreeFound: true, Loaded: r.loaded, NotForThisMachine: r.refused}, errors.Join(r.errs...)
 }
 
 // maxDeviceRounds bounds device discovery. Two or three rounds is normal; the cap
@@ -178,7 +184,13 @@ func LoadForDevices(l Loader, base string, devices func() ([]string, error)) (Re
 		return Result{}, err
 	}
 	seen := r.loadDevices(devices)
-	return Result{TreeFound: true, Loaded: r.loaded, Autoloaded: r.loaded, Devices: seen}, errors.Join(r.errs...)
+	return Result{
+		TreeFound:         true,
+		Loaded:            r.loaded,
+		Autoloaded:        r.loaded,
+		Devices:           seen,
+		NotForThisMachine: r.refused,
+	}, errors.Join(r.errs...)
 }
 
 // LoadAll loads the named set and then autoloads drivers for whatever hardware is
@@ -199,10 +211,11 @@ func LoadAll(l Loader, base string, names []string, devices func() ([]string, er
 	named := r.loaded
 	seen := r.loadDevices(devices)
 	return Result{
-		TreeFound:  true,
-		Loaded:     named,
-		Autoloaded: r.loaded - named,
-		Devices:    seen,
+		TreeFound:         true,
+		Loaded:            named,
+		Autoloaded:        r.loaded - named,
+		Devices:           seen,
+		NotForThisMachine: r.refused,
 	}, errors.Join(r.errs...)
 }
 
@@ -257,15 +270,16 @@ type modInfo struct {
 }
 
 type resolver struct {
-	l      Loader
-	base   string
-	deps   map[string]modInfo
-	soft   map[string][]string // module -> modules to load before it
-	alias  map[string]string   // exact alias -> module
-	device []aliasEntry        // modalias glob -> module
-	done   map[string]bool
-	loaded int
-	errs   []error
+	l       Loader
+	base    string
+	deps    map[string]modInfo  // keyed by canonical module name
+	soft    map[string][]string // canonical module -> modules to load before it
+	alias   map[string]string   // exact alias, as written -> module
+	device  []aliasEntry        // modalias glob -> module
+	done    map[string]bool
+	loaded  int
+	errs    []error
+	refused []string // see Result.NotForThisMachine
 }
 
 // load loads name after everything it depends on, hard and soft.
@@ -298,7 +312,16 @@ func (r *resolver) load(name string) {
 		return
 	}
 	// EEXIST means the kernel already has it — the desired end state either way.
-	if err := r.l.InitModule(image, ""); err != nil && !errors.Is(err, syscall.EEXIST) {
+	// ENODEV and EOPNOTSUPP mean it is not for this machine: kvm_intel on AMD, a
+	// driver whose hardware is absent. One image boots many machines, so that is
+	// expected, not a failure -- but it is reported, since the same errno is how
+	// kvm_amd says SVM is disabled in firmware.
+	err = r.l.InitModule(image, "")
+	if errors.Is(err, syscall.ENODEV) || errors.Is(err, syscall.EOPNOTSUPP) {
+		r.refused = append(r.refused, fmt.Sprintf("%s (%v)", key, err))
+		return
+	}
+	if err != nil && !errors.Is(err, syscall.EEXIST) {
 		r.errs = append(r.errs, fmt.Errorf("load module %s: %w", key, err))
 		return
 	}
@@ -309,16 +332,25 @@ func (r *resolver) load(name string) {
 // name is an alias rather than a module (softdeps name algorithms, e.g. the
 // "crc32c" algorithm is provided by the crc32c_generic module). It returns ""
 // when nothing matches.
+//
+// Module names are compared with '-' and '_' as one character, as the kernel
+// does. Aliases are not module names and are looked up as written: fs-erofs and
+// crypto-crc32c are not fs_erofs and crypto_crc32c.
 func (r *resolver) resolve(name string) string {
-	if _, ok := r.deps[name]; ok {
-		return name
+	if mod := canonical(name); r.known(mod) {
+		return mod
 	}
 	if target, ok := r.alias[name]; ok {
-		if _, ok := r.deps[target]; ok {
+		if target = canonical(target); r.known(target) {
 			return target
 		}
 	}
 	return ""
+}
+
+func (r *resolver) known(module string) bool {
+	_, ok := r.deps[module]
+	return ok
 }
 
 // modules.dep maps a module's relative path to the paths it depends on:
@@ -377,7 +409,9 @@ func readSoftdeps(l Loader, base string) map[string][]string {
 				pre = false
 			default:
 				if pre {
-					out[module] = append(out[module], f)
+					// The key is a module, compared canonically; the
+					// entries may be aliases, and stay as written.
+					out[canonical(module)] = append(out[canonical(module)], f)
 				}
 			}
 		}
@@ -452,13 +486,19 @@ func matchDevices(entries []aliasEntry, modaliases []string) []string {
 }
 
 // nameOf turns a module path into its module name: kernel/fs/ext4/ext4.ko.gz
-// becomes ext4.
+// becomes ext4, and kernel/arch/x86/kvm/kvm-amd.ko.gz becomes kvm_amd.
 func nameOf(p string) string {
 	name := path.Base(p)
 	name = strings.TrimSuffix(name, ".gz")
 	name = strings.TrimSuffix(name, ".xz")
 	name = strings.TrimSuffix(name, ".zst")
-	return strings.TrimSuffix(name, ".ko")
+	return canonical(strings.TrimSuffix(name, ".ko"))
+}
+
+// canonical is the kernel's spelling of a module name: it treats '-' and '_' as
+// the same character and reports '_', so kvm-amd.ko is the module kvm_amd.
+func canonical(name string) string {
+	return strings.ReplaceAll(name, "-", "_")
 }
 
 // decompress unwraps a gzipped module. init_module(2) needs the raw ELF, and
