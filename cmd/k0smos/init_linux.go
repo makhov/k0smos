@@ -173,10 +173,9 @@ func findControlPort(name string) string {
 // watchControlPort returns a channel of host shutdown requests, or nil when no
 // control port is present.
 //
-// The port is read again after EOF, and held open while it is: with no host
-// client attached it reads EOF immediately, so watching it once would stop
-// listening before anyone could send anything, and closing it in between loses
-// what the host sends while it is closed (see control.WatchReopen).
+// The port is reopened on EOF: with no host client attached it reads EOF
+// immediately, so watching it once would stop listening before anyone could
+// send anything.
 func watchControlPort(ctx context.Context, s *sys.Sys, cfg config.Config) <-chan control.Command {
 	dev := findControlPort(controlPortName)
 	if dev == "" {
