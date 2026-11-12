@@ -744,6 +744,14 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	if err := loadModules(s, cfg); err != nil {
 		logf("warn: modules: %v", err)
 	}
+	// devtmpfs creates these 0600 root, and there is no udev to relax them. A
+	// VMM running as an unprivileged user needs both; 0666 is what systemd's
+	// default udev rules give them on every distro.
+	for _, dev := range []string{"/dev/kvm", "/dev/net/tun"} {
+		if err := s.Chmod(dev, 0o666); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logf("warn: chmod %s: %v", dev, err)
+		}
+	}
 
 	// configfs and hugetlbfs come after the modules that provide them, and are
 	// never fatal: a kernel built without either must still boot a plain k0s

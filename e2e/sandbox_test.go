@@ -5,6 +5,7 @@ package e2e
 import (
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -41,6 +42,7 @@ spec:
           out=""
           add() { out="$out $1"; }
           [ -c /dev/kvm ] && add kvm=yes || add kvm=no
+          add mode.tun=$(stat -c %a /proc/1/root/dev/net/tun)
           grep -qwE 'svm|vmx' /proc/cpuinfo && add cpu.virt=yes || add cpu.virt=no
           for m in kvm kvm_amd kvm_intel tun vhost_net vhost_vsock ublk_drv target_core_user; do
             [ -d /sys/module/$m ] && add mod.$m=yes || add mod.$m=no
@@ -98,7 +100,12 @@ runcmd:
 		Net: "k0smos.ip=dhcp k0smos.dns=1.1.1.1 k0smos.data=auto",
 		Mem: "8192", CPUs: "4",
 	})
-	t.Logf("inventory: %s", v.waitFor(`sbxprobe:.* end`, k0sTimeout))
+	inventory := v.waitFor(`sbxprobe:.* end`, k0sTimeout)
+	t.Logf("inventory: %s", inventory)
+	// A VMM runs unprivileged; a 0600 tun is a sandbox with no network.
+	if !strings.Contains(inventory, " mode.tun=666 ") {
+		t.Errorf("/dev/net/tun is not 0666 for an unprivileged VMM")
+	}
 
 	// kubelet refuses a Bidirectional mount on a private mount with this message.
 	got := v.waitForAny(k0sTimeout, `sbxbidir: ok`, `is not a shared mount`)
