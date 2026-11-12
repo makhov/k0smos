@@ -36,6 +36,19 @@ k0s, etcd, containerd, kubelet state, and pulled images.
 The metal qcow2 contains an ext4 `k0smos-data` partition mounted at `/var`.
 KubeVirt requires a separate data disk selected with `k0smos.data=auto`.
 
+`/var` grows into its disk on boot. Write the image onto a bigger disk, or
+resize the volume (`qemu-img resize`, an RBD or cloud volume resize, an
+expanded PVC), and the next boot extends the data partition to the end of the
+disk and grows the filesystem online:
+
+```text
+k0smos: grew partition 3 of vda from 8.0 GiB to 200.0 GiB; grew the filesystem at /var from 8.0 GiB to 200.0 GiB
+```
+
+Only the last partition on a GPT disk is extended, and only ever grown; a
+filesystem directly on a whole disk is just grown. Nothing happens when there is
+no room, so the check costs nothing on later boots. Shrinking is not supported.
+
 Choose its lifecycle deliberately:
 
 | Storage | Result |

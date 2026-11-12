@@ -117,6 +117,8 @@ k0smosctl machine dmesg --name node-1 | grep -i -e virtio -e nvme -e eth
 | `UNSUPPORTED runcmd` | the cloud-init asks for a command k0smos deliberately does not execute |
 | `warn: dhcp` | the interface did not get a lease |
 | `refusing to guess: N blank devices` | `k0smos.data=auto` found several candidate disks; name one explicitly |
+| `warn: grow data volume: ... not the last on the disk` | the disk grew, but another partition follows the data partition, so it cannot be extended |
+| `warn: grow data volume: ... no GUID partition table` | the data partition is on an MBR disk; only GPT disks are grown |
 
 ## Kubeconfig is not ready
 

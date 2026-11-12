@@ -818,6 +818,13 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 			verb = "formatted and mounted"
 		}
 		logf("%s data volume %s at %s", verb, res.Device, cfg.DataDir)
+		// Into whatever the disk gained since the image was written: a bigger
+		// disk, a resized volume. Not fatal -- the volume works at its old size.
+		if did, err := datavol.Grow(s, res.Device, cfg.DataDir, cfg.DataFSType); err != nil {
+			logf("warn: grow data volume: %v", err)
+		} else if did != "" {
+			logf("%s", did)
+		}
 		// /opt is a symlink to /var/opt on a read-only root, so the target has to
 		// exist before containerd stages plugins into it.
 		if err := s.MkdirAll("/var/opt", 0755); err != nil {
