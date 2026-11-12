@@ -126,13 +126,16 @@ const rwScratch = "/run/k0smos/rw"
 //	               k0smotron-supplied k0s.yaml, and where resolv.conf is written
 //	               from the DHCP lease.
 //	/usr/libexec   kubelet's dynamic plugin prober creates /usr/libexec/k0s.
+//	/srv, /mnt     where cloud-init's mounts put extra disks. The image ships
+//	               both empty, but a mount point below them -- /srv/data --
+//	               fails "mkdir: read-only file system" without this.
 //
 // Two kinds of path are deliberately absent. Those that only need to *exist* are
 // created when the image is built, which costs nothing at runtime — /var/run is a
 // symlink to /run for that reason. And those that hold real data go on the data
 // volume instead of a tmpfs: /opt is a symlink to /var/opt, because containerd
 // stages plugins there and CNI binaries are tens of megabytes.
-var WritablePaths = []string{"/etc", "/usr/libexec"}
+var WritablePaths = []string{"/etc", "/usr/libexec", "/srv", "/mnt"}
 
 // MakeWritable overlays a tmpfs on each path so it can be written on a read-only
 // root, with the root's own contents showing through underneath.

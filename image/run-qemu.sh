@@ -101,6 +101,13 @@ if [ -n "${DATA:-}" ]; then
   boot+=(-drive file="$DATA",if=virtio,format=raw)
 fi
 
+# Further disks, as a second NVMe on a bare-metal machine or a disk attached in
+# libvirt: space-separated raw images, attached in order after the ones above.
+for disk in ${EXTRA_DISKS:-}; do
+  [ -f "$disk" ] || { echo "extra disk $disk not found" >&2; exit 1; }
+  boot+=(-drive file="$disk",if=virtio,format=raw)
+done
+
 if [ -n "$img" ]; then
   [ -f "$img" ] || { echo "disk $img not found — run 'make disk'" >&2; exit 1; }
   boot+=(-drive file="$img",if=virtio,format=raw)

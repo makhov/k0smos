@@ -47,6 +47,7 @@ var probers = []prober{
 	{"erofs", erofsSBOffset, erofsSBLen, probeEROFS},
 	{"iso9660", 0, isoPVDOffset + 2048, probeISO9660},
 	{"vfat", 0, 1024, probeFAT},
+	{"xfs", 0, xfsLabelOff + 12, probeXFS},
 }
 
 // probeExt4 reads an ext2/3/4 superblock. The buffer starts at the superblock.
@@ -105,6 +106,31 @@ const (
 	erofsUUIDOff  = 48 // uuid[16]
 	erofsLabelOff = 64 // volume_name[16]
 )
+
+// XFS superblock: big-endian, at the start of the device.
+const (
+	xfsMagic    = 0x58465342 // "XFSB"
+	xfsBlockOff = 4
+	xfsUUIDOff  = 32
+	xfsLabelOff = 108
+	xfsMinBlock = 512
+	xfsMaxBlock = 65536
+)
+
+// probeXFS reads an XFS superblock. The block size must be a power of two in
+// XFS's range as well: four magic bytes alone are a weak claim on a device
+// whose other contents are unknown.
+func probeXFS(b []byte) (uuid, label string, ok bool) {
+	if len(b) < xfsLabelOff+12 || binary.BigEndian.Uint32(b[0:]) != xfsMagic {
+		return "", "", false
+	}
+	bs := binary.BigEndian.Uint32(b[xfsBlockOff:])
+	if bs < xfsMinBlock || bs > xfsMaxBlock || bs&(bs-1) != 0 {
+		return "", "", false
+	}
+	return formatUUID(b[xfsUUIDOff : xfsUUIDOff+16]),
+		string(trimNUL(b[xfsLabelOff : xfsLabelOff+12])), true
+}
 
 // probeEROFS identifies an erofs image, which is what a root filesystem carried
 // inside the initramfs is. Detecting it means k0smos need not be told the type on

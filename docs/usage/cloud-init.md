@@ -64,6 +64,51 @@ k0smos:
 
 Values supplied here override the corresponding kernel command-line fields.
 
+### Extra disks: `fs_setup` and `mounts`
+
+The data volume at `/var` holds k0s and its containers. A disk for anything
+else (a second NVMe on a bare-metal machine, a disk attached in libvirt or
+QEMU) is set up with cloud-init's own keys:
+
+```yaml
+#cloud-config
+fs_setup:
+  - {device: /dev/nvme1n1, filesystem: ext4, label: scratch}
+mounts:
+  - [LABEL=scratch, /srv/scratch]
+```
+
+Format by device once, then mount by label. There is no udev, so there are no
+`/dev/disk/by-id` links, and a name such as `/dev/nvme1n1` can change between
+boots on real hardware. A label cannot.
+
+`fs_setup` formats a device **only if it is blank**, meaning its first MiB is all
+zero, as on a disk that has never been used. A disk holding anything (a
+filesystem, a partition table, LVM) is never formatted:
+
+- one with a filesystem k0smos recognises (ext4, XFS, vfat) is left as it is, so
+  the entry is harmless on every later boot;
+- any other is refused with `refusing to format`. Wipe it first if it is meant
+  for this node.
+
+Supported:
+
+| Key | Supported | Not supported (warned and skipped) |
+|---|---|---|
+| `fs_setup` | `device` (a `/dev` path), `filesystem: ext4` or `xfs`, `label` | other filesystems, `overwrite`, `partition` other than `none`/`auto`/`any`, aliases such as `ephemeral0` |
+| `mounts` | device as `/dev/...`, `sdb`, `LABEL=` or `UUID=`; mount point; filesystem type or `auto`; options `defaults`, `nofail`, `rw`, `ro` | swap, other options |
+| `disk_setup` | | partitioning: give `fs_setup` a whole disk or an existing partition |
+
+Mount points go under `/srv`, `/mnt` or `/var`. The root filesystem is
+read-only, and those are the directories where k0smos can create one.
+
+With `k0smos.data=auto`, as on KubeVirt, a blank disk named in `fs_setup` is
+never chosen as the data volume. So a VM can be given a blank data disk and a
+blank extra disk on its first boot.
+
+A failed entry is reported on the console and does not stop the boot or the
+other entries. A node whose extra disk is missing still comes up.
+
 ### `runcmd`
 
 k0smos **interprets** a deliberately small subset; it never invokes a shell.

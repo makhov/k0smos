@@ -8,8 +8,9 @@
 // and has no join token.
 //
 // Only the subset that bootstrap providers actually emit is supported —
-// write_files and runcmd — plus a small k0smos network section used to
-// specialise identical immutable artifacts. This is not cloud-init as a whole.
+// write_files and runcmd — plus fs_setup and mounts for disks beyond the data
+// volume, and a small k0smos network section used to specialise identical
+// immutable artifacts. This is not cloud-init as a whole.
 package metadata
 
 import (
@@ -37,6 +38,10 @@ type UserData struct {
 	// a local cluster boots the same qcow2 but needs its own address on the shared
 	// segment before k0s starts.
 	Machine MachineConfig
+	// FSSetup and Mounts are cloud-init's, for volumes beyond the data volume:
+	// a second disk on a bare-metal machine, one attached to a VM.
+	FSSetup []FSSetup
+	Mounts  []Mount
 	// Warnings records input that was understood but deliberately skipped, so
 	// the console shows why something did not happen.
 	Warnings []string
@@ -51,6 +56,22 @@ type MachineConfig struct {
 	Iface   string
 	Gateway string
 	DNS     string
+}
+
+// FSSetup is one entry of cloud-init's fs_setup: give a blank device a
+// filesystem. A device that already holds anything is never formatted.
+type FSSetup struct {
+	Device     string // a /dev path
+	Filesystem string
+	Label      string
+}
+
+// Mount is one entry of cloud-init's mounts.
+type Mount struct {
+	Spec       string // a /dev path, LABEL= or UUID=
+	MountPoint string
+	FSType     string // "auto" when not given
+	ReadOnly   bool
 }
 
 // WriteFile is one entry of cloud-init's write_files.
@@ -81,8 +102,17 @@ type cloudConfig struct {
 		Encoding    string `json:"encoding"`
 		Permissions string `json:"permissions"`
 	} `json:"write_files"`
-	RunCmd []any `json:"runcmd"`
-	K0smos struct {
+	RunCmd  []any `json:"runcmd"`
+	FSSetup []struct {
+		Device     string `json:"device"`
+		Filesystem string `json:"filesystem"`
+		Label      string `json:"label"`
+		Partition  any    `json:"partition"`
+		Overwrite  bool   `json:"overwrite"`
+	} `json:"fs_setup"`
+	Mounts    [][]any `json:"mounts"`
+	DiskSetup any     `json:"disk_setup"`
+	K0smos    struct {
 		IP      string `json:"ip"`
 		Iface   string `json:"iface"`
 		Gateway string `json:"gateway"`
@@ -157,6 +187,9 @@ func ParseUserData(b []byte) (UserData, error) {
 		Gateway: cc.K0smos.Gateway, DNS: cc.K0smos.DNS,
 	}
 
+	out.FSSetup, out.Warnings = parseFSSetup(cc, out.Warnings)
+	out.Mounts, out.Warnings = parseMounts(cc.Mounts, out.Warnings)
+
 	for _, f := range cc.WriteFiles {
 		content, err := decodeContent(f.Encoding, f.Content)
 		if err != nil {
@@ -201,6 +234,74 @@ func ParseUserData(b []byte) (UserData, error) {
 		}
 	}
 	return out, nil
+}
+
+// parseFSSetup keeps the fs_setup entries k0smos can honour exactly and warns
+// about the rest. Partitioning and overwrite are the two refused outright: one
+// rewrites a disk's layout and the other formats over data, and k0smos does
+// neither on a guess.
+func parseFSSetup(cc cloudConfig, warn []string) ([]FSSetup, []string) {
+	if cc.DiskSetup != nil {
+		warn = append(warn, "disk_setup (partitioning) is not supported; give fs_setup a whole disk or an existing partition")
+	}
+	var out []FSSetup
+	for _, f := range cc.FSSetup {
+		switch p := fmt.Sprint(f.Partition); {
+		case !strings.HasPrefix(f.Device, "/dev/"):
+			warn = append(warn, fmt.Sprintf("fs_setup %q: device must be a /dev path, skipped", f.Device))
+		case f.Overwrite:
+			warn = append(warn, fmt.Sprintf("fs_setup %s: overwrite is not supported, skipped", f.Device))
+		case f.Partition != nil && p != "none" && p != "auto" && p != "any":
+			warn = append(warn, fmt.Sprintf("fs_setup %s: partition %s is not supported, name the partition's own device; skipped", f.Device, p))
+		case f.Filesystem != "ext4" && f.Filesystem != "xfs":
+			warn = append(warn, fmt.Sprintf("fs_setup %s: k0smos can only create ext4 or xfs, not %q; skipped", f.Device, f.Filesystem))
+		default:
+			out = append(out, FSSetup{Device: f.Device, Filesystem: f.Filesystem, Label: f.Label})
+		}
+	}
+	return out, warn
+}
+
+// parseMounts reads cloud-init's mounts: [spec, mountpoint, fstype, options,
+// ...]. Swap and options that change how a mount behaves are warned about
+// rather than silently dropped; "defaults" and "nofail" need nothing, since an
+// extra mount never stops the boot.
+func parseMounts(entries [][]any, warn []string) ([]Mount, []string) {
+	var out []Mount
+	for _, e := range entries {
+		f := make([]string, len(e))
+		for i, v := range e {
+			f[i] = fmt.Sprint(v)
+		}
+		if len(f) < 2 {
+			warn = append(warn, fmt.Sprintf("mounts %v: needs a device and a mount point, skipped", f))
+			continue
+		}
+		m := Mount{Spec: f[0], MountPoint: f[1], FSType: "auto"}
+		if !strings.Contains(m.Spec, "/") && !strings.Contains(m.Spec, "=") {
+			m.Spec = "/dev/" + m.Spec // cloud-init accepts "sdb" for /dev/sdb
+		}
+		if m.MountPoint == "none" || m.MountPoint == "swap" || !strings.HasPrefix(m.MountPoint, "/") {
+			warn = append(warn, fmt.Sprintf("mounts %s: mount point %q is not supported, skipped", m.Spec, m.MountPoint))
+			continue
+		}
+		if len(f) > 2 && f[2] != "" {
+			m.FSType = f[2]
+		}
+		if len(f) > 3 {
+			for _, o := range strings.Split(f[3], ",") {
+				switch o {
+				case "defaults", "nofail", "rw", "":
+				case "ro":
+					m.ReadOnly = true
+				default:
+					warn = append(warn, fmt.Sprintf("mounts %s: option %q ignored", m.Spec, o))
+				}
+			}
+		}
+		out = append(out, m)
+	}
+	return out, warn
 }
 
 // MetaData is the subset of instance metadata k0smos uses.
