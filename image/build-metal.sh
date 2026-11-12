@@ -27,8 +27,10 @@ qcow2=${METAL_OUTPUT:-dist/k0smos-metal-$apkarch.qcow2}
   exit 1
 }
 
+# METAL_MODULES_DIR swaps in a module tree with out-of-tree drivers added (see
+# fetch-nvidia.sh); FIRMWARE_DIR, passed through, adds their firmware.
 ARCH=$arch \
-MODULES_DIR=dist/kernel-metal/$apkarch/lib/modules \
+MODULES_DIR=${METAL_MODULES_DIR:-dist/kernel-metal/$apkarch/lib/modules} \
 KERNEL_CONFIG=dist/kernel-metal/$apkarch/config \
 EMBED_ROOT=none \
   "$here/mkinitramfs.sh" "$initramfs"

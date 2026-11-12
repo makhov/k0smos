@@ -35,6 +35,11 @@ var Default = []string{
 	// so sr_mod is named, and binds whenever the device shows up.
 	"virtio_scsi", "sr_mod",
 
+	// NVIDIA's unified memory module, on images built with the driver. nvidia
+	// itself autoloads by the GPU's PCI id; nvidia_uvm has no device to match,
+	// and CUDA needs it. Without a GPU it is skipped with nvidia.
+	"nvidia_uvm",
+
 	// No filesystem module for cloud-init drives. Cluster API bootstrap data
 	// arrives on an ISO — KubeVirt builds both its NoCloud and its config-drive
 	// volumes with `xorrisofs -joliet -rock`, a single code path in
@@ -270,6 +275,7 @@ func newResolver(l Loader, base string) (*resolver, error) {
 		alias:  exact,
 		device: device,
 		done:   map[string]bool{},
+		absent: map[string]bool{},
 	}, nil
 }
 
@@ -286,6 +292,7 @@ type resolver struct {
 	alias   map[string]string   // exact alias, as written -> module
 	device  []aliasEntry        // modalias glob -> module
 	done    map[string]bool
+	absent  map[string]bool // refused as not for this machine
 	loaded  int
 	errs    []error
 	refused []string // see Result.NotForThisMachine
@@ -309,6 +316,14 @@ func (r *resolver) load(name string) {
 	}
 	for _, dep := range r.deps[key].deps {
 		r.load(dep)
+		// A module whose dependency is not for this machine is not either:
+		// nvidia_uvm on a machine without a GPU would otherwise fail on the
+		// symbols nvidia never got to export.
+		if r.absent[r.resolve(dep)] {
+			r.absent[key] = true
+			r.refused = append(r.refused, fmt.Sprintf("%s (needs %s)", key, r.resolve(dep)))
+			return
+		}
 	}
 
 	image, err := r.l.ReadFile(path.Join(r.base, r.deps[key].path))
@@ -327,6 +342,7 @@ func (r *resolver) load(name string) {
 	// kvm_amd says SVM is disabled in firmware.
 	err = r.l.InitModule(image, "")
 	if errors.Is(err, syscall.ENODEV) || errors.Is(err, syscall.EOPNOTSUPP) {
+		r.absent[key] = true
 		r.refused = append(r.refused, fmt.Sprintf("%s (%v)", key, err))
 		return
 	}

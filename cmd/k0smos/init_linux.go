@@ -710,9 +710,35 @@ func pivot(s *sys.Sys, cfg config.Config) error {
 		how = "read-only"
 	}
 	logf("mounted %s at %s %s, switching root", dev, newRootDir, how)
+	carryFirmware(s)
 	// The marker tells the next k0smos it is already on the real root, so it
 	// proceeds with the rest of init instead of trying to switch again.
 	return switchroot.Do(s, newRootDir, initPath, []string{initPath, switchedFlag})
+}
+
+// firmwareDir is where the kernel looks for firmware files.
+const firmwareDir = "/lib/firmware"
+
+// carryFirmware makes the initramfs's firmware visible on the new root. Like
+// modules, firmware belongs to the kernel and so to the initramfs wrapper, not
+// the canonical root -- but a driver reads it when it first initialises its
+// device, which for a GPU is long after the switch. The initramfs is not freed
+// by the switch, so a bind mount costs nothing. Not fatal: a root without the
+// mount point boots, and the driver says which file it could not find.
+func carryFirmware(s *sys.Sys) {
+	entries, err := os.ReadDir(firmwareDir)
+	if err != nil || len(entries) == 0 {
+		return
+	}
+	target := newRootDir + firmwareDir
+	if err := s.Mount(firmwareDir, target, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		logf("warn: carry %s to the new root: %v", firmwareDir, err)
+		return
+	}
+	if err := s.Mount("", target, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
+		logf("warn: make the carried %s read-only: %v", firmwareDir, err)
+	}
+	logf("carried %s from the initramfs to the new root", firmwareDir)
 }
 
 // loadModules loads the configured kernel modules from the running kernel's

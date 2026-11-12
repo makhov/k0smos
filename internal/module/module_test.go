@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"syscall"
@@ -507,5 +508,29 @@ func TestSoftdepOnHyphenatedModuleApplies(t *testing.T) {
 	}
 	if i := slices.Index(f.loaded, "ext4"); i == -1 || i > slices.Index(f.loaded, "kvm_amd") {
 		t.Errorf("loaded = %v, want ext4 before kvm_amd", f.loaded)
+	}
+}
+
+// One GPU image boots machines without a GPU too: nvidia refuses with ENODEV,
+// and nvidia_uvm, which needs its symbols, must be skipped and said so -- not
+// tried, and not reported as a failure.
+func TestLoadSkipsModulesWhoseDependencyIsNotForThisMachine(t *testing.T) {
+	f := newFake(t)
+	f.files["/lib/modules/test/modules.dep"] = []byte(depFile +
+		"extra/nvidia/nvidia-uvm.ko: extra/nvidia/nvidia.ko\n" +
+		"extra/nvidia/nvidia.ko:\n")
+	f.files["/lib/modules/test/extra/nvidia/nvidia.ko"] = []byte("nvidia")
+	f.files["/lib/modules/test/extra/nvidia/nvidia-uvm.ko"] = []byte("nvidia_uvm")
+	f.errs = map[string]error{"nvidia": syscall.ENODEV}
+
+	res, err := Load(f, "/lib/modules/test", []string{"nvidia_uvm", "ext4"})
+	if err != nil {
+		t.Fatalf("Load = %v, want no failure", err)
+	}
+	if slices.Contains(f.loaded, "nvidia_uvm") {
+		t.Error("nvidia_uvm was loaded without nvidia")
+	}
+	if want := []string{fmt.Sprintf("nvidia (%v)", syscall.ENODEV), "nvidia_uvm (needs nvidia)"}; !slices.Equal(res.NotForThisMachine, want) {
+		t.Errorf("NotForThisMachine = %q, want %q", res.NotForThisMachine, want)
 	}
 }

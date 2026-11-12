@@ -59,6 +59,17 @@ else
   echo "no modules dir at $moddir — assuming a monolithic kernel" >&2
 fi
 
+# Optional firmware for the drivers above, belonging to the kernel like they do.
+# k0smos carries it onto the real root at switch_root, where a driver that
+# initialises its device later (a GPU) reads it. FIRMWARE_DIR is a /lib/firmware
+# tree.
+if [ -n "${FIRMWARE_DIR:-}" ]; then
+  [ -d "$FIRMWARE_DIR" ] || { echo "FIRMWARE_DIR $FIRMWARE_DIR is not a directory" >&2; exit 1; }
+  mkdir -p "$root/lib/firmware"
+  cp -R "$FIRMWARE_DIR/." "$root/lib/firmware/"
+  echo "included firmware from $FIRMWARE_DIR ($(du -sh "$FIRMWARE_DIR" | cut -f1))"
+fi
+
 # Optional: a root filesystem carried inside the initramfs. k0smos loop-attaches it
 # and switch_roots onto it, so the kernel and the whole OS travel as one artifact —
 # no separate disk to publish, version or mismatch. Only sensible for a read-only
