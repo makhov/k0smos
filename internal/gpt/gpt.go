@@ -46,6 +46,9 @@ const (
 
 var signature = []byte("EFI PART")
 
+// ErrNoGPT means the disk has no GUID partition table: an MBR disk, or none.
+var ErrNoGPT = errors.New("gpt: no GUID partition table")
+
 // Result says what Grow found and did. Start and End are the partition's LBAs.
 type Result struct {
 	Start, OldEnd, NewEnd uint64
@@ -70,7 +73,7 @@ func Grow(d Disk, size, sectorSize int64, part int) (Result, error) {
 		return Result{}, fmt.Errorf("gpt: read header: %w", err)
 	}
 	if !bytes.Equal(hdr[:8], signature) {
-		return Result{}, errors.New("gpt: no GUID partition table")
+		return Result{}, ErrNoGPT
 	}
 	n := le32(hdr, hdrSize)
 	if n < 92 || int64(n) > sectorSize || headerCRC(hdr[:n]) != le32(hdr, hdrCRC) {
@@ -96,12 +99,6 @@ func Grow(d Disk, size, sectorSize int64, part int) (Result, error) {
 	}
 	res := Result{Start: le64(ent, entFirstLBA), OldEnd: le64(ent, entLastLBA)}
 	res.NewEnd = res.OldEnd
-	for i := range int(count) {
-		e := entries[i*int(esize) : (i+1)*int(esize)]
-		if i != part-1 && !isZero(e[:16]) && le64(e, entLastLBA) > res.OldEnd {
-			return res, fmt.Errorf("gpt: partition %d is not the last on the disk", part)
-		}
-	}
 
 	sectors := uint64(size / sectorSize)
 	arraySectors := (uint64(len(entries)) + uint64(sectorSize) - 1) / uint64(sectorSize)
@@ -113,6 +110,17 @@ func Grow(d Disk, size, sectorSize int64, part int) (Result, error) {
 	}
 	if lastUsable <= res.OldEnd {
 		return res, nil
+	}
+	for i := range int(count) {
+		e := entries[i*int(esize) : (i+1)*int(esize)]
+		if i != part-1 && !isZero(e[:16]) && le64(e, entLastLBA) > res.OldEnd {
+			// Only an error when the disk has grown past its table: a layout
+			// with partitions after this one is not news on every boot.
+			if lastUsable > le64(hdr, hdrLastLBA) {
+				return res, fmt.Errorf("gpt: partition %d is not the last on the disk", part)
+			}
+			return res, nil
+		}
 	}
 	res.NewEnd = lastUsable
 

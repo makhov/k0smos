@@ -25,6 +25,9 @@ var Default = []string{
 	// Disk and network devices, and the filesystems k0s stores data on.
 	"virtio_net", "virtio_blk", "virtio_pci",
 	"ext4", "overlay",
+	// For extra disks from fs_setup and mounts. Without modprobe on the host,
+	// the kernel cannot load a filesystem module when a mount first asks for it.
+	"xfs",
 
 	// No filesystem module for cloud-init drives. Cluster API bootstrap data
 	// arrives on an ISO — KubeVirt builds both its NoCloud and its config-drive

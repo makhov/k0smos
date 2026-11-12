@@ -129,3 +129,16 @@ func TestGrowRefuses(t *testing.T) {
 		}
 	}
 }
+
+// A partition followed by another is not news on every boot: only when the disk
+// has grown past its table is it reported that this one cannot take the room.
+func TestGrowNotLastIsQuietUntilTheDiskGrows(t *testing.T) {
+	m := newDisk(16384, 512, [2]uint64{40, 99}, [2]uint64{100, 199})
+	if res, err := Grow(m, int64(len(m.b)), 512, 1); err != nil || res.Grown() {
+		t.Errorf("same-size disk: %+v, %v; want a quiet no-op", res, err)
+	}
+	m.grow(1 << 20)
+	if _, err := Grow(m, int64(len(m.b)), 512, 1); err == nil || !strings.Contains(err.Error(), "not the last") {
+		t.Errorf("grown disk: Grow = %v, want it to say the partition is not last", err)
+	}
+}

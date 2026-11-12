@@ -22,7 +22,7 @@ func ext4(label string) []byte {
 	return img
 }
 
-func blank() []byte { return make([]byte, 2048) }
+func blank() []byte { return make([]byte, 1<<20) } // blkid.IsBlank reads a MiB
 
 type fakeVol struct {
 	devs    []string
@@ -58,9 +58,21 @@ func (f *fakeVol) Mkfs(dev, fstype, label string) error {
 
 func (f *fakeVol) Mkdir(string, fs.FileMode) error { return nil }
 
-func (f *fakeVol) Mount(source, target, fstype string, _ uintptr, _ string) error {
-	f.mounted = append(f.mounted, source+"->"+target+":"+fstype)
+func (f *fakeVol) Mount(source, target, fstype string, flags uintptr, _ string) error {
+	m := source + "->" + target + ":" + fstype
+	if flags&msReadOnly != 0 {
+		m += ":ro"
+	}
+	f.mounted = append(f.mounted, m)
 	return nil
+}
+
+// used is a disk k0smos cannot read but must not touch: a GPT here, standing in
+// for LVM, btrfs, md -- anything written to its first MiB.
+func used() []byte {
+	img := blank()
+	copy(img[512:], "EFI PART")
+	return img
 }
 
 const label = "k0smos-data"
@@ -345,5 +357,116 @@ func TestGrowLeavesOtherFilesystemsAlone(t *testing.T) {
 	f := newGrower(t, true)
 	if did, err := Grow(f, "/dev/vda3", "/var", "xfs"); did != "" || err != nil || len(f.resized) != 0 {
 		t.Errorf("Grow(xfs) = %q, %v, resized %v; want a no-op", did, err, f.resized)
+	}
+}
+
+// A bare-metal disk with LVM or just a partition table has no filesystem the
+// probes know, which used to make it "blank" and the data volume -- formatted.
+func TestPrepareNeverFormatsAnUnrecognisedUsedDisk(t *testing.T) {
+	f := &fakeVol{
+		devs:   []string{"vda", "vdb"},
+		images: map[string][]byte{"vda": ext4("k0smos"), "vdb": used()},
+	}
+	res, err := Prepare(f, Options{Spec: "auto", Label: label, FSType: "ext4", MountPoint: "/var/lib/k0s"})
+	if err != nil || res.Device != "" {
+		t.Errorf("Prepare(auto) = %+v, %v; want no candidate", res, err)
+	}
+	if _, err := Prepare(f, Options{Spec: "/dev/vdb", Label: label, FSType: "ext4", MountPoint: "/var/lib/k0s"}); err == nil ||
+		!strings.Contains(err.Error(), "refusing to format") {
+		t.Errorf("Prepare(/dev/vdb) = %v, want a refusal", err)
+	}
+	if len(f.mkfs) != 0 {
+		t.Errorf("formatted a used disk: %v", f.mkfs)
+	}
+}
+
+// fs_setup then mounts, as cloud-init orders them: the blank disk is formatted
+// and then found by the label it was just given.
+func TestExtraFormatsThenMountsByLabel(t *testing.T) {
+	f := &fakeVol{devs: []string{"vda", "nvme1n1"}, images: map[string][]byte{"vda": ext4("k0smos"), "nvme1n1": blank()}}
+	done, err := Extra(f,
+		[]Format{{Device: "/dev/nvme1n1", FSType: "ext4", Label: "scratch"}},
+		[]Mount{{Spec: "LABEL=scratch", MountPoint: "/srv/scratch"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.mkfs) != 1 || f.mkfs[0] != "/dev/nvme1n1:ext4:scratch" {
+		t.Errorf("mkfs = %v", f.mkfs)
+	}
+	if len(f.mounted) != 1 || f.mounted[0] != "/dev/nvme1n1->/srv/scratch:ext4" {
+		t.Errorf("mounted = %v", f.mounted)
+	}
+	if len(done) != 2 {
+		t.Errorf("done = %v, want a line per action", done)
+	}
+}
+
+// Every boot after the first: the disk already carries its filesystem, so
+// fs_setup must leave it -- and its data -- alone.
+func TestExtraLeavesAFormattedDiskAlone(t *testing.T) {
+	f := &fakeVol{devs: []string{"nvme1n1"}, images: map[string][]byte{"nvme1n1": ext4("scratch")}}
+	if _, err := Extra(f, []Format{{Device: "/dev/nvme1n1", FSType: "ext4", Label: "scratch"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.mkfs) != 0 {
+		t.Errorf("reformatted a disk with data on it: %v", f.mkfs)
+	}
+}
+
+// One bad entry must not cost the machine the others, and every failure is
+// reported, not just the first.
+func TestExtraContinuesPastFailures(t *testing.T) {
+	f := &fakeVol{
+		devs:   []string{"sdb", "sdc"},
+		images: map[string][]byte{"sdb": used(), "sdc": ext4("logs")},
+	}
+	_, err := Extra(f,
+		[]Format{{Device: "/dev/sdb", FSType: "ext4", Label: "x"}},
+		[]Mount{
+			{Spec: "LABEL=missing", MountPoint: "/mnt/a"},
+			{Spec: "LABEL=logs", MountPoint: "/mnt/logs", ReadOnly: true},
+		})
+	if err == nil || !strings.Contains(err.Error(), "/dev/sdb") || !strings.Contains(err.Error(), "missing") {
+		t.Errorf("Extra = %v, want both failures reported", err)
+	}
+	if len(f.mkfs) != 0 {
+		t.Errorf("formatted a used disk: %v", f.mkfs)
+	}
+	if len(f.mounted) != 1 || f.mounted[0] != "/dev/sdc->/mnt/logs:ext4:ro" {
+		t.Errorf("mounted = %v, want the good entry mounted read-only", f.mounted)
+	}
+}
+
+// KubeVirt boots with k0smos.data=auto. A second blank disk that fs_setup names
+// is not a data-volume candidate: without the exclusion, two blank disks made
+// "auto" refuse to guess and one made it take the disk meant for fs_setup.
+func TestPrepareAutoSkipsDisksClaimedByFSSetup(t *testing.T) {
+	f := &fakeVol{
+		devs:   []string{"vda", "vdb", "vdc"},
+		images: map[string][]byte{"vda": ext4("k0smos"), "vdb": blank(), "vdc": blank()},
+	}
+	res, err := Prepare(f, Options{Spec: "auto", Label: label, FSType: "ext4", MountPoint: "/var", Exclude: []string{"/dev/vdc"}})
+	if err != nil || res.Device != "/dev/vdb" {
+		t.Fatalf("Prepare = %+v, %v; want /dev/vdb", res, err)
+	}
+	if len(f.mkfs) != 1 || !strings.HasPrefix(f.mkfs[0], "/dev/vdb:") {
+		t.Errorf("mkfs = %v, want only /dev/vdb", f.mkfs)
+	}
+}
+
+// A partition on an MBR disk is not grown, and that is not an error -- but a
+// filesystem smaller than its partition is still grown into it.
+func TestGrowFillsThePartitionOnAnMBRDisk(t *testing.T) {
+	f := newGrower(t, true)
+	if err := os.WriteFile(f.disk, make([]byte, 4096), 0644); err != nil { // no GPT left
+		t.Fatal(err)
+	}
+	f.fsBlocks /= 2
+	did, err := Grow(f, "/dev/vda3", "/var", "ext4")
+	if err != nil {
+		t.Fatalf("Grow = %v, want no error for an MBR disk", err)
+	}
+	if want := []string{fmt.Sprintf("ext4 /var:%d", f.sizes["vda3"]/4096)}; !slices.Equal(f.resized, want) {
+		t.Errorf("resized = %v, want %v (%s)", f.resized, want, did)
 	}
 }
