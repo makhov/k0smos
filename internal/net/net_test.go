@@ -2,6 +2,8 @@ package net
 
 import (
 	"net"
+	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -9,6 +11,7 @@ type fakeLinker struct {
 	up     []string
 	addrs  []string
 	routes []string
+	order  []string // MTU and routes, in the order they were set
 }
 
 func (f *fakeLinker) LinkUp(name string) error {
@@ -23,6 +26,18 @@ func (f *fakeLinker) SetAddr(iface string, ip net.IP, mask net.IPMask) error {
 
 func (f *fakeLinker) AddDefaultRoute(gw net.IP) error {
 	f.routes = append(f.routes, gw.String())
+	f.order = append(f.order, "default via "+gw.String())
+	return nil
+}
+
+func (f *fakeLinker) SetMTU(iface string, mtu int) error {
+	f.order = append(f.order, iface+" mtu "+strconv.Itoa(mtu))
+	return nil
+}
+
+func (f *fakeLinker) AddLinkRoute(iface string, dst net.IP, mask net.IPMask) error {
+	ones, _ := mask.Size()
+	f.order = append(f.order, dst.String()+"/"+strconv.Itoa(ones)+" dev "+iface)
 	return nil
 }
 
@@ -79,5 +94,24 @@ func TestConfigureRejectsBadInput(t *testing.T) {
 				t.Errorf("Configure(%q, %q) = nil, want error", tc.cidr, tc.gw)
 			}
 		})
+	}
+}
+
+// A /32 address, as some providers hand out: the gateway is outside the prefix
+// and reachable only through a route on the link, which must exist before the
+// default route or the kernel refuses that.
+func TestApplyAddsLinkRoutesBeforeTheDefaultRoute(t *testing.T) {
+	f := &fakeLinker{}
+	err := Apply(f, Static{Iface: "eth0", CIDR: "203.0.113.17/32", Gateway: "203.0.113.1", MTU: 9100,
+		LinkRoutes: []string{"203.0.113.1/32"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"eth0 mtu 9100", "203.0.113.1/32 dev eth0", "default via 203.0.113.1"}
+	if !slices.Equal(f.order, want) {
+		t.Errorf("order = %v, want %v", f.order, want)
+	}
+	if len(f.addrs) != 1 || f.addrs[0] != "eth0=203.0.113.17/255.255.255.255" {
+		t.Errorf("addrs = %v", f.addrs)
 	}
 }

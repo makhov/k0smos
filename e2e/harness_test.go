@@ -122,6 +122,9 @@ type bootOpts struct {
 	Initramfs string
 	// Cidata is a cloud-init ISO to attach.
 	Cidata string
+	// CidataCD attaches Cidata as a cdrom on virtio-scsi, as libvirt usually
+	// attaches a seed, instead of a virtio disk.
+	CidataCD bool
 	// Exec sets k0smos.exec. Use execNoop for a workload that exits at once,
 	// which keeps a boot to ~40s by never starting k0s.
 	Exec string
@@ -196,6 +199,7 @@ func boot(t *testing.T, o bootOpts) *vm {
 		"CLUSTER_NET": o.ClusterNet,
 		"CLUSTER_MAC": o.ClusterMAC,
 		"API_PORT":    o.APIPort,
+		"CIDATA_BUS":  map[bool]string{true: "scsi-cd"}[o.CidataCD],
 	} {
 		if val != "" {
 			env = append(env, k+"="+val)

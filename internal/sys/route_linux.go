@@ -3,7 +3,10 @@
 package sys
 
 import (
+	"fmt"
 	"net"
+	"os"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -84,4 +87,64 @@ func (s *Sys) AddDefaultRoute(gw net.IP) error {
 		return errno
 	}
 	return nil
+}
+
+const rtfHost = 0x0004 // RTF_HOST
+
+// AddLinkRoute installs a route to dst on iface with no gateway: what makes a
+// gateway outside the interface's own prefix reachable.
+func (s *Sys) AddLinkRoute(iface string, dst net.IP, mask net.IPMask) error {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+
+	dev := append([]byte(iface), 0)
+	rt := rtentry{flags: rtfUp, dev: &dev[0]}
+	if ones, bits := mask.Size(); ones == bits {
+		rt.flags |= rtfHost
+	}
+	rt.dst.Family = unix.AF_INET
+	copy(rt.dst.Addr[:], dst.To4())
+	rt.genmask.Family = unix.AF_INET
+	copy(rt.genmask.Addr[:], net.IP(mask).To4())
+
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), uintptr(unix.SIOCADDRT),
+		uintptr(unsafe.Pointer(&rt)))
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
+// SetMTU sets an interface's MTU.
+func (s *Sys) SetMTU(iface string, mtu int) error {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	ifr, err := unix.NewIfreq(iface)
+	if err != nil {
+		return err
+	}
+	ifr.SetUint32(uint32(mtu))
+	return unix.IoctlIfreq(fd, unix.SIOCSIFMTU, ifr)
+}
+
+// LinkByMAC names the interface with hardware address mac, as network-config's
+// match: macaddress asks. There is no udev to have named it.
+func (s *Sys) LinkByMAC(mac string) (string, error) {
+	links, err := os.ReadDir("/sys/class/net")
+	if err != nil {
+		return "", err
+	}
+	for _, l := range links {
+		raw, err := os.ReadFile("/sys/class/net/" + l.Name() + "/address")
+		if err == nil && strings.EqualFold(strings.TrimSpace(string(raw)), mac) {
+			return l.Name(), nil
+		}
+	}
+	return "", fmt.Errorf("no interface has MAC %s", mac)
 }

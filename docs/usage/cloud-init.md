@@ -8,6 +8,11 @@ Configuration arrives on either:
 - a NoCloud ISO labelled `cidata`; or
 - an OpenStack config-drive labelled `config-2`.
 
+Either label may be upper case (`CIDATA`), as standard-following ISO writers
+produce it, and the drive may be a virtio disk or a cdrom on virtio-scsi, as
+libvirt usually attaches a seed. A cdrom needs a kernel with a
+CD-ROM driver: the metal image's has one; Kata's guest kernel does not.
+
 k0smos reads both formats directly in userspace. This is the same interface used
 by local `k0smosctl` machines and by Cluster API providers.
 
@@ -63,6 +68,35 @@ k0smos:
 ```
 
 Values supplied here override the corresponding kernel command-line fields.
+
+### `network-config`
+
+A NoCloud drive's `network-config` file, as `cloud-localds -N` writes it, configures interfaces in netplan's version 2
+format, with or without a top-level `network:` key:
+
+```yaml
+network:
+  version: 2
+  ethernets:
+    eth0:
+      mtu: 9000
+      addresses: [10.20.0.12/32]
+      routes:
+        - {to: default, via: 10.20.0.1}
+        - {to: 10.20.0.1/32, scope: link}
+      nameservers:
+        addresses: [10.20.0.53, 1.1.1.1]
+```
+
+Supported per `ethernets` entry: the key as the interface name, or
+`match: {macaddress: ...}`; `dhcp4`; one IPv4 address; `gateway4` or a default
+route with `via` (and `on-link`); routes with `scope: link`, which make a
+gateway outside the address's prefix reachable; `nameservers`; `mtu`. Bonds,
+VLANs, bridges, IPv6, other routes and version 1 are reported on the console
+and skipped.
+
+It overrides the kernel command line (the metal image's fixed
+`k0smos.ip=dhcp`), and the `k0smos` section of user-data overrides it.
 
 ### `runcmd`
 
