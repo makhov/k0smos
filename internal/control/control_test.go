@@ -90,16 +90,16 @@ func (nopCloser) Close() error                { return nil }
 func (nopCloser) Write(p []byte) (int, error) { return len(p), nil }
 
 // A virtio-serial port with no host client attached returns EOF immediately.
-// The watcher must reopen instead of giving up, or a host that connects later
-// can never ask the guest to shut down.
-func TestWatchReopenSurvivesImmediateEOF(t *testing.T) {
+// The watcher must keep reading instead of giving up, or a host that connects
+// later can never ask the guest to shut down -- and it must do so on the same
+// descriptor, because closing the port between reads loses whatever the host
+// sends while it is closed.
+func TestWatchReopenReadsPastEOFWithoutReopening(t *testing.T) {
 	opens := 0
+	p := &idlePort{idleReads: 2, data: "poweroff\n"}
 	open := func() (io.ReadWriteCloser, error) {
 		opens++
-		if opens < 3 {
-			return nopCloser{strings.NewReader("")}, nil // nobody connected yet
-		}
-		return nopCloser{strings.NewReader("poweroff\n")}, nil
+		return p, nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -111,9 +111,39 @@ func TestWatchReopenSurvivesImmediateEOF(t *testing.T) {
 			t.Fatalf("got %v, %t; want PowerOff, true", got, ok)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatalf("no command after %d reopens", opens)
+		t.Fatalf("no command after %d opens", opens)
+	}
+	if opens != 1 {
+		t.Errorf("port opened %d times, want 1: it must stay open across EOF", opens)
+	}
+	if p.closed {
+		t.Error("port was closed between reads")
 	}
 }
+
+// idlePort reads EOF idleReads times, as a port does before a host connects,
+// then yields data once and EOF after that.
+type idlePort struct {
+	idleReads int
+	data      string
+	closed    bool
+}
+
+func (p *idlePort) Read(b []byte) (int, error) {
+	if p.idleReads > 0 {
+		p.idleReads--
+		return 0, io.EOF
+	}
+	n := copy(b, p.data)
+	p.data = p.data[n:]
+	if n == 0 {
+		return 0, io.EOF
+	}
+	return n, nil
+}
+
+func (p *idlePort) Write(b []byte) (int, error) { return len(b), nil }
+func (p *idlePort) Close() error                { p.closed = true; return nil }
 
 // An open that keeps failing must not spin or panic; it just keeps retrying.
 func TestWatchReopenToleratesOpenErrors(t *testing.T) {
@@ -174,9 +204,7 @@ func (p *port) Close() error {
 func TestPowerCommandIsAcknowledged(t *testing.T) {
 	p := &port{in: strings.NewReader("poweroff\n")}
 	commands := make(chan Command, 1)
-	if !readOnce(context.Background(), func() (io.ReadWriteCloser, error) {
-		return p, nil
-	}, commands, nil, &portState{}) {
+	if forwarded, _ := readSession(context.Background(), p, commands, nil, &portState{}); !forwarded {
 		t.Fatal("power command was not forwarded")
 	}
 

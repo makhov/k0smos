@@ -133,27 +133,61 @@ func Parse(line string) (Command, bool) {
 	return 0, false
 }
 
-// WatchReopen reads commands from a port that is reopened whenever it reaches
-// EOF or fails to open, waiting retry between attempts. The returned channel is
-// closed only when ctx is done.
+// WatchReopen reads commands from a port, opening it once and reading it again
+// after every EOF, waiting retry between empty reads. It reopens only when the
+// open or a read fails. The returned channel is closed only when ctx is done.
 //
 // This is what a virtio-serial port actually needs: with no host client
 // attached the port reads EOF straight away, so a single Watch would end
 // before anyone could ever send a command.
+//
+// The port is held open across those EOFs rather than closed and reopened,
+// which is what this once did. A closed port tells QEMU the guest is not
+// listening, and a command the host wrote in that window depended on QEMU
+// delivering it at the next open. In CI it sometimes did not: the guest logged
+// no byte at all, and the command was gone when the host's nc hung up. An open
+// descriptor keeps the guest connected for the life of the machine, so the
+// driver queues whatever arrives until the next read.
 func WatchReopen(ctx context.Context, open func() (io.ReadWriteCloser, error), retry time.Duration, respond Responder) <-chan Command {
 	out := make(chan Command)
 	go func() {
 		defer close(out)
+		// Pause between attempts so a port that is idle or permanently failing
+		// cannot spin the CPU for the lifetime of the machine.
+		pause := func() bool {
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(retry):
+				return true
+			}
+		}
 		var st portState
 		for ctx.Err() == nil {
-			if !readOnce(ctx, open, out, respond, &st) {
-				// Nothing was read; pause so a permanently failing port cannot
-				// spin the CPU for the lifetime of the machine.
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(retry):
+			rc, err := open()
+			if err != nil {
+				if msg := err.Error(); msg != st.lastOpenErr {
+					logf("control port: open: %v", err)
+					st.lastOpenErr = msg
 				}
+				if !pause() {
+					return
+				}
+				continue
+			}
+			st.lastOpenErr = ""
+			for ctx.Err() == nil {
+				forwarded, err := readSession(ctx, rc, out, respond, &st)
+				if err != nil {
+					break // reopen: the descriptor itself may be what failed
+				}
+				if !forwarded && !pause() {
+					break
+				}
+			}
+			rc.Close()
+			if ctx.Err() == nil && !pause() {
+				return
 			}
 		}
 	}()
@@ -172,31 +206,22 @@ func logf(format string, args ...any) {
 	}
 }
 
-// portState is what WatchReopen remembers between opens, so the console says
+// portState is what WatchReopen remembers between reads, so the console says
 // when something changes rather than once a second while nothing does.
 type portState struct {
 	lastOpenErr string
-	idle        int // opens since the last one that read anything
+	idle        int // reads since the last one that returned anything
 }
 
-// readOnce opens the port and forwards commands until it ends, reporting
-// whether anything was forwarded.
-func readOnce(ctx context.Context, open func() (io.ReadWriteCloser, error), out chan<- Command, respond Responder, st *portState) bool {
-	rc, err := open()
-	if err != nil {
-		if msg := err.Error(); msg != st.lastOpenErr {
-			logf("control port: open: %v", err)
-			st.lastOpenErr = msg
-		}
-		return false
-	}
-	st.lastOpenErr = ""
-	defer rc.Close()
-
+// readSession forwards commands from an open port until it reads EOF, reporting
+// whether anything was forwarded and the error that ended the read, if any.
+// EOF is not an error: it is what an idle port returns.
+func readSession(ctx context.Context, rw io.ReadWriter, out chan<- Command, respond Responder, st *portState) (bool, error) {
 	// Requests are answered here rather than forwarded, because the answer goes
 	// back down this same port and the caller has no handle on it.
 	forwarded := false
 	lines := 0
+	var readErr error
 	defer func() {
 		if lines == 0 {
 			st.idle++
@@ -204,34 +229,35 @@ func readOnce(ctx context.Context, open func() (io.ReadWriteCloser, error), out 
 		}
 		st.idle = 0
 	}()
-	for ev := range watchEvents(ctx, rc, func(line string, err error) {
+	for ev := range watchEvents(ctx, rw, func(line string, err error) {
 		if err != nil {
 			logf("control port: read: %v", err)
+			readErr = err
 			return
 		}
 		if lines == 0 {
-			logf("control port: data after %d idle open(s)", st.idle)
+			logf("control port: data after %d idle read(s)", st.idle)
 		}
 		lines++
 		logf("control port: got %q", truncate(line, 64))
 	}) {
 		if ev.request != "" {
-			serveRequest(rc, ev.request, respond)
+			serveRequest(rw, ev.request, respond)
 			forwarded = true // the port is alive; do not back off
 			continue
 		}
 		// A power command is a request too from the host's point of view. Reply
 		// before handing it to PID 1: shutdown may close the virtio port as soon
 		// as the command is delivered, which would otherwise race the reply.
-		serveCommandAck(rc)
+		serveCommandAck(rw)
 		select {
 		case out <- ev.command:
 			forwarded = true
 		case <-ctx.Done():
-			return forwarded
+			return forwarded, nil
 		}
 	}
-	return forwarded
+	return forwarded, readErr
 }
 
 // serveCommandAck confirms that a power command reached the guest. It uses the
