@@ -207,16 +207,15 @@ func xfsImage(blockSize uint32, uuid [16]byte, label string) []byte {
 	return img
 }
 
-// An XFS disk -- what sandbox runtimes keep their data on -- is found by label
-// and UUID, and is never mistaken for a blank one.
+// An XFS disk is found by label and UUID, and is never mistaken for a blank one.
 func TestIdentifyRecognisesXFS(t *testing.T) {
-	p := &fakeProber{devs: []string{"nvme1n1"}, images: map[string][]byte{"nvme1n1": xfsImage(4096, uuidA, "sbx-data")}}
+	p := &fakeProber{devs: []string{"nvme1n1"}, images: map[string][]byte{"nvme1n1": xfsImage(4096, uuidA, "scratch")}}
 	info, ok := Identify(p, "nvme1n1")
-	if !ok || info.FSType != "xfs" || info.Label != "sbx-data" || info.UUID != formatUUID(uuidA[:]) {
+	if !ok || info.FSType != "xfs" || info.Label != "scratch" || info.UUID != formatUUID(uuidA[:]) {
 		t.Fatalf("Identify = %+v, %v", info, ok)
 	}
-	if dev, err := Resolve(p, "LABEL=sbx-data"); err != nil || dev != "/dev/nvme1n1" {
-		t.Errorf("Resolve(LABEL=sbx-data) = %q, %v", dev, err)
+	if dev, err := Resolve(p, "LABEL=scratch"); err != nil || dev != "/dev/nvme1n1" {
+		t.Errorf("Resolve(LABEL=scratch) = %q, %v", dev, err)
 	}
 	if IsBlank(p, "nvme1n1") {
 		t.Error("an XFS disk counted as blank")

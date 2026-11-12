@@ -116,8 +116,8 @@ mkdir -p "$root/lib/modules"
 #   e2fsprogs      mkfs.ext4, to format a blank data volume on first boot. Talos
 #                  bundles mkfs for the same reason: it formats its own
 #                  EPHEMERAL partition rather than requiring a pre-made one.
-#   xfsprogs       mkfs.xfs, for an extra disk cloud-init's fs_setup asks to be
-#                  XFS -- what sandbox runtimes put their data disks on.
+#   xfsprogs       mkfs.xfs, for an extra disk that cloud-init's fs_setup asks
+#                  to be XFS.
 # k0s stages its own iptables, so those are not needed here.
 #
 # Deliberately the narrow subpackages, not the "util-linux" meta package: that

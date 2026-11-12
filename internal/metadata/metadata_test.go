@@ -249,10 +249,10 @@ func TestParseMetaDataEmpty(t *testing.T) {
 func TestParseUserDataFSSetupAndMounts(t *testing.T) {
 	doc := `#cloud-config
 fs_setup:
-  - {device: /dev/nvme1n1, filesystem: ext4, label: sbx-data, partition: none}
+  - {device: /dev/nvme1n1, filesystem: ext4, label: scratch, partition: none}
   - {device: /dev/nvme2n1, filesystem: xfs, label: scratch}
 mounts:
-  - [LABEL=sbx-data, /srv/sandboxes-data, ext4, "defaults,nofail"]
+  - [LABEL=scratch, /srv/scratch, ext4, "defaults,nofail"]
   - [sdc, /mnt/ro, auto, ro]
   - [UUID=1234-ABCD, /mnt/plain]
 `
@@ -261,13 +261,13 @@ mounts:
 		t.Fatal(err)
 	}
 	if want := []FSSetup{
-		{Device: "/dev/nvme1n1", Filesystem: "ext4", Label: "sbx-data"},
+		{Device: "/dev/nvme1n1", Filesystem: "ext4", Label: "scratch"},
 		{Device: "/dev/nvme2n1", Filesystem: "xfs", Label: "scratch"},
 	}; !slices.Equal(got.FSSetup, want) {
 		t.Errorf("fs_setup = %+v, want %+v", got.FSSetup, want)
 	}
 	want := []Mount{
-		{Spec: "LABEL=sbx-data", MountPoint: "/srv/sandboxes-data", FSType: "ext4"},
+		{Spec: "LABEL=scratch", MountPoint: "/srv/scratch", FSType: "ext4"},
 		{Spec: "/dev/sdc", MountPoint: "/mnt/ro", FSType: "auto", ReadOnly: true},
 		{Spec: "UUID=1234-ABCD", MountPoint: "/mnt/plain", FSType: "auto"},
 	}
