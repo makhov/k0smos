@@ -95,6 +95,9 @@ const (
 	maxServedFile = 4 << 20
 	// msReadOnly is MS_RDONLY: a metadata drive is never written to.
 	msReadOnly = 0x1
+	// msRecShared is MS_REC|MS_SHARED: what systemd sets on / at boot, and what a
+	// Bidirectional hostPath mount (CSI, the sandbox runtime's netns) requires.
+	msRecShared = 0x4000 | 0x100000
 
 	// childGrace is how long the k0s child gets to exit after ctx cancellation
 	// before we start detaching filesystems under it.
@@ -809,6 +812,11 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		if err := s.MkdirAll("/var/opt", 0755); err != nil {
 			logf("warn: mkdir /var/opt: %v", err)
 		}
+	}
+
+	// After every mount above, so each is made shared; later ones inherit it.
+	if err := s.Mount("", "/", "", msRecShared, ""); err != nil {
+		logf("warn: make / shared: %v", err)
 	}
 
 	enabled, err := cgroup.Setup(s)
