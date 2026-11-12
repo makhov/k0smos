@@ -107,6 +107,17 @@ func TestArtifactBootUsesFirmwareAndOneMachineDisk(t *testing.T) {
 	}
 }
 
+// --firmware bios leaves QEMU on its built-in SeaBIOS: no pflash at all.
+func TestArtifactBootWithBIOSAttachesNoUEFIFirmware(t *testing.T) {
+	args := artifactArgsFor(t, func(s *bootSpec) { s.firmware, s.firmwareVars = biosFirmware, "" })
+	if joined := strings.Join(args, " "); strings.Contains(joined, "pflash") || !strings.Contains(joined, "machine.qcow2") {
+		t.Errorf("BIOS boot args:\n%s", joined)
+	}
+	if _, err := resolveFirmware(guest{apkArch: "aarch64"}, biosFirmware); err == nil {
+		t.Error("arm64 accepted --firmware bios")
+	}
+}
+
 func TestArtifactBootCanJoinSharedClusterNetwork(t *testing.T) {
 	args := artifactArgsFor(t, func(s *bootSpec) {
 		s.clusterNet = "127.0.0.1:4321"

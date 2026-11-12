@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Assemble a UEFI-bootable GPT disk and its qcow2 representation without loop
-# devices or mounts. Partition files are created independently, then copied into
+# Assemble a GPT disk, bootable by UEFI and on x86 by legacy BIOS too, and its
+# qcow2 representation without loop devices or mounts. Partition files are created independently, then copied into
 # fixed sector offsets; this works in an unprivileged CI container.
 set -euo pipefail
 
@@ -13,9 +13,13 @@ arch=${ARCH:-$(uname -m)}
 case "$arch" in
   arm64 | aarch64)
     goarch=arm64; platform=linux/arm64; grub_target=arm64-efi; efi_name=BOOTAA64.EFI; serial=ttyAMA0
+    bios=false
     ;;
   x86_64 | amd64)
     goarch=amd64; platform=linux/amd64; grub_target=x86_64-efi; efi_name=BOOTX64.EFI; serial=ttyS0
+    # Most libvirt and bare-metal x86 machines still boot SeaBIOS or a BIOS
+    # CSM unless told otherwise; an image that cannot is not a drop-in.
+    bios=true
     ;;
   *) echo "unsupported ARCH=$arch" >&2; exit 1 ;;
 esac
@@ -26,6 +30,7 @@ rootfs=${ROOTFS_IMAGE:?set ROOTFS_IMAGE to the canonical EROFS root}
 qcow2=${METAL_QCOW2:-${raw%.raw}.qcow2}
 
 required=(sgdisk mkfs.vfat mkfs.ext4 mmd mcopy grub-mkstandalone qemu-img)
+$bios && required+=(grub-mkimage)
 missing=()
 for tool in "${required[@]}"; do
   command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
@@ -108,6 +113,18 @@ truncate -s "${data_mb}M" "$data"
 mkfs.ext4 -q -F -L k0smos-data \
   -U c0dec0de-0000-4000-8000-000000000002 "$data"
 
+# GRUB's BIOS core lives in its own small partition, in the gap before the
+# ESP that alignment leaves anyway. Numbered 4 so ESP, root and data keep their
+# numbers, and placed first so data stays physically last -- which is what lets
+# /var grow into a bigger disk.
+bios_start=34
+bios_end=$((esp_start - 1))
+bios_part=()
+if $bios; then
+  bios_part=(--set-alignment=1 --new=4:${bios_start}:${bios_end} --typecode=4:ef02
+    --change-name=4:K0SMOS-BIOS --partition-guid=4:c0dec0de-0000-4000-8000-000000000014)
+fi
+
 rm -f "$raw" "$qcow2"
 truncate -s "$((disk_sectors * sector_size))" "$raw"
 sgdisk --clear \
@@ -118,11 +135,44 @@ sgdisk --clear \
   --partition-guid=2:c0dec0de-0000-4000-8000-000000000012 \
   --new=3:${data_start}:${data_end} --typecode=3:8300 --change-name=3:K0SMOS-DATA \
   --partition-guid=3:c0dec0de-0000-4000-8000-000000000013 \
+  "${bios_part[@]}" \
   "$raw" >/dev/null
 
 dd if="$esp" of="$raw" bs=$sector_size seek=$esp_start conv=notrunc,sparse status=none
 dd if="$rootfs" of="$raw" bs=$sector_size seek=$root_start conv=notrunc,sparse status=none
 dd if="$data" of="$raw" bs=$sector_size seek=$data_start conv=notrunc,sparse status=none
+
+# GRUB for BIOS, installed by hand rather than by grub-bios-setup, which probes
+# the build host's own mounts and fails in a container. The steps are the ones
+# it performs, at offsets fixed by GRUB's i386-pc boot.h:
+#   core.img into the BIOS boot partition, its first sector (diskboot) told
+#     where the rest of it is;
+#   boot.img's code -- never the partition table after it -- into the MBR,
+#     told where core starts, to use the drive the BIOS booted from, and with
+#     the floppy probe that misreads hard disks on some BIOSes jumped over.
+# The config is the EFI loader's own grub.cfg, so the two paths cannot drift.
+if $bios; then
+  le() { local n=$1 out=""; for ((i = 0; i < $2; i++)); do out+=$(printf '\\x%02x' $(((n >> (8 * i)) & 255))); done; printf '%s' "$out"; }
+  put() { printf "$2" | dd of="$1" bs=1 seek="$3" conv=notrunc status=none; }
+  core=$tmp/core.img
+  boot=$tmp/boot.img
+  grub-mkimage -O i386-pc -o "$core" -c "$cfg" -p /boot/grub \
+    biosdisk part_gpt fat ext2 search search_label linux boot
+  core_sectors=$((($(wc -c < "$core") + sector_size - 1) / sector_size))
+  [ "$core_sectors" -le $((bios_end - bios_start + 1)) ] || {
+    echo "GRUB core ($core_sectors sectors) does not fit the BIOS boot partition" >&2
+    exit 1
+  }
+  put "$core" "$(le $((bios_start + 1)) 8)" 500 # blocklist: first sector
+  put "$core" "$(le $((core_sectors - 1)) 2)" 508 # blocklist: length
+  put "$core" "$(le $((0x820)) 2)" 510 # blocklist: load segment
+  dd if="$core" of="$raw" bs=$sector_size seek=$bios_start conv=notrunc status=none
+  cp /usr/lib/grub/i386-pc/boot.img "$boot"
+  put "$boot" "$(le $bios_start 8)" $((0x5c)) # GRUB_BOOT_MACHINE_KERNEL_SECTOR
+  put "$boot" '\xff' $((0x64)) # GRUB_BOOT_MACHINE_BOOT_DRIVE: as the BIOS says
+  put "$boot" '\x90\x90' $((0x66)) # GRUB_BOOT_MACHINE_DRIVE_CHECK: nop
+  dd if="$boot" of="$raw" bs=1 count=440 conv=notrunc status=none
+fi
 
 sgdisk --verify "$raw"
 # The platform wrapper must carry the canonical root byte-for-byte. Checking the
@@ -138,4 +188,6 @@ if [ "$(id -u)" = 0 ] && [ -n "${HOST_UID:-}" ] && [ -n "${HOST_GID:-}" ]; then
   chown "$HOST_UID:$HOST_GID" "$raw" "$qcow2"
 fi
 
-echo "wrote $qcow2 ($(du -h "$qcow2" | cut -f1), UEFI/GPT, linux/$goarch)"
+firmware=UEFI
+$bios && firmware=UEFI+BIOS
+echo "wrote $qcow2 ($(du -h "$qcow2" | cut -f1), $firmware/GPT, linux/$goarch)"

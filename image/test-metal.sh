@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Firmware-level smoke test for the Metal3 artifact through the public CLI.
-# Success proves k0smosctl -> qcow2 clone -> UEFI -> GRUB -> kernel -> EROFS root.
+# Success proves k0smosctl -> qcow2 clone -> UEFI (or BIOS with FIRMWARE=bios) -> GRUB
+# -> kernel -> EROFS root.
 set -euo pipefail
 
 image=${1:-dist/k0smos-metal-x86_64.qcow2}
@@ -102,4 +103,4 @@ for line in 'host requested poweroff' 'reboot: Power down'; do
   }
 done
 
-echo "verified k0smosctl single-artifact boot through UEFI, GRUB, EROFS, /var, k0s, and clean shutdown"
+echo "verified k0smosctl single-artifact boot through ${FIRMWARE:-UEFI}, GRUB, EROFS, /var, k0s, and clean shutdown"

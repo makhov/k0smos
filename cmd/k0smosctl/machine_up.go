@@ -230,7 +230,7 @@ guest down cleanly rather than killing it.`,
 				console = stateConsole
 			}
 			firmwareVars := ""
-			if !direct {
+			if !direct && firmware != biosFirmware {
 				firmwareVars, err = prepareFirmwareVars(firmware, machineDir)
 				if err != nil {
 					return err
@@ -282,7 +282,7 @@ guest down cleanly rather than killing it.`,
 		"firmware-bootable qcow2; bypasses GitHub release resolution")
 	f.StringVar(&release, "release", "latest", "k0s-tagged GitHub release to use when --image is omitted: latest or vX.Y.Z+k0s.N")
 	f.StringVar(&cacheDir, "cache-dir", "", "release artifact cache (default ~/.cache/k0smos/images)")
-	f.StringVar(&firmware, "firmware", "", "UEFI code image (auto-detected from QEMU when omitted)")
+	f.StringVar(&firmware, "firmware", "", `UEFI code image (auto-detected from QEMU when omitted), or "bios" for SeaBIOS on x86`)
 	f.StringVar(&clusterNet, "cluster-network", "", "shared Ethernet hub address (managed by cluster create)")
 	f.StringVar(&clusterMAC, "cluster-mac", "", "MAC address on the shared cluster network")
 	_ = f.MarkHidden("cluster-network")
@@ -370,10 +370,20 @@ type bootSpec struct {
 	dryRun                          bool
 }
 
+// biosFirmware boots an x86 machine through QEMU's built-in SeaBIOS instead of
+// UEFI, as most libvirt and many bare-metal machines still do.
+const biosFirmware = "bios"
+
 // resolveFirmware locates the UEFI code shipped with QEMU/edk2. The platform
 // artifact contains its bootloader, but firmware is a property of the local VM
 // host, just as it is a property of a physical machine.
 func resolveFirmware(g guest, requested string) (string, error) {
+	if requested == biosFirmware {
+		if g.apkArch != "x86_64" {
+			return "", fatalf("--firmware %s: only x86 machines have a legacy BIOS", biosFirmware)
+		}
+		return requested, nil
+	}
 	if requested != "" {
 		if _, err := os.Stat(requested); err != nil {
 			return "", fatalf("UEFI firmware %s not found", requested)
@@ -455,14 +465,18 @@ func qemuArgs(g guest, s bootSpec) ([]string, error) {
 
 	append_ := ""
 	if s.artifact {
-		if _, err := os.Stat(s.firmware); err != nil {
-			return nil, fatalf("UEFI firmware %s not found", s.firmware)
+		if s.firmware != biosFirmware {
+			if _, err := os.Stat(s.firmware); err != nil {
+				return nil, fatalf("UEFI firmware %s not found", s.firmware)
+			}
 		}
 		if _, err := os.Stat(s.disk); err != nil {
 			return nil, fatalf("platform artifact disk %s not found", s.disk)
 		}
-		args = append(args,
-			"-drive", "if=pflash,format=raw,unit=0,readonly=on,file="+s.firmware)
+		if s.firmware != biosFirmware {
+			args = append(args,
+				"-drive", "if=pflash,format=raw,unit=0,readonly=on,file="+s.firmware)
+		}
 		if s.firmwareVars != "" {
 			if _, err := os.Stat(s.firmwareVars); err != nil {
 				return nil, fatalf("UEFI variable store %s not found", s.firmwareVars)

@@ -132,6 +132,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends ovmf qemu-system-x86
           make ctl
           ./image/test-metal.sh dist/k0smos-metal-x86_64.qcow2
+          # The same image through legacy BIOS (SeaBIOS), as most VMs still boot.
+          FIRMWARE=bios ./image/test-metal.sh dist/k0smos-metal-x86_64.qcow2
 
       - name: Package release artifacts
         env:
