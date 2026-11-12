@@ -330,7 +330,43 @@ func (v *vm) consoleText() string {
 	if err != nil {
 		return ""
 	}
-	return ansi.ReplaceAllString(string(b), "")
+	return untangle(ansi.ReplaceAllString(string(b), ""))
+}
+
+// printk is a kernel console message's timestamp prefix.
+var printk = regexp.MustCompile(`\[\s*\d+\.\d+\] `)
+
+// untangle moves kernel messages that landed in the middle of a k0smos line
+// onto lines of their own, and rejoins the line they interrupted. The kernel
+// writes the serial console a character at a time with no regard for lines,
+// so under KVM, where both log at once, a console reads
+//
+//	k0smos: attached /k0smos[    1.054466] erofs (device loop0): mounted ...
+//	-root.img at /dev/loop0
+//
+// and a test waiting for "attached /k0smos-root.img" times out on a boot that
+// did exactly that. The kernel's text is kept, since tests match it too.
+func untangle(text string) string {
+	var out strings.Builder
+	pending := "" // the start of a line a kernel message interrupted
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r", ""), "\n") {
+		line = pending + line
+		pending = ""
+		// Several messages can interrupt one line, each ending in a newline
+		// that splits it again, so each continuation is examined in turn.
+		if loc := printk.FindStringIndex(line); loc != nil && loc[0] > 0 {
+			out.WriteString(line[loc[0]:])
+			out.WriteByte('\n')
+			pending = line[:loc[0]]
+			continue
+		}
+		out.WriteString(line)
+		out.WriteByte('\n')
+	}
+	if pending != "" {
+		out.WriteString(pending)
+	}
+	return strings.TrimSuffix(out.String(), "\n")
 }
 
 // stop asks the guest to power off cleanly and waits for QEMU to exit.
