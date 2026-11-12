@@ -1149,6 +1149,11 @@ to be <em>written</em>:</p>
 <td>kubelet creates <code>/usr/libexec/k0s</code></td>
 </tr>
 <tr>
+<td><code>/srv</code>, <code>/mnt</code></td>
+<td>tmpfs overlay</td>
+<td>mount points for extra disks from cloud-init <code>mounts</code></td>
+</tr>
+<tr>
 <td><code>/opt</code> → <code>/var/opt</code></td>
 <td>symlink to the data volume</td>
 <td>CNI binaries are tens of MB — disk, not RAM</td>

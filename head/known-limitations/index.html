@@ -1016,7 +1016,8 @@ before boot.</p>
 the VMI serial console on KubeVirt, serial-over-LAN or the BMC elsewhere.
 Application logs stay Kubernetes logs — collect them through the cluster.</p>
 <h2 id="cloud-init-is-a-subset-and-nothing-is-executed">Cloud-init is a subset, and nothing is executed<a class="headerlink" href="#cloud-init-is-a-subset-and-nothing-is-executed" title="Permanent link">#</a></h2>
-<p><code>write_files</code>, the hostname, the network settings and the k0s role are applied.
+<p><code>write_files</code>, the hostname, the network settings, the k0s role, and extra disks
+from <code>fs_setup</code> and <code>mounts</code> are applied.
 A small set of <code>runcmd</code> verbs is <em>interpreted</em> — <code>mkdir</code>, <code>chmod</code>, <code>chown</code>,
 <code>ln -s</code>, and <code>k0s install</code> — but no command from a drive is ever executed as a
 process.</p>

@@ -1168,6 +1168,14 @@ firmware problems appear:</p>
 <td><code>refusing to guess: N blank devices</code></td>
 <td><code>k0smos.data=auto</code> found several candidate disks; name one explicitly</td>
 </tr>
+<tr>
+<td><code>refusing to format /dev/...</code></td>
+<td>the disk is not blank but holds nothing k0smos recognises (a partition table, LVM, btrfs); wipe it if it is meant for this node</td>
+</tr>
+<tr>
+<td><code>warn: volumes:</code></td>
+<td>an <code>fs_setup</code> or <code>mounts</code> entry failed; the rest still ran</td>
+</tr>
 </tbody>
 </table>
 <h2 id="kubeconfig-is-not-ready">Kubeconfig is not ready<a class="headerlink" href="#kubeconfig-is-not-ready" title="Permanent link">#</a></h2>

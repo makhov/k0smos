@@ -495,6 +495,15 @@ You are not viewing the documentation for the current stable release of k0smos.
 </li>
         
           <li class="md-nav__item">
+  <a href="#extra-disks-fs_setup-and-mounts" class="md-nav__link">
+    <span class="md-ellipsis">
+      Extra disks: fs_setup and mounts
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#runcmd" class="md-nav__link">
     <span class="md-ellipsis">
       runcmd
@@ -968,6 +977,15 @@ You are not viewing the documentation for the current stable release of k0smos.
 </li>
         
           <li class="md-nav__item">
+  <a href="#extra-disks-fs_setup-and-mounts" class="md-nav__link">
+    <span class="md-ellipsis">
+      Extra disks: fs_setup and mounts
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#runcmd" class="md-nav__link">
     <span class="md-ellipsis">
       runcmd
@@ -1062,6 +1080,62 @@ cloud-config sets machine networking:</p>
 <span class="w">  </span><span class="nt">dns</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10.20.0.53</span>
 </code></pre></div>
 <p>Values supplied here override the corresponding kernel command-line fields.</p>
+<h3 id="extra-disks-fs_setup-and-mounts">Extra disks: <code>fs_setup</code> and <code>mounts</code><a class="headerlink" href="#extra-disks-fs_setup-and-mounts" title="Permanent link">#</a></h3>
+<p>The data volume at <code>/var</code> holds k0s and its containers. A disk for anything
+else (a second NVMe on a bare-metal machine, a disk attached in libvirt or
+QEMU) is set up with cloud-init's own keys:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">#cloud-config</span>
+<span class="nt">fs_setup</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">device</span><span class="p">:</span><span class="w"> </span><span class="nv">/dev/nvme1n1</span><span class="p p-Indicator">,</span><span class="nt"> filesystem</span><span class="p">:</span><span class="w"> </span><span class="nv">ext4</span><span class="p p-Indicator">,</span><span class="nt"> label</span><span class="p">:</span><span class="w"> </span><span class="nv">scratch</span><span class="p p-Indicator">}</span>
+<span class="nt">mounts</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">LABEL=scratch</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">/srv/scratch</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+<p>Format by device once, then mount by label. There is no udev, so there are no
+<code>/dev/disk/by-id</code> links, and a name such as <code>/dev/nvme1n1</code> can change between
+boots on real hardware. A label cannot.</p>
+<p><code>fs_setup</code> formats a device <strong>only if it is blank</strong>, meaning its first MiB is all
+zero, as on a disk that has never been used. A disk holding anything (a
+filesystem, a partition table, LVM) is never formatted:</p>
+<ul>
+<li>one with a filesystem k0smos recognises (ext4, XFS, vfat) is left as it is, so
+  the entry is harmless on every later boot;</li>
+<li>any other is refused with <code>refusing to format</code>. Wipe it first if it is meant
+  for this node.</li>
+</ul>
+<p>Supported:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Supported</th>
+<th>Not supported (warned and skipped)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fs_setup</code></td>
+<td><code>device</code> (a <code>/dev</code> path), <code>filesystem: ext4</code> or <code>xfs</code>, <code>label</code></td>
+<td>other filesystems, <code>overwrite</code>, <code>partition</code> other than <code>none</code>/<code>auto</code>/<code>any</code>, aliases such as <code>ephemeral0</code></td>
+</tr>
+<tr>
+<td><code>mounts</code></td>
+<td>device as <code>/dev/...</code>, <code>sdb</code>, <code>LABEL=</code> or <code>UUID=</code>; mount point; filesystem type or <code>auto</code>; options <code>defaults</code>, <code>nofail</code>, <code>rw</code>, <code>ro</code></td>
+<td>swap, other options</td>
+</tr>
+<tr>
+<td><code>disk_setup</code></td>
+<td></td>
+<td>partitioning: give <code>fs_setup</code> a whole disk or an existing partition</td>
+</tr>
+</tbody>
+</table>
+<p>Mount points go under <code>/srv</code>, <code>/mnt</code> or <code>/var</code>. The root filesystem is
+read-only, and those are the directories where k0smos can create one.</p>
+<p>With <code>k0smos.data=auto</code>, as on KubeVirt, a blank disk named in <code>fs_setup</code> is
+never chosen as the data volume. So a VM can be given a blank data disk and a
+blank extra disk on its first boot.</p>
+<p>A failed entry is reported on the console and does not stop the boot or the
+other entries. A node whose extra disk is missing still comes up.</p>
 <h3 id="runcmd"><code>runcmd</code><a class="headerlink" href="#runcmd" title="Permanent link">#</a></h3>
 <p>k0smos <strong>interprets</strong> a deliberately small subset; it never invokes a shell.
 Supported operations are:</p>
