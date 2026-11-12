@@ -25,6 +25,9 @@ var Default = []string{
 	// Disk and network devices, and the filesystems k0s stores data on.
 	"virtio_net", "virtio_blk", "virtio_pci",
 	"ext4", "overlay",
+	// For extra disks from fs_setup and mounts. Without modprobe on the host,
+	// the kernel cannot load a filesystem module when a mount first asks for it.
+	"xfs",
 
 	// A seed ISO is often attached as a cdrom on virtio-scsi, libvirt's usual
 	// way. Autoloading finds virtio_scsi by its PCI id, but the cdrom it exposes only

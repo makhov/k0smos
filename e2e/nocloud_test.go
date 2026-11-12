@@ -71,12 +71,7 @@ func TestNoCloudSeedOnACDROMConfiguresTheNetwork(t *testing.T) {
 		"/sys/class/net/eth0/mtu": "1400",
 		"/proc/net/route":         "0202000A", // 10.0.2.2, the gateway, little-endian hex
 	} {
-		// Retried: on macOS hosts the control channel itself drops requests,
-		// which is not what this test is about. A wrong value still fails.
 		got, err := requestNode(t, v, "cat "+path)
-		for try := 0; err != nil && try < 3; try++ {
-			got, err = requestNode(t, v, "cat "+path)
-		}
 		if err != nil {
 			t.Errorf("cat %s: %v", path, err)
 		} else if !strings.Contains(string(got), want) {

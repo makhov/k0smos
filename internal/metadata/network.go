@@ -58,6 +58,13 @@ type netplanEther struct {
 		Via    string `json:"via"`
 		Scope  string `json:"scope"`
 		OnLink bool   `json:"on-link"`
+		// Not applied. Read only to say so, unless they restate what is
+		// already true: a from that is the interface's own address, an mtu
+		// that is the link's.
+		From   string `json:"from"`
+		MTU    int    `json:"mtu"`
+		Table  int    `json:"table"`
+		Metric int    `json:"metric"`
 	} `json:"routes"`
 }
 
@@ -123,6 +130,15 @@ func ParseNetworkConfig(b []byte) (Network, []string, error) {
 			}
 		}
 		for _, r := range e.Routes {
+			if r.From != "" && !strings.HasPrefix(ifc.Address, r.From+"/") {
+				warn = append(warn, fmt.Sprintf("network-config %s: route to %s: from %s is not supported, ignored", name, r.To, r.From))
+			}
+			if r.MTU != 0 && r.MTU != e.MTU {
+				warn = append(warn, fmt.Sprintf("network-config %s: route to %s: mtu %d is not supported, ignored", name, r.To, r.MTU))
+			}
+			if r.Table != 0 || r.Metric != 0 {
+				warn = append(warn, fmt.Sprintf("network-config %s: route to %s: table and metric are not supported, ignored", name, r.To))
+			}
 			switch {
 			case (r.To == "default" || r.To == "0.0.0.0/0") && r.Via != "":
 				ifc.Gateway = r.Via

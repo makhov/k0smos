@@ -243,3 +243,71 @@ func TestParseMetaDataEmpty(t *testing.T) {
 		t.Errorf("hostname = %q, want empty", got.Hostname)
 	}
 }
+
+// The documented shape for a second disk: format it once by path, mount it by
+// label ever after, since without udev a device name is not stable.
+func TestParseUserDataFSSetupAndMounts(t *testing.T) {
+	doc := `#cloud-config
+fs_setup:
+  - {device: /dev/nvme1n1, filesystem: ext4, label: scratch, partition: none}
+  - {device: /dev/nvme2n1, filesystem: xfs, label: scratch}
+mounts:
+  - [LABEL=scratch, /srv/scratch, ext4, "defaults,nofail"]
+  - [sdc, /mnt/ro, auto, ro]
+  - [UUID=1234-ABCD, /mnt/plain]
+`
+	got, err := ParseUserData([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []FSSetup{
+		{Device: "/dev/nvme1n1", Filesystem: "ext4", Label: "scratch"},
+		{Device: "/dev/nvme2n1", Filesystem: "xfs", Label: "scratch"},
+	}; !slices.Equal(got.FSSetup, want) {
+		t.Errorf("fs_setup = %+v, want %+v", got.FSSetup, want)
+	}
+	want := []Mount{
+		{Spec: "LABEL=scratch", MountPoint: "/srv/scratch", FSType: "ext4"},
+		{Spec: "/dev/sdc", MountPoint: "/mnt/ro", FSType: "auto", ReadOnly: true},
+		{Spec: "UUID=1234-ABCD", MountPoint: "/mnt/plain", FSType: "auto"},
+	}
+	if !slices.Equal(got.Mounts, want) {
+		t.Errorf("mounts = %+v, want %+v", got.Mounts, want)
+	}
+	if len(got.Warnings) != 0 {
+		t.Errorf("warnings = %v, want none", got.Warnings)
+	}
+}
+
+// What k0smos will not do is said on the console, never silently skipped --
+// and the refusals are the destructive ones: partitioning, overwriting, swap.
+func TestParseUserDataWarnsAboutUnsupportedVolumeSetup(t *testing.T) {
+	doc := `#cloud-config
+disk_setup:
+  /dev/sdb: {table_type: gpt, layout: true}
+fs_setup:
+  - {device: /dev/sdb, filesystem: ext4, overwrite: true}
+  - {device: /dev/sdb, filesystem: ext4, partition: 1}
+  - {device: /dev/sdb, filesystem: btrfs}
+  - {device: ephemeral0, filesystem: ext4}
+mounts:
+  - [/dev/sdc, none, swap]
+  - [/dev/sdd]
+  - [/dev/sde, /mnt/e, ext4, "noatime"]
+`
+	got, err := ParseUserData([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.FSSetup) != 0 {
+		t.Errorf("fs_setup = %+v, want every entry refused", got.FSSetup)
+	}
+	if len(got.Mounts) != 1 || got.Mounts[0].Spec != "/dev/sde" {
+		t.Errorf("mounts = %+v, want only /dev/sde", got.Mounts)
+	}
+	for _, w := range []string{"disk_setup", "overwrite", "partition 1", `"btrfs"`, "ephemeral0", `"none"`, "needs a device", `"noatime" ignored`} {
+		if !slices.ContainsFunc(got.Warnings, func(s string) bool { return strings.Contains(s, w) }) {
+			t.Errorf("no warning mentioning %s in %q", w, got.Warnings)
+		}
+	}
+}

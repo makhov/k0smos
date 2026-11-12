@@ -85,7 +85,7 @@ fi
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 
-mkdir -p "$root"/{sbin,usr/local/bin,etc/k0s,proc,sys,dev,run,tmp,var/lib/k0s,newroot}
+mkdir -p "$root"/{sbin,usr/local/bin,etc/k0s,proc,sys,dev,run,tmp,var/lib/k0s,newroot,srv,mnt}
 # Directories that components only need to *exist*. Creating them here rather than
 # at runtime is what keeps them off the writable-path list: on a read-only root the
 # kube-controller-manager plugin prober otherwise logs "error (re-)creating driver
@@ -116,11 +116,13 @@ mkdir -p "$root/lib/modules"
 #   e2fsprogs      mkfs.ext4, to format a blank data volume on first boot. Talos
 #                  bundles mkfs for the same reason: it formats its own
 #                  EPHEMERAL partition rather than requiring a pre-made one.
+#   xfsprogs       mkfs.xfs, for an extra disk that cloud-init's fs_setup asks
+#                  to be XFS.
 # k0s stages its own iptables, so those are not needed here.
 #
 # Deliberately the narrow subpackages, not the "util-linux" meta package: that
 # one pulls in busybox and /bin/sh, and this image is specified to have no shell.
-apk_pkgs=${APK_PKGS:-mount umount ca-certificates-bundle e2fsprogs}
+apk_pkgs=${APK_PKGS:-mount umount ca-certificates-bundle e2fsprogs xfsprogs}
 if [ -n "$apk_pkgs" ] && ! command -v apk >/dev/null 2>&1; then
   # Never skip these quietly: the image boots and then fails in ways that point
   # nowhere near the build.

@@ -108,6 +108,7 @@ func TestParseNetworkConfigWarnsAboutWhatItCannotDo(t *testing.T) {
       addresses: [10.0.0.5/24, 10.0.0.6/24, "fd00::5/64"]
       routes:
         - {to: 192.168.0.0/16, via: 10.0.0.254}
+        - {to: default, via: 10.0.0.1, from: 10.0.0.99, mtu: 1280, metric: 100}
     eth1: {}
   bonds:
     bond0: {interfaces: [eth0]}
@@ -118,7 +119,7 @@ func TestParseNetworkConfigWarnsAboutWhatItCannotDo(t *testing.T) {
 	if len(got.Interfaces) != 1 || got.Interfaces[0].Address != "10.0.0.5/24" {
 		t.Errorf("interfaces = %+v, want eth0 with its first address", got.Interfaces)
 	}
-	for _, w := range []string{"bonds", "dhcp6", "only one address", "IPv6", "192.168.0.0/16", "eth1: neither"} {
+	for _, w := range []string{"bonds", "dhcp6", "only one address", "IPv6", "192.168.0.0/16", "eth1: neither", "from 10.0.0.99", "mtu 1280", "metric"} {
 		if !slices.ContainsFunc(warn, func(s string) bool { return strings.Contains(s, w) }) {
 			t.Errorf("no warning mentioning %q in %q", w, warn)
 		}
@@ -141,5 +142,23 @@ func TestLoadReadsNetworkConfigAndSurvivesABrokenOne(t *testing.T) {
 	}
 	if !slices.ContainsFunc(ud.Warnings, func(s string) bool { return strings.Contains(s, "network-config") }) {
 		t.Errorf("no warning about the broken network-config: %q", ud.Warnings)
+	}
+}
+
+// A route that restates what is already true -- from the interface's own
+// address, the link's own MTU -- is not something to warn about.
+func TestParseNetworkConfigAcceptsRedundantRouteKeys(t *testing.T) {
+	_, warn, err := ParseNetworkConfig([]byte(`network:
+  version: 2
+  ethernets:
+    eth0:
+      mtu: 1400
+      addresses: [10.0.2.15/32]
+      routes:
+        - {to: default, via: 10.0.2.2, from: 10.0.2.15, mtu: 1400}
+        - {to: 10.0.2.2/32, scope: link}
+`))
+	if err != nil || len(warn) != 0 {
+		t.Errorf("ParseNetworkConfig = %q, %v; want no warnings", warn, err)
 	}
 }

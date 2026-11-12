@@ -132,6 +132,9 @@ type bootOpts struct {
 	Net string
 	// Data is a mutable data volume; created blank if absent.
 	Data string
+	// Disks are further raw images attached after Data, as a second disk on a
+	// bare-metal machine would be. They must exist.
+	Disks []string
 	// Mem and CPUs size the guest.
 	Mem, CPUs string
 	// Extra is appended to the kernel cmdline via NET_ARGS.
@@ -200,6 +203,7 @@ func boot(t *testing.T, o bootOpts) *vm {
 		"CLUSTER_MAC": o.ClusterMAC,
 		"API_PORT":    o.APIPort,
 		"CIDATA_BUS":  map[bool]string{true: "scsi-cd"}[o.CidataCD],
+		"EXTRA_DISKS": strings.Join(o.Disks, " "),
 	} {
 		if val != "" {
 			env = append(env, k+"="+val)

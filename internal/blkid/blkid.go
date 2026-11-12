@@ -127,7 +127,7 @@ func isVirtual(dev string) bool {
 	return false
 }
 
-// Blank lists the devices with no recognised filesystem, excluding kernel
+// Blank lists the devices that are safe to format, excluding kernel
 // pseudo-devices. Partitions are included because a caller may legitimately
 // target one.
 func Blank(p Prober) ([]string, error) {
@@ -140,11 +140,36 @@ func Blank(p Prober) ([]string, error) {
 		if isVirtual(dev) {
 			continue
 		}
-		if _, ok := Identify(p, dev); !ok {
+		if IsBlank(p, dev) {
 			out = append(out, dev)
 		}
 	}
 	return out, nil
+}
+
+// blankLen is how much of a device must be zero for it to count as blank. Every
+// format k0smos might meet on a used disk -- MBR and GPT, LVM, XFS, btrfs, swap,
+// md, and every filesystem probed here -- writes its signature within it.
+const blankLen = 1 << 20
+
+// IsBlank reports whether dev has never been used: its first MiB is all zero.
+//
+// Not merely "no recognised filesystem": the probes know a handful, so a
+// disk holding btrfs, LVM or just a partition table -- a bare-metal boot disk among
+// them -- would look empty and be formatted. A device that cannot be read in full
+// is not blank either. Formatting is the one irreversible thing k0smos does, so
+// a false "not blank" costs a wipe and a false "blank" costs someone's data.
+func IsBlank(p Prober, dev string) bool {
+	buf := make([]byte, blankLen)
+	if err := p.ReadAt(dev, buf, 0); err != nil {
+		return false
+	}
+	for _, b := range buf {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // identify tries each known filesystem on dev, returning the first match. A
