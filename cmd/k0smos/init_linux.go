@@ -183,6 +183,7 @@ func watchControlPort(ctx context.Context, s *sys.Sys, cfg config.Config) <-chan
 		return nil
 	}
 	logf("listening for host commands on %s", dev)
+	control.Logf = logf
 	return control.WatchReopen(ctx, func() (io.ReadWriteCloser, error) {
 		// Read-write, because requests are answered down the same port. Opening
 		// it read-only was enough while shutdown was the only thing it carried.

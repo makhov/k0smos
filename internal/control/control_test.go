@@ -176,7 +176,7 @@ func TestPowerCommandIsAcknowledged(t *testing.T) {
 	commands := make(chan Command, 1)
 	if !readOnce(context.Background(), func() (io.ReadWriteCloser, error) {
 		return p, nil
-	}, commands, nil) {
+	}, commands, nil, &portState{}) {
 		t.Fatal("power command was not forwarded")
 	}
 
