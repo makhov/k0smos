@@ -122,8 +122,7 @@ metal-nvidia: kernel-metal k0s root
 	@[ "$(TARGET_APKARCH)" = x86_64 ] || { echo "metal-nvidia is x86_64 only: ARCH=x86_64 make metal-nvidia" >&2; exit 1; }
 	NVIDIA_VERSION=$(NVIDIA_VERSION) ./image/fetch-nvidia.sh
 	ARCH=x86_64 \
-	METAL_MODULES_DIR=dist/nvidia/$(NVIDIA_VERSION)/x86_64/lib/modules \
-	FIRMWARE_DIR=dist/nvidia/$(NVIDIA_VERSION)/x86_64/firmware \
+	METAL_OVERLAY=dist/nvidia/$(NVIDIA_VERSION)/x86_64 \
 	METAL_WORK_DIR=dist/metal-nvidia-$(NVIDIA_VERSION) \
 	METAL_OUTPUT=dist/k0smos-metal-nvidia-$(NVIDIA_VERSION)-x86_64.qcow2 \
 		./image/build-metal.sh

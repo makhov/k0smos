@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# Build NVIDIA's open GPU kernel modules for the metal kernel, and stage their
-# firmware, into dist/nvidia/<version>/<arch>/:
+# Build NVIDIA's open GPU kernel modules for the metal kernel into an initramfs
+# overlay, dist/nvidia/<version>/<arch>/, a tree laid out like / :
 #
-#   lib/modules/  the metal kernel's module tree plus extra/nvidia, re-indexed
-#   firmware/     a /lib/firmware tree: nvidia/<version>/gsp_*.bin and ucodes
+#   lib/modules/<release>/extra/nvidia/  the modules
+#   lib/modules/<release>/modules.*      the kernel's index, redone to include them
+#   lib/firmware/nvidia/<version>/       GSP firmware and ucodes
+#   etc/modules-load.d/nvidia.conf       nvidia_uvm, which no device asks for
 #
-# Both go into the initramfs, not the root: they belong to one exact kernel,
-# like every other module, and the canonical root stays the same for every
-# platform. k0smos carries the firmware onto the root at switch_root, because
-# the driver reads it when it first initialises the GPU, long after.
+# build-metal.sh lays it over the initramfs (METAL_OVERLAY). Everything goes
+# there, not into the root: the modules belong to one exact kernel like every
+# other module, and the canonical root stays the same for every platform.
+# k0smos carries the firmware onto the root at switch_root, because the driver
+# reads it when it first initialises the GPU, long after.
 #
 # Everything comes from one NVIDIA package per version, pinned by digest: the
 # open module sources, the firmware and, later, the user-space libraries are
@@ -49,11 +52,10 @@ if command -v sha256sum >/dev/null; then got=$(sha256sum "$pkg" | cut -d' ' -f1)
 [ "$got" = "$sha256" ] || { echo "$pkg: sha256 $got, want $sha256" >&2; exit 1; }
 
 rm -rf "$out"
-mkdir -p "$out/lib" "$out/firmware/nvidia/$version"
-cp -R "$kernel_dir/lib/modules" "$out/lib/"
+mkdir -p "$out"
 
 docker run --rm --platform linux/amd64 -v "$repo:/repo" -w /repo \
-  -e version="$version" -e release="$release" -e pkg="$pkg" -e out="$out" \
+  -e version="$version" -e release="$release" -e pkg="$pkg" -e out="$out" -e kernel_dir="$kernel_dir" \
   alpine:3.23 sh -euc '
 apk add -q --no-cache build-base linux-lts-dev perl kmod binutils >/dev/null
 headers=$(ls /usr/src | sed -n "s/^linux-headers-//p")
@@ -66,15 +68,22 @@ make -C /tmp/pkg/kernel-open -j"$(nproc)" SYSSRC="/usr/src/linux-headers-$releas
   tail -30 /tmp/build.log >&2
   exit 1
 }
-mods="$out/lib/modules/$release/extra/nvidia"
+# depmod needs the whole tree to index the new modules against; only what
+# changed goes into the overlay.
+mkdir -p /tmp/tree/lib
+cp -R "$kernel_dir/lib/modules" /tmp/tree/lib/
+mods=/tmp/tree/lib/modules/$release/extra/nvidia
 mkdir -p "$mods"
 # Compute only: nvidia and nvidia_uvm, plus nvidia_peermem for GPUDirect RDMA.
 # No modeset or drm -- nothing here drives a display.
 for m in nvidia nvidia-uvm nvidia-peermem; do
   strip --strip-debug -o "$mods/$m.ko" "/tmp/pkg/kernel-open/$m.ko"
 done
-depmod -b "$out" "$release"
-cp /tmp/pkg/firmware/*.bin "$out/firmware/nvidia/$version/"
+depmod -b /tmp/tree "$release"
+mkdir -p "$out/lib/modules/$release" "$out/lib/firmware/nvidia/$version" "$out/etc/modules-load.d"
+cp -R /tmp/tree/lib/modules/$release/extra /tmp/tree/lib/modules/$release/modules.* "$out/lib/modules/$release/"
+cp /tmp/pkg/firmware/*.bin "$out/lib/firmware/nvidia/$version/"
+printf "# CUDA needs it, and no device asks for it: nvidia autoloads by PCI id.\nnvidia_uvm\n" >"$out/etc/modules-load.d/nvidia.conf"
 '
 
-echo "built NVIDIA $version for $release: $(du -sh "$out/lib/modules/$release/extra/nvidia" | cut -f1) of modules, $(du -sh "$out/firmware" | cut -f1) of firmware in $out"
+echo "built NVIDIA $version for $release: $(du -sh "$out/lib/modules/$release/extra/nvidia" | cut -f1) of modules, $(du -sh "$out/lib/firmware" | cut -f1) of firmware in $out"

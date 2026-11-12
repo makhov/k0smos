@@ -534,3 +534,10 @@ func TestLoadSkipsModulesWhoseDependencyIsNotForThisMachine(t *testing.T) {
 		t.Errorf("NotForThisMachine = %q, want %q", res.NotForThisMachine, want)
 	}
 }
+
+func TestParseLoadConf(t *testing.T) {
+	got := ParseLoadConf([]byte("# CUDA needs it\nnvidia_uvm\n\n; also a comment\n  nvidia-peermem  \n"))
+	if want := []string{"nvidia_uvm", "nvidia-peermem"}; !slices.Equal(got, want) {
+		t.Errorf("ParseLoadConf = %q, want %q", got, want)
+	}
+}

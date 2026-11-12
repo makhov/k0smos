@@ -741,6 +741,30 @@ func carryFirmware(s *sys.Sys) {
 	logf("carried %s from the initramfs to the new root", firmwareDir)
 }
 
+// imageModules returns the modules the image names in module.LoadDir, in file
+// name order. They add to the configured set rather than replace it: they come
+// with drivers the image carries, so a k0smos.modules= list written for the
+// plain image still gets them.
+func imageModules() []string {
+	entries, err := os.ReadDir(module.LoadDir)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".conf") {
+			continue
+		}
+		data, err := os.ReadFile(module.LoadDir + "/" + e.Name())
+		if err != nil {
+			logf("warn: %v", err)
+			continue
+		}
+		names = append(names, module.ParseLoadConf(data)...)
+	}
+	return names
+}
+
 // loadModules loads the configured kernel modules from the running kernel's
 // /lib/modules directory.
 func loadModules(s *sys.Sys, cfg config.Config) error {
@@ -752,6 +776,10 @@ func loadModules(s *sys.Sys, cfg config.Config) error {
 		logf("module loading disabled")
 		step("modules", nil, "disabled by k0smos.modules=none")
 		return nil
+	}
+	if declared := imageModules(); len(declared) > 0 {
+		logf("modules named by the image: %s", strings.Join(declared, ", "))
+		names = append(slices.Clone(names), declared...)
 	}
 	release, err := s.Release()
 	if err != nil {

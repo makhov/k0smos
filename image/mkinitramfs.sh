@@ -59,15 +59,24 @@ else
   echo "no modules dir at $moddir — assuming a monolithic kernel" >&2
 fi
 
-# Optional firmware for the drivers above, belonging to the kernel like they do.
-# k0smos carries it onto the real root at switch_root, where a driver that
-# initialises its device later (a GPU) reads it. FIRMWARE_DIR is a /lib/firmware
-# tree.
-if [ -n "${FIRMWARE_DIR:-}" ]; then
-  [ -d "$FIRMWARE_DIR" ] || { echo "FIRMWARE_DIR $FIRMWARE_DIR is not a directory" >&2; exit 1; }
-  mkdir -p "$root/lib/firmware"
-  cp -R "$FIRMWARE_DIR/." "$root/lib/firmware/"
-  echo "included firmware from $FIRMWARE_DIR ($(du -sh "$FIRMWARE_DIR" | cut -f1))"
+# Optional: a tree laid over the initramfs root, for drivers that do not come
+# with the kernel (see fetch-nvidia.sh): their modules with the module index
+# redone to include them, their firmware in lib/firmware, and the modules to
+# load by name in etc/modules-load.d. k0smos carries lib/firmware onto the real
+# root at switch_root, where a driver that initialises its device later (a GPU)
+# reads it.
+if [ -n "${INITRAMFS_OVERLAY:-}" ]; then
+  [ -d "$INITRAMFS_OVERLAY" ] || { echo "INITRAMFS_OVERLAY $INITRAMFS_OVERLAY is not a directory" >&2; exit 1; }
+  # Its module index replaces the kernel's, so it must be for this kernel.
+  for rel in "$INITRAMFS_OVERLAY"/lib/modules/*; do
+    [ -e "$rel" ] || continue
+    [ -d "$root/lib/modules/$(basename "$rel")" ] || {
+      echo "INITRAMFS_OVERLAY has modules for $(basename "$rel"), which is not the kernel in $moddir" >&2
+      exit 1
+    }
+  done
+  cp -R "$INITRAMFS_OVERLAY/." "$root/"
+  echo "laid $INITRAMFS_OVERLAY over the initramfs ($(du -sh "$INITRAMFS_OVERLAY" | cut -f1))"
 fi
 
 # Optional: a root filesystem carried inside the initramfs. k0smos loop-attaches it

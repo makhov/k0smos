@@ -35,11 +35,6 @@ var Default = []string{
 	// so sr_mod is named, and binds whenever the device shows up.
 	"virtio_scsi", "sr_mod",
 
-	// NVIDIA's unified memory module, on images built with the driver. nvidia
-	// itself autoloads by the GPU's PCI id; nvidia_uvm has no device to match,
-	// and CUDA needs it. Without a GPU it is skipped with nvidia.
-	"nvidia_uvm",
-
 	// No filesystem module for cloud-init drives. Cluster API bootstrap data
 	// arrives on an ISO — KubeVirt builds both its NoCloud and its config-drive
 	// volumes with `xorrisofs -joliet -rock`, a single code path in
@@ -539,4 +534,25 @@ func decompress(image []byte) ([]byte, error) {
 	}
 	defer r.Close()
 	return io.ReadAll(r)
+}
+
+// LoadDir is where an image names modules to load beyond Default, one file per
+// driver bundle, in the modules-load.d(5) format. It is for modules no device
+// asks for: nvidia autoloads by the GPU's PCI id, but nvidia_uvm, which CUDA
+// needs, matches nothing. The files live in the initramfs, next to the modules
+// they name, so the binary and the canonical root know nothing of the driver.
+const LoadDir = "/etc/modules-load.d"
+
+// ParseLoadConf returns the module names in a modules-load.d file: one per
+// line, with blank lines and lines starting with '#' or ';' ignored.
+func ParseLoadConf(data []byte) []string {
+	var names []string
+	for line := range strings.Lines(string(data)) {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] == '#' || line[0] == ';' {
+			continue
+		}
+		names = append(names, line)
+	}
+	return names
 }
