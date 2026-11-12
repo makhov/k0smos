@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Drive labels used by the two formats CAPI infrastructure providers attach.
@@ -16,8 +17,10 @@ const (
 	ConfigDriveLabel = "config-2"
 )
 
-// Labels is the search order for a cloud-init drive.
-var Labels = []string{NoCloudLabel, ConfigDriveLabel}
+// Labels is the search order for a cloud-init drive. An ISO's primary volume
+// label is upper case by the standard, so writers that follow it produce
+// CIDATA; cloud-init accepts both spellings, and so does k0smos.
+var Labels = []string{NoCloudLabel, strings.ToUpper(NoCloudLabel), ConfigDriveLabel, strings.ToUpper(ConfigDriveLabel)}
 
 // candidate file locations, tried in order: NoCloud at the root, then the
 // OpenStack config-drive layout.
@@ -63,6 +66,17 @@ func Load(f Files) (UserData, MetaData, error) {
 	md, err := ParseMetaData(metaData)
 	if err != nil {
 		return ud, MetaData{}, err
+	}
+
+	// A broken network-config is a warning, not a failure: the user-data beside
+	// it still carries the join token, and k0smos.ip= on the cmdline still
+	// applies.
+	netCfg, netWarn := readFirst(f, []string{"network-config"})
+	ud.Warnings = append(ud.Warnings, netWarn...)
+	md.Network, netWarn, err = ParseNetworkConfig(netCfg)
+	ud.Warnings = append(ud.Warnings, netWarn...)
+	if err != nil {
+		ud.Warnings = append(ud.Warnings, err.Error()+"; ignored")
 	}
 	return ud, md, nil
 }

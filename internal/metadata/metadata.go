@@ -308,6 +308,8 @@ func parseMounts(entries [][]any, warn []string) ([]Mount, []string) {
 type MetaData struct {
 	InstanceID string
 	Hostname   string
+	// Network is the drive's network-config, when it has one.
+	Network Network
 }
 
 // ParseMetaData reads NoCloud meta-data (YAML) or an OpenStack meta_data.json.

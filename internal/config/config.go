@@ -21,7 +21,11 @@ type Config struct {
 	Iface   string
 	IP      string // "dhcp", a CIDR like 10.0.2.15/24, or a per-interface list
 	Gateway string
-	DNS     string
+	DNS     string // one nameserver, or several separated by commas
+
+	// Net, when set, replaces what IP describes: the interfaces a cloud-init
+	// drive's network-config asked for.
+	Net []NIC
 
 	// Root, if set, overrides the block device holding the real root filesystem.
 	// Empty uses an embedded root, then discovers LABEL=k0smos. "none" stays on
@@ -60,6 +64,14 @@ type NIC struct {
 	// Gateway is the default route to install via this NIC, if any. At most one
 	// NIC carries one: a machine has a single default route.
 	Gateway string
+	// MAC, when set, identifies the interface instead of Name.
+	MAC string
+	// MTU, when non-zero, is set on the link.
+	MTU int
+	// LinkRoutes are destinations reached directly on this link, installed
+	// before the default route: a gateway outside the address's prefix is
+	// unreachable without one.
+	LinkRoutes []string
 }
 
 // DHCP reports whether this NIC is configured by DHCP.
@@ -81,6 +93,9 @@ func (n NIC) DHCP() bool { return n.Addr == "dhcp" }
 // Gateway attaches to Iface, because there is one default route. An extra NIC on
 // a segment with no router therefore needs no gateway, which is the usual case.
 func (c Config) NICs() []NIC {
+	if c.Net != nil {
+		return c.Net
+	}
 	if c.IP == "" {
 		return nil
 	}

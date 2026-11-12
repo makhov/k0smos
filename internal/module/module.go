@@ -29,6 +29,12 @@ var Default = []string{
 	// the kernel cannot load a filesystem module when a mount first asks for it.
 	"xfs",
 
+	// A seed ISO is often attached as a cdrom on virtio-scsi, libvirt's usual
+	// way. Autoloading finds virtio_scsi by its PCI id, but the cdrom it exposes only
+	// appears once the SCSI scan finishes, after the autoload pass has looked --
+	// so sr_mod is named, and binds whenever the device shows up.
+	"virtio_scsi", "sr_mod",
+
 	// No filesystem module for cloud-init drives. Cluster API bootstrap data
 	// arrives on an ISO — KubeVirt builds both its NoCloud and its config-drive
 	// volumes with `xorrisofs -joliet -rock`, a single code path in

@@ -404,14 +404,7 @@ func loadMetadata(s *sys.Sys) (metadata.UserData, metadata.MetaData) {
 	var ud metadata.UserData
 	var md metadata.MetaData
 
-	dev := ""
-	label := ""
-	for _, l := range metadata.Labels {
-		if d, err := blkid.Resolve(s, "LABEL="+l); err == nil {
-			dev, label = d, l
-			break
-		}
-	}
+	dev, label := findMetadataDrive(s)
 	if dev == "" {
 		return ud, md
 	}
@@ -432,6 +425,43 @@ func loadMetadata(s *sys.Sys) (metadata.UserData, metadata.MetaData) {
 		logf("metadata: %s", w)
 	}
 	return ud, md
+}
+
+// scsiSeedWait bounds how long a seed on a virtio-scsi cdrom is waited for.
+const scsiSeedWait = 5 * time.Second
+
+// findMetadataDrive returns the cloud-init drive and its label, or "".
+//
+// A seed on a virtio-scsi cdrom -- libvirt's usual way to attach one -- appears
+// only when the SCSI scan reaches it, which a kernel may do asynchronously,
+// after this first looks. So while a virtio-scsi host exists and nothing has
+// been found, it looks again for a few seconds. A machine without one pays
+// nothing.
+func findMetadataDrive(s *sys.Sys) (string, string) {
+	deadline := time.Now().Add(scsiSeedWait)
+	for {
+		for _, l := range metadata.Labels {
+			if d, err := blkid.Resolve(s, "LABEL="+l); err == nil {
+				return d, l
+			}
+		}
+		if !virtioSCSIPresent() || time.Now().After(deadline) {
+			return "", ""
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// virtioSCSIPresent reports whether a virtio-scsi host adapter exists.
+func virtioSCSIPresent() bool {
+	hosts, _ := os.ReadDir("/sys/class/scsi_host")
+	for _, h := range hosts {
+		name, err := os.ReadFile("/sys/class/scsi_host/" + h.Name() + "/proc_name")
+		if err == nil && strings.TrimSpace(string(name)) == "virtio_scsi" {
+			return true
+		}
+	}
+	return false
 }
 
 // applyWriteFiles writes user-data's write_files. After the data volume, since
@@ -839,6 +869,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	// that k0smos.data=auto does not claim a blank disk fs_setup names for
 	// something else.
 	userData, metaData := loadMetadata(s)
+	applyNetworkConfig(&cfg, metaData.Network)
 	applyMachineConfig(&cfg, userData.Machine)
 	claimed := make([]string, 0, len(userData.FSSetup))
 	for _, f := range userData.FSSetup {
@@ -914,7 +945,20 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	// images. Better a degraded node with a console message than a panic.
 	dns := cfg.DNS
 	for _, nic := range cfg.NICs() {
+		if nic.MAC != "" {
+			name, err := s.LinkByMAC(nic.MAC)
+			if err != nil {
+				logf("warn: network-config %s: %v", nic.Name, err)
+				continue
+			}
+			nic.Name = name
+		}
 		if nic.DHCP() {
+			if nic.MTU > 0 {
+				if err := s.SetMTU(nic.Name, nic.MTU); err != nil {
+					logf("warn: set %s mtu %d: %v", nic.Name, nic.MTU, err)
+				}
+			}
 			leaseDNS, err := configureDHCP(runCtx, s, cfg, nic.Name)
 			if err != nil {
 				logf("warn: dhcp on %s: %v", nic.Name, err)
@@ -925,7 +969,8 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 			}
 			continue
 		}
-		if err := knet.Configure(s, nic.Name, nic.Addr, nic.Gateway); err != nil {
+		if err := knet.Apply(s, knet.Static{Iface: nic.Name, CIDR: nic.Addr, Gateway: nic.Gateway,
+			MTU: nic.MTU, LinkRoutes: nic.LinkRoutes}); err != nil {
 			logf("warn: configure %s: %v", nic.Name, err)
 		} else {
 			logf("%s configured %s gw %s", nic.Name, nic.Addr, nic.Gateway)
@@ -933,7 +978,10 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		}
 	}
 	if dns != "" {
-		resolv := fmt.Appendf(nil, "nameserver %s\n", dns)
+		var resolv []byte
+		for _, ns := range strings.Split(dns, ",") {
+			resolv = fmt.Appendf(resolv, "nameserver %s\n", strings.TrimSpace(ns))
+		}
 		if err := s.WriteFile("/etc/resolv.conf", resolv, 0644); err != nil {
 			logf("warn: write resolv.conf: %v", err)
 		}
@@ -1062,12 +1110,36 @@ wait:
 	return shutdown.Do(shutdownAdapter{s}, how)
 }
 
+// applyNetworkConfig lets a drive's network-config replace the cmdline's
+// networking, as its meta-data hostname replaces the cmdline's: the metal image
+// carries one fixed k0smos.ip=dhcp for every machine, and a platform that hands
+// out static addresses says so here. The k0smos section of user-data still
+// overrides both (applyMachineConfig, after this).
+func applyNetworkConfig(cfg *config.Config, n metadata.Network) {
+	if len(n.Interfaces) == 0 {
+		return
+	}
+	cfg.Net = make([]config.NIC, 0, len(n.Interfaces))
+	for _, i := range n.Interfaces {
+		addr := i.Address
+		if addr == "" {
+			addr = "dhcp"
+		}
+		cfg.Net = append(cfg.Net, config.NIC{Name: i.Name, MAC: i.MAC, Addr: addr,
+			Gateway: i.Gateway, MTU: i.MTU, LinkRoutes: i.LinkRoutes})
+	}
+	if len(n.DNS) > 0 {
+		cfg.DNS = strings.Join(n.DNS, ",")
+	}
+}
+
 // applyMachineConfig overlays fields explicitly supplied by cloud-config. An
 // empty field means "keep the artifact default", matching cmdline parsing and
 // letting a drive set only the second NIC without restating DNS or the gateway.
 func applyMachineConfig(cfg *config.Config, machine metadata.MachineConfig) {
 	if machine.IP != "" {
 		cfg.IP = machine.IP
+		cfg.Net = nil
 	}
 	if machine.Iface != "" {
 		cfg.Iface = machine.Iface

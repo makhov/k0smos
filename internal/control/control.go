@@ -204,7 +204,7 @@ func readOnce(ctx context.Context, open func() (io.ReadWriteCloser, error), out 
 		}
 		st.idle = 0
 	}()
-	for ev := range watchEvents(ctx, rc, func(line string, err error) {
+	for ev := range watchEvents(ctx, &heldOpen{ctx: ctx, r: rc}, func(line string, err error) {
 		if err != nil {
 			logf("control port: read: %v", err)
 			return
@@ -232,6 +232,55 @@ func readOnce(ctx context.Context, open func() (io.ReadWriteCloser, error), out 
 		}
 	}
 	return forwarded
+}
+
+// heldPollInterval is how often a held-open port is read again while no host is
+// connected.
+const heldPollInterval = 50 * time.Millisecond
+
+// heldOpen keeps the port open across host disconnects instead of letting the
+// scan end at EOF.
+//
+// Closing is what loses requests. The virtio console driver discards whatever
+// it has queued for a port when the guest closes it, and a host that connects
+// between the guest reading EOF and closing the port has its request queued
+// exactly then: back to back, about four requests in ten were lost. Held open,
+// the queue is only ever drained by a read.
+//
+// While no host is connected the driver returns EOF at once rather than
+// blocking, so EOF here means "nobody there yet": wait, and read again. The
+// first EOF of a run also ends any partial line a departed host left behind,
+// so it cannot prefix the next host's request.
+type heldOpen struct {
+	ctx      context.Context
+	r        io.Reader
+	idle     bool // the last read was EOF
+	sawBytes bool // bytes since the last newline
+}
+
+func (h *heldOpen) Read(p []byte) (int, error) {
+	for {
+		n, err := h.r.Read(p)
+		if n > 0 {
+			h.idle = false
+			h.sawBytes = p[n-1] != '\n'
+			return n, nil
+		}
+		if err != nil && err != io.EOF {
+			return 0, err
+		}
+		if !h.idle && h.sawBytes && len(p) > 0 {
+			h.idle, h.sawBytes = true, false
+			p[0] = '\n'
+			return 1, nil
+		}
+		h.idle = true
+		select {
+		case <-h.ctx.Done():
+			return 0, io.EOF
+		case <-time.After(heldPollInterval):
+		}
+	}
 }
 
 // serveCommandAck confirms that a power command reached the guest. It uses the

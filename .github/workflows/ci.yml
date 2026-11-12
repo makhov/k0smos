@@ -89,10 +89,12 @@ jobs:
           METAL_DATA_MB: "2048"
         run: make metal
 
-      - name: boot through UEFI
+      - name: boot through UEFI and BIOS
         run: |
           make ctl
           ./image/test-metal.sh dist/k0smos-metal-x86_64.qcow2
+          # The same image through legacy BIOS (SeaBIOS), as most VMs still boot.
+          FIRMWARE=bios ./image/test-metal.sh dist/k0smos-metal-x86_64.qcow2
 
   # Boots k0smos under QEMU on both kernels. They cover different configurations
   # rather than the same one twice, and neither is redundant.

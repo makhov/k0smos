@@ -45,9 +45,18 @@ The qcow2 and raw images contain a GPT disk with:
 
 | Partition | Purpose |
 |---|---|
+| BIOS boot (x86 only, partition 4, first on disk) | GRUB's core for legacy BIOS boot |
 | EFI system partition | GRUB, kernel, and platform initramfs |
 | `k0smos` | immutable EROFS system mounted read-only |
-| `k0smos-data` | ext4 data partition mounted at `/var` |
+| `k0smos-data` | ext4 data partition mounted at `/var`; last, so it grows into a bigger disk |
+
+The x86 image boots through both UEFI and legacy BIOS (SeaBIOS, a BIOS CSM):
+the MBR carries GRUB's BIOS boot code beside the protective partition table,
+and both loaders read the same configuration from the EFI system partition.
+Some physical BIOSes boot a disk only if an MBR partition is marked active, and
+the protective MBR of a GPT disk has none: UEFI requires it to stay unmarked.
+On such a machine use UEFI, or its CSM's GPT support.
+The arm64 image is UEFI only.
 
 The image is a machine template. Each machine gets its own disk or clone; never
 boot the published or cached image in place.

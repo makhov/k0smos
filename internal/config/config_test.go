@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -94,7 +95,7 @@ func TestNICsBareAddressConfiguresTheNamedInterface(t *testing.T) {
 	for _, addr := range []string{"dhcp", "10.0.2.15/24"} {
 		c := Parse("k0smos.iface=enp0s1 k0smos.gw=10.0.2.2 k0smos.ip=" + addr)
 		want := []NIC{{Name: "enp0s1", Addr: addr, Gateway: "10.0.2.2"}}
-		if got := c.NICs(); !slices.Equal(got, want) {
+		if got := c.NICs(); !reflect.DeepEqual(got, want) {
 			t.Errorf("NICs() for ip=%s = %+v, want %+v", addr, got, want)
 		}
 	}
@@ -114,7 +115,7 @@ func TestNICsPerInterfaceList(t *testing.T) {
 		{Name: "eth0", Addr: "dhcp", Gateway: "10.0.2.2"},
 		{Name: "eth1", Addr: "10.10.0.11/24"},
 	}
-	if got := c.NICs(); !slices.Equal(got, want) {
+	if got := c.NICs(); !reflect.DeepEqual(got, want) {
 		t.Errorf("NICs() = %+v, want %+v", got, want)
 	}
 }
@@ -138,7 +139,7 @@ func TestNICsGatewayFollowsTheNamedInterface(t *testing.T) {
 func TestNICsSkipsMalformedEntriesWithoutLosingTheRest(t *testing.T) {
 	c := Parse("k0smos.ip=eth0:dhcp,garbage,:10.0.0.1/24,eth1:10.10.0.11/24")
 	want := []NIC{{Name: "eth0", Addr: "dhcp"}, {Name: "eth1", Addr: "10.10.0.11/24"}}
-	if got := c.NICs(); !slices.Equal(got, want) {
+	if got := c.NICs(); !reflect.DeepEqual(got, want) {
 		t.Errorf("NICs() = %+v, want %+v", got, want)
 	}
 }
@@ -148,7 +149,7 @@ func TestNICsSkipsMalformedEntriesWithoutLosingTheRest(t *testing.T) {
 func TestNICsDoesNotMistakeIPv6ForAnInterfaceName(t *testing.T) {
 	c := Parse("k0smos.ip=fd00::5/64")
 	want := []NIC{{Name: "eth0", Addr: "fd00::5/64"}}
-	if got := c.NICs(); !slices.Equal(got, want) {
+	if got := c.NICs(); !reflect.DeepEqual(got, want) {
 		t.Errorf("NICs() = %+v, want %+v", got, want)
 	}
 }

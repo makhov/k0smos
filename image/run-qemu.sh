@@ -85,7 +85,14 @@ boot=(-initrd "$initramfs")
 # containing user-data and meta-data.
 if [ -n "${CIDATA:-}" ]; then
   [ -f "$CIDATA" ] || { echo "cloud-init drive $CIDATA not found" >&2; exit 1; }
-  boot+=(-drive file="$CIDATA",if=virtio,format=raw,readonly=on)
+  if [ "${CIDATA_BUS:-}" = scsi-cd ]; then
+    # A cdrom on virtio-scsi, the way libvirt usually attaches a seed.
+    boot+=(-device virtio-scsi-pci,id=scsi0
+      -drive file="$CIDATA",if=none,id=cidata,media=cdrom,readonly=on,format=raw
+      -device scsi-cd,drive=cidata,bus=scsi0.0)
+  else
+    boot+=(-drive file="$CIDATA",if=virtio,format=raw,readonly=on)
+  fi
 fi
 
 # A mutable data volume, mounted by k0smos at /var/lib/k0s. Following Talos, the
