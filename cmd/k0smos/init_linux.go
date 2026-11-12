@@ -369,6 +369,30 @@ func configureDHCP(ctx context.Context, s *sys.Sys, cfg config.Config, iface str
 	return "", nil
 }
 
+// extraVolumes formats and mounts the disks user-data's fs_setup and mounts ask
+// for. Never fatal: a node whose extra disk is missing still boots, and says so.
+func extraVolumes(s *sys.Sys, ud metadata.UserData) {
+	if len(ud.FSSetup) == 0 && len(ud.Mounts) == 0 {
+		return
+	}
+	formats := make([]datavol.Format, 0, len(ud.FSSetup))
+	for _, f := range ud.FSSetup {
+		formats = append(formats, datavol.Format{Device: f.Device, FSType: f.Filesystem, Label: f.Label})
+	}
+	mounts := make([]datavol.Mount, 0, len(ud.Mounts))
+	for _, m := range ud.Mounts {
+		mounts = append(mounts, datavol.Mount{Spec: m.Spec, MountPoint: m.MountPoint, FSType: m.FSType, ReadOnly: m.ReadOnly})
+	}
+	done, err := datavol.Extra(s, formats, mounts)
+	for _, d := range done {
+		logf("volumes: %s", d)
+	}
+	if err != nil {
+		logf("warn: volumes: %v", err)
+	}
+	step("volumes", err, strings.Join(done, "; "))
+}
+
 // loadMetadata finds a cloud-init drive, applies its write_files, and returns
 // what it said. This is how Cluster API hands a machine its identity: a
 // bootstrap provider renders a cloud-config, and the infrastructure provider
@@ -848,6 +872,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	// the writable overlays and /var are ready.
 	userData, metaData := loadMetadata(s)
 	applyMachineConfig(&cfg, userData.Machine)
+	extraVolumes(s, userData)
 
 	if err := knet.Up(s); err != nil {
 		step("loopback", err, "")

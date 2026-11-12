@@ -117,6 +117,8 @@ k0smosctl machine dmesg --name node-1 | grep -i -e virtio -e nvme -e eth
 | `UNSUPPORTED runcmd` | the cloud-init asks for a command k0smos deliberately does not execute |
 | `warn: dhcp` | the interface did not get a lease |
 | `refusing to guess: N blank devices` | `k0smos.data=auto` found several candidate disks; name one explicitly |
+| `refusing to format /dev/...` | the disk is not blank but holds nothing k0smos recognises (a partition table, LVM, XFS); wipe it if it is meant for this node |
+| `warn: volumes:` | an `fs_setup` or `mounts` entry failed; the rest still ran |
 
 ## Kubeconfig is not ready
 

@@ -21,7 +21,8 @@ Application logs stay Kubernetes logs — collect them through the cluster.
 
 ## Cloud-init is a subset, and nothing is executed
 
-`write_files`, the hostname, the network settings and the k0s role are applied.
+`write_files`, the hostname, the network settings, the k0s role, and extra disks
+from `fs_setup` and `mounts` are applied.
 A small set of `runcmd` verbs is *interpreted* — `mkdir`, `chmod`, `chown`,
 `ln -s`, and `k0s install` — but no command from a drive is ever executed as a
 process.

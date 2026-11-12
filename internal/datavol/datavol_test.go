@@ -17,7 +17,7 @@ func ext4(label string) []byte {
 	return img
 }
 
-func blank() []byte { return make([]byte, 2048) }
+func blank() []byte { return make([]byte, 1<<20) } // blkid.IsBlank reads a MiB
 
 type fakeVol struct {
 	devs    []string
@@ -53,9 +53,21 @@ func (f *fakeVol) Mkfs(dev, fstype, label string) error {
 
 func (f *fakeVol) Mkdir(string, fs.FileMode) error { return nil }
 
-func (f *fakeVol) Mount(source, target, fstype string, _ uintptr, _ string) error {
-	f.mounted = append(f.mounted, source+"->"+target+":"+fstype)
+func (f *fakeVol) Mount(source, target, fstype string, flags uintptr, _ string) error {
+	m := source + "->" + target + ":" + fstype
+	if flags&msReadOnly != 0 {
+		m += ":ro"
+	}
+	f.mounted = append(f.mounted, m)
 	return nil
+}
+
+// used is a disk k0smos cannot read but must not touch: XFS here, standing in
+// for a partition table, LVM, btrfs -- anything written to its first MiB.
+func used() []byte {
+	img := blank()
+	copy(img, "XFSB")
+	return img
 }
 
 const label = "k0smos-data"
@@ -215,4 +227,81 @@ func iso(vol string) []byte {
 	}
 	copy(pvd[40:], vol)
 	return img
+}
+
+// A bare-metal disk with XFS, LVM or a partition table has no filesystem the
+// probes know, which used to make it "blank" and the data volume -- formatted.
+func TestPrepareNeverFormatsAnUnrecognisedUsedDisk(t *testing.T) {
+	f := &fakeVol{
+		devs:   []string{"vda", "vdb"},
+		images: map[string][]byte{"vda": ext4("k0smos"), "vdb": used()},
+	}
+	res, err := Prepare(f, Options{Spec: "auto", Label: label, FSType: "ext4", MountPoint: "/var/lib/k0s"})
+	if err != nil || res.Device != "" {
+		t.Errorf("Prepare(auto) = %+v, %v; want no candidate", res, err)
+	}
+	if _, err := Prepare(f, Options{Spec: "/dev/vdb", Label: label, FSType: "ext4", MountPoint: "/var/lib/k0s"}); err == nil ||
+		!strings.Contains(err.Error(), "refusing to format") {
+		t.Errorf("Prepare(/dev/vdb) = %v, want a refusal", err)
+	}
+	if len(f.mkfs) != 0 {
+		t.Errorf("formatted a used disk: %v", f.mkfs)
+	}
+}
+
+// fs_setup then mounts, as cloud-init orders them: the blank disk is formatted
+// and then found by the label it was just given.
+func TestExtraFormatsThenMountsByLabel(t *testing.T) {
+	f := &fakeVol{devs: []string{"vda", "nvme1n1"}, images: map[string][]byte{"vda": ext4("k0smos"), "nvme1n1": blank()}}
+	done, err := Extra(f,
+		[]Format{{Device: "/dev/nvme1n1", FSType: "ext4", Label: "sbx-data"}},
+		[]Mount{{Spec: "LABEL=sbx-data", MountPoint: "/srv/sandboxes-data"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.mkfs) != 1 || f.mkfs[0] != "/dev/nvme1n1:ext4:sbx-data" {
+		t.Errorf("mkfs = %v", f.mkfs)
+	}
+	if len(f.mounted) != 1 || f.mounted[0] != "/dev/nvme1n1->/srv/sandboxes-data:ext4" {
+		t.Errorf("mounted = %v", f.mounted)
+	}
+	if len(done) != 2 {
+		t.Errorf("done = %v, want a line per action", done)
+	}
+}
+
+// Every boot after the first: the disk already carries its filesystem, so
+// fs_setup must leave it -- and its data -- alone.
+func TestExtraLeavesAFormattedDiskAlone(t *testing.T) {
+	f := &fakeVol{devs: []string{"nvme1n1"}, images: map[string][]byte{"nvme1n1": ext4("sbx-data")}}
+	if _, err := Extra(f, []Format{{Device: "/dev/nvme1n1", FSType: "ext4", Label: "sbx-data"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.mkfs) != 0 {
+		t.Errorf("reformatted a disk with data on it: %v", f.mkfs)
+	}
+}
+
+// One bad entry must not cost the machine the others, and every failure is
+// reported, not just the first.
+func TestExtraContinuesPastFailures(t *testing.T) {
+	f := &fakeVol{
+		devs:   []string{"sdb", "sdc"},
+		images: map[string][]byte{"sdb": used(), "sdc": ext4("logs")},
+	}
+	_, err := Extra(f,
+		[]Format{{Device: "/dev/sdb", FSType: "ext4", Label: "x"}},
+		[]Mount{
+			{Spec: "LABEL=missing", MountPoint: "/mnt/a"},
+			{Spec: "LABEL=logs", MountPoint: "/mnt/logs", ReadOnly: true},
+		})
+	if err == nil || !strings.Contains(err.Error(), "/dev/sdb") || !strings.Contains(err.Error(), "missing") {
+		t.Errorf("Extra = %v, want both failures reported", err)
+	}
+	if len(f.mkfs) != 0 {
+		t.Errorf("formatted a used disk: %v", f.mkfs)
+	}
+	if len(f.mounted) != 1 || f.mounted[0] != "/dev/sdc->/mnt/logs:ext4:ro" {
+		t.Errorf("mounted = %v, want the good entry mounted read-only", f.mounted)
+	}
 }

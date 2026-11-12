@@ -108,7 +108,7 @@ func TestBlankIgnoresPseudoDevices(t *testing.T) {
 		devs: []string{"loop0", "loop7", "ram0", "ram15", "zram0", "sr0", "vda", "vdb"},
 		images: map[string][]byte{
 			"vda": superblock(uuidB, "root", ext4Magic),
-			"vdb": make([]byte, 2048), // the actual blank data volume
+			"vdb": make([]byte, 1<<20), // the actual blank data volume
 		},
 	}
 	got, err := Blank(p)

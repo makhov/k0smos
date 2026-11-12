@@ -15,6 +15,7 @@
 package datavol
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"strings"
@@ -74,11 +75,8 @@ func Prepare(v Volume, o Options) (Result, error) {
 	}
 
 	res := Result{Device: dev}
-	if _, formatted := blkid.Identify(v, strings.TrimPrefix(dev, "/dev/")); !formatted {
-		if err := v.Mkfs(dev, o.FSType, o.Label); err != nil {
-			return Result{}, fmt.Errorf("format %s as %s: %w", dev, o.FSType, err)
-		}
-		res.Formatted = true
+	if res.Formatted, err = format(v, dev, o.FSType, o.Label); err != nil {
+		return Result{}, err
 	}
 
 	if err := v.Mkdir(o.MountPoint, 0700); err != nil {
@@ -88,6 +86,96 @@ func Prepare(v Volume, o Options) (Result, error) {
 		return res, fmt.Errorf("mount %s at %s: %w", dev, o.MountPoint, err)
 	}
 	return res, nil
+}
+
+// format gives dev a filesystem if it has none, reporting whether it did. A
+// device with a filesystem k0smos recognises is left as it is; one that is not
+// blank but unrecognised is refused, never formatted -- see blkid.IsBlank.
+func format(v Volume, dev, fstype, label string) (bool, error) {
+	name := strings.TrimPrefix(dev, "/dev/")
+	if _, ok := blkid.Identify(v, name); ok {
+		return false, nil
+	}
+	if !blkid.IsBlank(v, name) {
+		return false, fmt.Errorf("refusing to format %s: it is not blank but holds no filesystem "+
+			"k0smos recognises (a partition table, LVM, XFS...); wipe it first if it is meant for this", dev)
+	}
+	if err := v.Mkfs(dev, fstype, label); err != nil {
+		return false, fmt.Errorf("format %s as %s: %w", dev, fstype, err)
+	}
+	return true, nil
+}
+
+// Format asks for a blank device to be given a filesystem: one entry of
+// cloud-init's fs_setup.
+type Format struct {
+	Device string // a /dev path
+	FSType string
+	Label  string
+}
+
+// Mount asks for a volume to be mounted: one entry of cloud-init's mounts.
+type Mount struct {
+	Spec       string // a /dev path, LABEL= or UUID=
+	MountPoint string
+	FSType     string // empty or "auto" means whatever the device holds
+	ReadOnly   bool
+}
+
+// msReadOnly is MS_RDONLY.
+const msReadOnly = 0x1
+
+// Extra formats and mounts volumes beyond the data volume -- a second disk on a
+// bare-metal machine, one attached to a VM -- all formats first, as cloud-init
+// orders fs_setup before mounts. Formatting follows the data volume's rule:
+// only a blank device, never one holding anything.
+//
+// Entries are independent: a failure is reported and the rest still run, so
+// one missing disk does not cost the machine the others. It returns a line for
+// each thing it did.
+func Extra(v Volume, formats []Format, mounts []Mount) ([]string, error) {
+	var done []string
+	var errs []error
+	for _, f := range formats {
+		formatted, err := format(v, f.Device, f.FSType, f.Label)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("fs_setup %s: %w", f.Device, err))
+		case formatted:
+			done = append(done, fmt.Sprintf("formatted %s as %s, LABEL=%s", f.Device, f.FSType, f.Label))
+		}
+	}
+	for _, m := range mounts {
+		if err := mountOne(v, m); err != nil {
+			errs = append(errs, fmt.Errorf("mount %s at %s: %w", m.Spec, m.MountPoint, err))
+			continue
+		}
+		done = append(done, fmt.Sprintf("mounted %s at %s", m.Spec, m.MountPoint))
+	}
+	return done, errors.Join(errs...)
+}
+
+func mountOne(v Volume, m Mount) error {
+	dev, err := blkid.Resolve(v, m.Spec)
+	if err != nil {
+		return err
+	}
+	fstype := m.FSType
+	if fstype == "" || fstype == "auto" {
+		info, ok := blkid.Identify(v, strings.TrimPrefix(dev, "/dev/"))
+		if !ok {
+			return fmt.Errorf("%s holds no filesystem k0smos recognises; name its type", dev)
+		}
+		fstype = info.FSType
+	}
+	var flags uintptr
+	if m.ReadOnly {
+		flags = msReadOnly
+	}
+	if err := v.Mkdir(m.MountPoint, 0755); err != nil {
+		return err
+	}
+	return v.Mount(dev, m.MountPoint, fstype, flags, "")
 }
 
 // selectDevice resolves the spec to a device, or "" when there is no candidate.

@@ -85,7 +85,7 @@ fi
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 
-mkdir -p "$root"/{sbin,usr/local/bin,etc/k0s,proc,sys,dev,run,tmp,var/lib/k0s,newroot}
+mkdir -p "$root"/{sbin,usr/local/bin,etc/k0s,proc,sys,dev,run,tmp,var/lib/k0s,newroot,srv,mnt}
 # Directories that components only need to *exist*. Creating them here rather than
 # at runtime is what keeps them off the writable-path list: on a read-only root the
 # kube-controller-manager plugin prober otherwise logs "error (re-)creating driver
