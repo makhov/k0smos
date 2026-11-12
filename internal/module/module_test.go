@@ -469,4 +469,43 @@ func TestLoadSkipsModulesNotForThisMachine(t *testing.T) {
 	if res.Loaded != 2 { // failover and net_failover, virtio_net's dependencies
 		t.Errorf("Loaded = %d, want 2", res.Loaded)
 	}
+	// Not errors, but still said: EOPNOTSUPP is also how kvm_amd reports SVM
+	// disabled in firmware, and that should not vanish without a trace.
+	if len(res.NotForThisMachine) != 2 ||
+		!strings.HasPrefix(res.NotForThisMachine[0], "virtio_blk ") ||
+		!strings.HasPrefix(res.NotForThisMachine[1], "virtio_net ") {
+		t.Errorf("NotForThisMachine = %q, want virtio_blk and virtio_net", res.NotForThisMachine)
+	}
+}
+
+// Canonical spelling is for module names only. An alias is matched as written,
+// and plenty of real ones carry a hyphen: fs-erofs, crypto-crc32c, blake2b-256.
+func TestLoadResolvesHyphenatedAliasesAsWritten(t *testing.T) {
+	f := newFake(t)
+	f.files["/lib/modules/test/modules.dep"] = []byte(depFile + "kernel/crypto/blake2b_generic.ko.gz:\n")
+	f.files["/lib/modules/test/kernel/crypto/blake2b_generic.ko.gz"] = gz(t, "blake2b_generic")
+	f.files["/lib/modules/test/modules.alias"] = []byte("alias blake2b-256 blake2b_generic\n")
+
+	if _, err := Load(f, "/lib/modules/test", []string{"blake2b-256"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"blake2b_generic"}; !slices.Equal(f.loaded, want) {
+		t.Errorf("loaded = %v, want %v", f.loaded, want)
+	}
+}
+
+// A softdep is keyed by module, so a hyphenated spelling there must still apply
+// to the module that is loaded under its canonical name.
+func TestSoftdepOnHyphenatedModuleApplies(t *testing.T) {
+	f := newFake(t)
+	f.files["/lib/modules/test/modules.dep"] = []byte(depFile + "kernel/arch/x86/kvm/kvm-amd.ko.gz:\n")
+	f.files["/lib/modules/test/kernel/arch/x86/kvm/kvm-amd.ko.gz"] = gz(t, "kvm_amd")
+	f.files["/lib/modules/test/modules.softdep"] = []byte("softdep kvm-amd pre: ext4\n")
+
+	if _, err := Load(f, "/lib/modules/test", []string{"kvm_amd"}); err != nil {
+		t.Fatal(err)
+	}
+	if i := slices.Index(f.loaded, "ext4"); i == -1 || i > slices.Index(f.loaded, "kvm_amd") {
+		t.Errorf("loaded = %v, want ext4 before kvm_amd", f.loaded)
+	}
 }
