@@ -15,13 +15,16 @@
 package datavol
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"slices"
 	"strings"
 
 	"github.com/amakhov/k0smos/internal/blkid"
+	"github.com/amakhov/k0smos/internal/gpt"
 )
 
 // Volume is the subset of *sys.Sys that preparing a data volume needs.
@@ -227,3 +230,122 @@ func selectDevice(v Volume, o Options) (string, error) {
 			"name one with k0smos.data=/dev/...", len(candidates), candidates)
 	}
 }
+
+// Grower is what growing a mounted volume into its disk's free space needs.
+type Grower interface {
+	ReadAt(dev string, p []byte, off int64) error
+	PartitionOf(name string) (disk string, part int, ok bool)
+	DeviceSize(name string) (int64, error)
+	SectorSize(disk string) (int64, error)
+	OpenDisk(disk string) (*os.File, error)
+	ResizePartition(disk string, part int, start, length int64) error
+	ResizeExt4(mountPoint string, blocks uint64) error
+}
+
+// Grow lets a mounted ext4 volume use all of its disk: a disk image written
+// onto a bigger disk, or a volume the platform resized (an RBD resize,
+// qemu-img resize, a PVC expanded). A partition is extended first when it is the
+// last on a GPT disk, then the filesystem grown online into it; a filesystem on
+// a whole disk is just grown. It returns what it did, or "" when there was no
+// room to grow -- every boot after the first.
+func Grow(g Grower, dev, mountPoint, fstype string) (string, error) {
+	if fstype != "ext4" {
+		return "", nil
+	}
+	name := strings.TrimPrefix(dev, "/dev/")
+	var did []string
+	// The partition step is best-effort: a partition that cannot be extended
+	// may still hold a filesystem smaller than itself, which is grown below
+	// either way. An MBR disk is not an error, only a disk this does not grow.
+	var partErr error
+	if disk, part, ok := g.PartitionOf(name); ok {
+		grew, err := growPartition(g, name, disk, part)
+		switch {
+		case errors.Is(err, gpt.ErrNoGPT):
+		case err != nil:
+			partErr = err
+		case grew != "":
+			did = append(did, grew)
+		}
+	}
+
+	fsDid, fsErr := growExt4(g, name, mountPoint)
+	if fsDid != "" {
+		did = append(did, fsDid)
+	}
+	return strings.Join(did, "; "), errors.Join(partErr, fsErr)
+}
+
+// growExt4 grows the filesystem on name to fill its device.
+func growExt4(g Grower, name, mountPoint string) (string, error) {
+	sb := make([]byte, 1024)
+	if err := g.ReadAt(name, sb, 1024); err != nil {
+		return "", fmt.Errorf("read the superblock of /dev/%s: %w", name, err)
+	}
+	blocks, blockSize := ext4Size(sb)
+	size, err := g.DeviceSize(name)
+	if err != nil || blockSize == 0 {
+		return "", fmt.Errorf("size of /dev/%s: %v", name, err)
+	}
+	// mkfs rounds down by a few blocks; that is not room worth a resize.
+	want := uint64(size) / blockSize
+	if (want-min(want, blocks))*blockSize < minGrowth {
+		return "", nil
+	}
+	if err := g.ResizeExt4(mountPoint, want); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("grew the filesystem at %s from %s to %s",
+		mountPoint, gib(blocks*blockSize), gib(want*blockSize)), nil
+}
+
+// growPartition extends the partition in its table and tells the kernel. The
+// kernel's view is compared with the table rather than trusting what Grow did
+// this time: a boot interrupted between the two left a table already grown.
+func growPartition(g Grower, name, disk string, part int) (string, error) {
+	ss, err := g.SectorSize(disk)
+	if err != nil {
+		return "", err
+	}
+	size, err := g.DeviceSize(disk)
+	if err != nil {
+		return "", err
+	}
+	f, err := g.OpenDisk(disk)
+	if err != nil {
+		return "", err
+	}
+	res, err := gpt.Grow(f, size, ss, part)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", disk, err)
+	}
+	want := int64(res.NewEnd-res.Start+1) * ss
+	cur, err := g.DeviceSize(name)
+	if err != nil {
+		return "", err
+	}
+	if cur >= want {
+		return "", nil
+	}
+	if err := g.ResizePartition(disk, part, int64(res.Start)*ss, want); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("grew partition %d of %s from %s to %s", part, disk, gib(uint64(cur)), gib(uint64(want))), nil
+}
+
+// minGrowth is the least a filesystem is grown by.
+const minGrowth = 1 << 20
+
+// ext4Size reads an ext4 superblock: its block count and block size.
+func ext4Size(sb []byte) (blocks, blockSize uint64) {
+	blocks = uint64(binary.LittleEndian.Uint32(sb[0x04:]))
+	if binary.LittleEndian.Uint32(sb[0x60:])&0x80 != 0 { // INCOMPAT_64BIT
+		blocks |= uint64(binary.LittleEndian.Uint32(sb[0x150:])) << 32
+	}
+	return blocks, 1024 << binary.LittleEndian.Uint32(sb[0x18:])
+}
+
+func gib(b uint64) string { return fmt.Sprintf("%.1f GiB", float64(b)/(1<<30)) }
