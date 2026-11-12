@@ -167,7 +167,14 @@ jobs:
           fi
           make e2e-artifacts
 
+      # Traced while TestDataVolumeAutoIgnoresTheCloudInitDrive loses its
+      # poweroff on x86 KVM: the guest logs no byte from the control port, and
+      # these events show whether QEMU ever read the command off the socket and
+      # whether it pushed it to the guest. Only the control port uses these
+      # devices, so the logs stay small.
       - name: e2e (fast)
+        env:
+          K0SMOS_E2E_QEMU_TRACE: "virtio_serial_*,virtio_console_*"
         run: go test -tags e2e -short -failfast -v -timeout 40m ./e2e/
 
       - name: keep consoles from failures
@@ -175,7 +182,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-consoles-${{ matrix.kernel }}
-          path: dist/e2e/*.console.log
+          path: |
+            dist/e2e/*.console.log
+            dist/e2e/*.trace.log
           if-no-files-found: ignore
 
   # The k0s boots, several minutes each. Nightly rather than per-push.

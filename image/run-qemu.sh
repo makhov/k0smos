@@ -191,6 +191,20 @@ if [ -n "${MONITOR:-}" ]; then
   monitor_args=(-monitor "unix:$MONITOR,server=on,wait=off")
 fi
 
+# Optional QEMU trace events, for following bytes through a device model when
+# the guest and the host disagree about what was sent. QEMU_TRACE is a
+# comma-separated list of event patterns (see `$qemu -trace help`), written to
+# QEMU_TRACE_LOG, or to QEMU's stderr when that is unset:
+#   QEMU_TRACE='virtio_serial_*,virtio_console_*' QEMU_TRACE_LOG=dist/trace.log
+trace_args=()
+if [ -n "${QEMU_TRACE:-}" ]; then
+  IFS=, read -r -a patterns <<<"$QEMU_TRACE"
+  for p in "${patterns[@]}"; do
+    trace_args+=(-trace "enable=$p")
+  done
+  [ -n "${QEMU_TRACE_LOG:-}" ] && trace_args+=(-D "$QEMU_TRACE_LOG")
+fi
+
 set -x
 exec "$qemu" \
   "${machine[@]}" "${accel[@]}" \
@@ -198,5 +212,6 @@ exec "$qemu" \
   -kernel "$kernel" -append "$append" \
   "${boot[@]}" \
   ${control_args[@]+"${control_args[@]}"} ${monitor_args[@]+"${monitor_args[@]}"} \
+  ${trace_args[@]+"${trace_args[@]}"} \
   ${netdev_args[@]+"${netdev_args[@]}"} \
   "${display[@]}"

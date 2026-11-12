@@ -108,6 +108,7 @@ type vm struct {
 	name    string
 	console string
 	control string
+	trace   string // QEMU trace log, when K0SMOS_E2E_QEMU_TRACE is set
 	cmd     *exec.Cmd
 	stderr  *bytes.Buffer
 	done    chan struct{}
@@ -170,12 +171,20 @@ func boot(t *testing.T, o bootOpts) *vm {
 		done:    make(chan struct{}),
 	}
 
+	// K0SMOS_E2E_QEMU_TRACE turns on QEMU trace events for every guest, each to
+	// its own file, kept beside the console when the test fails.
+	if pat := os.Getenv("K0SMOS_E2E_QEMU_TRACE"); pat != "" {
+		v.trace = filepath.Join(dir, "qemu-trace.log")
+	}
 	env := append(os.Environ(),
 		"SERIAL="+v.console,
 		"CONTROL="+v.control,
 		"MEM="+orDefault(o.Mem, "2048"),
 		"CPUS="+orDefault(o.CPUs, "2"),
 	)
+	if v.trace != "" {
+		env = append(env, "QEMU_TRACE="+os.Getenv("K0SMOS_E2E_QEMU_TRACE"), "QEMU_TRACE_LOG="+v.trace)
+	}
 	for k, val := range map[string]string{
 		"IMG":         o.Disk,
 		"INITRAMFS":   o.Initramfs,
@@ -375,6 +384,12 @@ func (v *vm) dumpConsole() {
 					v.t.Logf("full console saved to %s", saved)
 				}
 			}
+		}
+	}
+	if v.trace != "" {
+		saved := filepath.Join(v.root, "dist", "e2e", stem+".trace.log")
+		if b, err := os.ReadFile(v.trace); err == nil && os.WriteFile(saved, b, 0644) == nil {
+			v.t.Logf("QEMU trace saved to %s", saved)
 		}
 	}
 	text := v.consoleText()
