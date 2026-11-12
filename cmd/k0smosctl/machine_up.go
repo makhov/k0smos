@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/amakhov/k0smos/internal/control"
 	"github.com/spf13/cobra"
 )
 
@@ -725,12 +726,14 @@ func runGuest(q *exec.Cmd, s bootSpec, out io.Writer) error {
 	}
 
 	fmt.Fprintf(out, "\nstopping the guest cleanly (up to %s; interrupt again to kill it)\n", shutdownGrace)
-	if conn, err := net.DialTimeout("unix", s.socket, 5*time.Second); err == nil {
-		fmt.Fprintf(conn, "%s\n", "poweroff")
-		conn.Close()
-	} else {
-		fmt.Fprintf(out, "warn: could not reach %s: %v\n", s.socket, err)
-	}
+	// Held until the guest acks, not written and dropped: a guest still early in
+	// boot has not opened its port, and hanging up first loses the command. In
+	// the background so a second interrupt below can still kill QEMU meanwhile.
+	go func() {
+		if _, err := request(s.socket, control.PowerOff.String(), powerAckTimeout); err != nil {
+			fmt.Fprintf(out, "warn: guest did not acknowledge poweroff on %s: %v\n", s.socket, err)
+		}
+	}()
 
 	select {
 	case err := <-done:

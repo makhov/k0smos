@@ -167,14 +167,9 @@ jobs:
           fi
           make e2e-artifacts
 
-      # Traced while TestDataVolumeAutoIgnoresTheCloudInitDrive loses its
-      # poweroff on x86 KVM: the guest logs no byte from the control port, and
-      # these events show whether QEMU ever read the command off the socket and
-      # whether it pushed it to the guest. Only the control port uses these
-      # devices, so the logs stay small.
+      # Set K0SMOS_E2E_QEMU_TRACE (e.g. "virtio_serial_*,virtio_console_*") here
+      # to keep QEMU trace events beside the consoles of failing tests.
       - name: e2e (fast)
-        env:
-          K0SMOS_E2E_QEMU_TRACE: "virtio_serial_*,virtio_console_*"
         run: go test -tags e2e -short -failfast -v -timeout 40m ./e2e/
 
       - name: keep consoles from failures

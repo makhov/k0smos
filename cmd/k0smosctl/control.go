@@ -35,6 +35,14 @@ func dial(socket string, timeout time.Duration) (net.Conn, error) {
 	return conn, nil
 }
 
+// powerAckTimeout is how long a power command waits for the guest to take it.
+//
+// It covers a guest that has not opened its end of the port yet, which early in
+// boot is several seconds. Until it does, QEMU leaves the command unread in the
+// socket, and hanging up first throws it away -- the guest then never sees it
+// and simply keeps running. A guest that is listening acks at once.
+const powerAckTimeout = 60 * time.Second
+
 // request performs one request/response exchange against a node.
 func request(socket, name string, timeout time.Duration) ([]byte, error) {
 	conn, err := dial(socket, timeout)
@@ -42,9 +50,9 @@ func request(socket, name string, timeout time.Duration) ([]byte, error) {
 		return nil, err
 	}
 	defer conn.Close()
-	// A node that never answers must not hang the CLI: the port is reopened by
-	// the guest on EOF, so a request sent while it is between opens is simply
-	// lost, and waiting forever would hide that.
+	// A node that never answers must not hang the CLI. Bounded rather than
+	// short: a request written before the guest opens its port waits in QEMU
+	// and is answered once it does, unless this end has hung up by then.
 	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
 		return nil, err
 	}
