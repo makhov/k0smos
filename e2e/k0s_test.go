@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -20,8 +21,37 @@ func requireFullSuite(t *testing.T) {
 	}
 }
 
+// A pod the node must be able to run once Ready, and that reports what only a
+// running node can show. It mounts a hostPath Bidirectional, as CSI node plugins
+// do, which kubelet refuses unless the mount is shared. And it reports the modes
+// of the devices an unprivileged VMM opens, which k0smos sets in place of udev.
+// The console is the only channel the harness reads, hence /dev/kmsg.
+const nodeProbe = `apiVersion: v1
+kind: Pod
+metadata: {name: node-probe, namespace: default}
+spec:
+  hostPID: true
+  restartPolicy: Never
+  containers:
+    - name: probe
+      image: docker.io/library/busybox:1.36.1
+      securityContext: {privileged: true}
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          m() { stat -c %a /proc/1/root$1 2>/dev/null || echo absent; }
+          echo "nodeprobe: kvm=$(m /dev/kvm) tun=$(m /dev/net/tun) end" > /dev/kmsg
+      volumeMounts:
+        - {name: shared, mountPath: /mnt/shared, mountPropagation: Bidirectional}
+  volumes:
+    - name: shared
+      hostPath: {path: /var/lib/e2e-shared, type: DirectoryOrCreate}
+`
+
 // The whole point of the project: a node that reaches Ready. The markers are the
 // ones a real cluster logs, taken from a captured console rather than guessed.
+//
+// It then runs nodeProbe, rather than paying for a k0s boot of its own.
 func TestK0sNodeReachesReady(t *testing.T) {
 	requireFullSuite(t)
 	requireArtifacts(t, "dist/k0smos.img", "dist/k0smos-initramfs.gz")
@@ -39,6 +69,10 @@ write_files:
       spec:
         storage:
           type: kine
+  - path: /var/lib/k0s/manifests/node-probe/pod.yaml
+    permissions: "0644"
+    encoding: gzip+base64
+    content: `+gzipBase64(t, nodeProbe)+`
 runcmd:
   - /usr/local/bin/k0s install controller --force --single --config /etc/k0s/k0s.yaml
   - /usr/local/bin/k0s start
@@ -70,6 +104,22 @@ runcmd:
 		if strings.Contains(v.consoleText(), bad) {
 			t.Errorf("regression: %q appeared on the console", bad)
 		}
+	}
+
+	// kubelet refuses a Bidirectional mount on a private one with this message.
+	got := v.waitForAny(k0sTimeout, `nodeprobe: .* end`, `is not a shared mount`)
+	if !strings.HasPrefix(got, "nodeprobe:") {
+		line := regexp.MustCompile(`.*is not a shared mount.*`).FindString(v.consoleText())
+		t.Fatalf("Bidirectional hostPath mount did not start (got %q): %s", got, line)
+	}
+	t.Logf("%s", got)
+	// tun is in the default module set, so it must be there. /dev/kvm depends on
+	// the hypervisor offering nested virtualisation; when present it must be 666.
+	if !strings.Contains(got, " tun=666 ") {
+		t.Errorf("/dev/net/tun is not 0666 for an unprivileged VMM: %s", got)
+	}
+	if !strings.Contains(got, " kvm=666 ") && !strings.Contains(got, " kvm=absent ") {
+		t.Errorf("/dev/kvm is not 0666 for an unprivileged VMM: %s", got)
 	}
 }
 
