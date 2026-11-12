@@ -254,15 +254,15 @@ func TestPrepareNeverFormatsAnUnrecognisedUsedDisk(t *testing.T) {
 func TestExtraFormatsThenMountsByLabel(t *testing.T) {
 	f := &fakeVol{devs: []string{"vda", "nvme1n1"}, images: map[string][]byte{"vda": ext4("k0smos"), "nvme1n1": blank()}}
 	done, err := Extra(f,
-		[]Format{{Device: "/dev/nvme1n1", FSType: "ext4", Label: "sbx-data"}},
-		[]Mount{{Spec: "LABEL=sbx-data", MountPoint: "/srv/sandboxes-data"}})
+		[]Format{{Device: "/dev/nvme1n1", FSType: "ext4", Label: "scratch"}},
+		[]Mount{{Spec: "LABEL=scratch", MountPoint: "/srv/scratch"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(f.mkfs) != 1 || f.mkfs[0] != "/dev/nvme1n1:ext4:sbx-data" {
+	if len(f.mkfs) != 1 || f.mkfs[0] != "/dev/nvme1n1:ext4:scratch" {
 		t.Errorf("mkfs = %v", f.mkfs)
 	}
-	if len(f.mounted) != 1 || f.mounted[0] != "/dev/nvme1n1->/srv/sandboxes-data:ext4" {
+	if len(f.mounted) != 1 || f.mounted[0] != "/dev/nvme1n1->/srv/scratch:ext4" {
 		t.Errorf("mounted = %v", f.mounted)
 	}
 	if len(done) != 2 {
@@ -273,8 +273,8 @@ func TestExtraFormatsThenMountsByLabel(t *testing.T) {
 // Every boot after the first: the disk already carries its filesystem, so
 // fs_setup must leave it -- and its data -- alone.
 func TestExtraLeavesAFormattedDiskAlone(t *testing.T) {
-	f := &fakeVol{devs: []string{"nvme1n1"}, images: map[string][]byte{"nvme1n1": ext4("sbx-data")}}
-	if _, err := Extra(f, []Format{{Device: "/dev/nvme1n1", FSType: "ext4", Label: "sbx-data"}}, nil); err != nil {
+	f := &fakeVol{devs: []string{"nvme1n1"}, images: map[string][]byte{"nvme1n1": ext4("scratch")}}
+	if _, err := Extra(f, []Format{{Device: "/dev/nvme1n1", FSType: "ext4", Label: "scratch"}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.mkfs) != 0 {
@@ -303,5 +303,22 @@ func TestExtraContinuesPastFailures(t *testing.T) {
 	}
 	if len(f.mounted) != 1 || f.mounted[0] != "/dev/sdc->/mnt/logs:ext4:ro" {
 		t.Errorf("mounted = %v, want the good entry mounted read-only", f.mounted)
+	}
+}
+
+// KubeVirt boots with k0smos.data=auto. A second blank disk that fs_setup names
+// is not a data-volume candidate: without the exclusion, two blank disks made
+// "auto" refuse to guess and one made it take the disk meant for fs_setup.
+func TestPrepareAutoSkipsDisksClaimedByFSSetup(t *testing.T) {
+	f := &fakeVol{
+		devs:   []string{"vda", "vdb", "vdc"},
+		images: map[string][]byte{"vda": ext4("k0smos"), "vdb": blank(), "vdc": blank()},
+	}
+	res, err := Prepare(f, Options{Spec: "auto", Label: label, FSType: "ext4", MountPoint: "/var", Exclude: []string{"/dev/vdc"}})
+	if err != nil || res.Device != "/dev/vdb" {
+		t.Fatalf("Prepare = %+v, %v; want /dev/vdb", res, err)
+	}
+	if len(f.mkfs) != 1 || !strings.HasPrefix(f.mkfs[0], "/dev/vdb:") {
+		t.Errorf("mkfs = %v, want only /dev/vdb", f.mkfs)
 	}
 }

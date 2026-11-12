@@ -73,9 +73,9 @@ QEMU) is set up with cloud-init's own keys:
 ```yaml
 #cloud-config
 fs_setup:
-  - {device: /dev/nvme1n1, filesystem: ext4, label: sbx-data}
+  - {device: /dev/nvme1n1, filesystem: ext4, label: scratch}
 mounts:
-  - [LABEL=sbx-data, /srv/sandboxes-data]
+  - [LABEL=scratch, /srv/scratch]
 ```
 
 Format by device once, then mount by label. There is no udev, so there are no
@@ -99,8 +99,12 @@ Supported:
 | `mounts` | device as `/dev/...`, `sdb`, `LABEL=` or `UUID=`; mount point; filesystem type or `auto`; options `defaults`, `nofail`, `rw`, `ro` | swap, other options |
 | `disk_setup` | | partitioning: give `fs_setup` a whole disk or an existing partition |
 
-The root filesystem is read-only, so mount points must already exist or be
-under `/var`. The image provides `/srv` and `/mnt` for this.
+Mount points go under `/srv`, `/mnt` or `/var`. The root filesystem is
+read-only, and those are the directories where k0smos can create one.
+
+With `k0smos.data=auto`, as on KubeVirt, a blank disk named in `fs_setup` is
+never chosen as the data volume. So a VM can be given a blank data disk and a
+blank extra disk on its first boot.
 
 A failed entry is reported on the console and does not stop the boot or the
 other entries. A node whose extra disk is missing still comes up.

@@ -120,7 +120,11 @@ func (s *Sys) ReadAt(dev string, p []byte, off int64) error {
 // from user-data. The caller must have established that the device is blank:
 // mkfs on a populated volume destroys it.
 func (s *Sys) Mkfs(dev, fstype, label string) error {
-	out, err := exec.Command("mkfs."+fstype, "-q", "-L", label, dev).CombinedOutput()
+	args := []string{"-q"}
+	if label != "" { // fs_setup's label is optional
+		args = append(args, "-L", label)
+	}
+	out, err := exec.Command("mkfs."+fstype, append(args, dev)...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("mkfs.%s %s: %w: %s", fstype, dev, err, bytes.TrimSpace(out))
 	}

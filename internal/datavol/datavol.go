@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"slices"
 	"strings"
 
 	"github.com/amakhov/k0smos/internal/blkid"
@@ -43,6 +44,9 @@ type Options struct {
 	FSType string
 	// MountPoint is where it goes, normally /var/lib/k0s.
 	MountPoint string
+	// Exclude lists /dev paths "auto" must never pick: blank disks that
+	// cloud-init's fs_setup has named for something else.
+	Exclude []string
 }
 
 // Result reports what happened.
@@ -142,7 +146,11 @@ func Extra(v Volume, formats []Format, mounts []Mount) ([]string, error) {
 		case err != nil:
 			errs = append(errs, fmt.Errorf("fs_setup %s: %w", f.Device, err))
 		case formatted:
-			done = append(done, fmt.Sprintf("formatted %s as %s, LABEL=%s", f.Device, f.FSType, f.Label))
+			line := fmt.Sprintf("formatted %s as %s", f.Device, f.FSType)
+			if f.Label != "" {
+				line += ", LABEL=" + f.Label
+			}
+			done = append(done, line)
 		}
 	}
 	for _, m := range mounts {
@@ -202,10 +210,13 @@ func selectDevice(v Volume, o Options) (string, error) {
 
 	// Otherwise look for a blank device. Anything with a filesystem is excluded,
 	// so the root and the cloud-init drive can never be selected.
-	candidates, err := blkid.Blank(v)
+	blank, err := blkid.Blank(v)
 	if err != nil {
 		return "", err
 	}
+	candidates := slices.DeleteFunc(blank, func(dev string) bool {
+		return slices.Contains(o.Exclude, "/dev/"+dev)
+	})
 	switch len(candidates) {
 	case 0:
 		return "", nil

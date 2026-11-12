@@ -60,20 +60,36 @@ func requireEmbeddedRoot(t *testing.T) {
 //
 // This is the configuration a KubeVirt VM uses with only a kernelBoot container and
 // no containerDisk, which is the default this repository now builds.
+//
+// It also carries a second blank disk that fs_setup formats and mounts below /srv,
+// as on KubeVirt with a disk attached for a workload. Two blank disks under
+// k0smos.data=auto, and a mount point on a read-only root, both broke that once.
 func TestEmbeddedEROFSRootBoots(t *testing.T) {
 	requireEROFSKernel(t)
 	requireEmbeddedRoot(t)
 	data := blankVolume(t, "erofs-data")
+	extra := blankVolume(t, "erofs-extra")
+	writeDisk(t, extra, nil)
+
+	// The cloud-init drive is vda, then the data volume and the extra disk.
+	iso := makeCidata(t, `#cloud-config
+fs_setup:
+  - {device: /dev/vdc, filesystem: ext4, label: e2e-extra}
+mounts:
+  - [LABEL=e2e-extra, /srv/extra]
+`, "")
 
 	// No Disk; ROOT=auto tells the direct-kernel runner not to force its normal
 	// initramfs-only mode, so PID1 selects the image it carries.
 	// Data at /var rather than /var/lib/k0s because kubelet writes /var/lib/kubelet,
 	// which a read-only root cannot serve.
 	v := boot(t, bootOpts{
-		Data: data,
-		Net:  "k0smos.ip=dhcp k0smos.dns=1.1.1.1 k0smos.data=auto",
-		Exec: execNoop,
-		Root: "auto",
+		Data:   data,
+		Disks:  []string{extra},
+		Cidata: iso,
+		Net:    "k0smos.ip=dhcp k0smos.dns=1.1.1.1 k0smos.data=auto",
+		Exec:   execNoop,
+		Root:   "auto",
 	})
 
 	v.waitFor(`attached /k0smos-root\.img at /dev/loop\d+`, bootTimeout)
@@ -82,8 +98,9 @@ func TestEmbeddedEROFSRootBoots(t *testing.T) {
 	v.waitFor(`mounted /dev/loop\d+ at /newroot read-only, switching root`, bootTimeout)
 	v.waitFor(`starting as PID1 \(switched-root=true\)`, bootTimeout)
 	// A read-only root cannot serve what k0s and cloud-init write to.
-	v.waitFor(`root is read-only; overlaid \[/etc /usr/libexec\] with tmpfs`, bootTimeout)
-	v.waitFor(`formatted and mounted data volume /dev/vd\w+ at /var`, bootTimeout)
+	v.waitFor(`root is read-only; overlaid \[/etc /usr/libexec /srv /mnt\] with tmpfs`, bootTimeout)
+	v.waitFor(`formatted and mounted data volume /dev/vdb at /var`, bootTimeout)
+	v.waitFor(`volumes: mounted LABEL=e2e-extra at /srv/extra`, bootTimeout)
 	v.waitFor(`supervising`, bootTimeout)
 
 	// Nothing may have tried and failed to write to the root. Every one of these was
