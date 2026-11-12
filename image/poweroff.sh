@@ -9,8 +9,13 @@ sock=${1:-dist/control.sock}
 cmd=${CMD:-poweroff}
 
 [ -S "$sock" ] || { echo "no control socket at $sock (is the guest running?)" >&2; exit 1; }
-# -w: nc reads until the guest closes the socket, and a guest that takes the
-# command without closing hangs the caller indefinitely. The reply is discarded
-# anyway, so there is nothing to wait for beyond the write.
-printf '%s\n' "$cmd" | nc -w 5 -U "$sock"
+# -w is nc's idle timeout, and it has to cover the guest not listening yet.
+# Until the guest opens its end of the port, QEMU leaves the command unread in
+# the socket, and if nc hangs up first the command goes with the connection.
+# Early in boot that gap is several seconds: a 5s timeout lost every poweroff
+# sent right after user-data was written (QEMU's trace showed the host connect
+# and disconnect with no read in between). The guest acks as soon as it reads
+# the command and then powers off, closing the socket, so in practice nc exits
+# well inside this; the bound is for a guest that never reads or never closes.
+printf '%s\n' "$cmd" | nc -w 60 -U "$sock"
 echo "sent $cmd to $sock"

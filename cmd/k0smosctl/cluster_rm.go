@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -42,23 +43,36 @@ It refuses to remove disks if a machine does not shut down within the timeout.`,
 				return err
 			}
 
+			// Every machine is asked at once and each request is held until that
+			// guest acks: one that has not opened its control port yet would lose
+			// a command that was written and dropped.
+			var (
+				wg   sync.WaitGroup
+				mu   sync.Mutex
+				errs []error
+			)
 			for _, machine := range state.Machines {
 				_, socket, metaPath, err := guestPaths(machine.Name)
 				if err != nil {
 					return err
 				}
 				meta, metaErr := loadMeta(metaPath)
-				if metaErr == nil && processRunning(meta.PID) {
-					conn, err := dial(socket, 5*time.Second)
-					if err != nil {
-						return fmt.Errorf("machine %q is running but does not accept a clean shutdown: %w", machine.Name, err)
-					}
-					_, err = fmt.Fprintf(conn, "%s\n", control.PowerOff.String())
-					conn.Close()
-					if err != nil {
-						return err
-					}
+				if metaErr != nil || !processRunning(meta.PID) {
+					continue
 				}
+				wg.Add(1)
+				go func(name, socket string) {
+					defer wg.Done()
+					if _, err := request(socket, control.PowerOff.String(), powerAckTimeout); err != nil {
+						mu.Lock()
+						errs = append(errs, fmt.Errorf("machine %q is running but did not accept a clean shutdown: %w", name, err))
+						mu.Unlock()
+					}
+				}(machine.Name, socket)
+			}
+			wg.Wait()
+			if err := errors.Join(errs...); err != nil {
+				return err
 			}
 
 			deadline := time.Now().Add(timeout)

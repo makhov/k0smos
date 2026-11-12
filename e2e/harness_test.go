@@ -346,8 +346,9 @@ func (v *vm) stop() {
 		// guest closes the connection. A guest that took the command without
 		// closing left cmd.Run() blocked for the whole 40m test budget, so the
 		// 90s guard below never ran and the run died at the Go test timeout
-		// with no useful output.
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// with no useful output. Longer than nc's own 60s, which is what gives a
+		// guest that has not opened its port yet the time to do so.
+		ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "bash", filepath.Join(v.root, "image", "poweroff.sh"), v.control)
 		cmd.Dir = v.root

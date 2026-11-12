@@ -50,6 +50,6 @@ afterwards.`,
 	f := cmd.Flags()
 	f.StringVar(&name, "name", defaultGuestName, "which guest")
 	f.StringVar(&socket, "socket", "", "control socket path, instead of resolving --name")
-	f.DurationVar(&timeout, "timeout", 5*time.Second, "how long to wait for the socket")
+	f.DurationVar(&timeout, "timeout", powerAckTimeout, "how long to wait for the guest to acknowledge")
 	return cmd
 }
