@@ -541,3 +541,17 @@ func TestParseLoadConf(t *testing.T) {
 		t.Errorf("ParseLoadConf = %q, want %q", got, want)
 	}
 }
+
+func TestCmdlineParams(t *testing.T) {
+	cmdline := "BOOT_IMAGE=/boot/vmlinuz console=ttyS0 kvm-amd.nested=1 kvm_amd.avic=1 kvm.ignore_msrs nvidia.NVreg_EnableGpuFirmware=1 k0smos.ip=dhcp root=LABEL=x.y -- kvm_amd.npt=0"
+	for module, want := range map[string]string{
+		"kvm_amd": "nested=1 avic=1",
+		"kvm":     "ignore_msrs",
+		"nvidia":  "NVreg_EnableGpuFirmware=1",
+		"virtio":  "",
+	} {
+		if got := CmdlineParams(cmdline, module); got != want {
+			t.Errorf("%s: got %q, want %q", module, got, want)
+		}
+	}
+}

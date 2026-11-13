@@ -19,6 +19,34 @@ type Loader interface {
 	InitModule(image []byte, params string) error
 }
 
+// ParamSource is implemented by a Loader that has options for modules, as
+// modprobe has from the kernel command line.
+type ParamSource interface {
+	ModuleParams(module string) string
+}
+
+// CmdlineParams returns module's options from a kernel command line, as the
+// space-separated param=value list init_module takes: "kvm_amd.nested=1" gives
+// kvm_amd "nested=1". The kernel applies these itself only to built-in code;
+// for a loadable module it is the loader's job, which is modprobe's elsewhere.
+//
+// shortcut: quoted values containing spaces are not supported; none of the
+// usual module options need them.
+func CmdlineParams(cmdline, module string) string {
+	var out []string
+	for _, f := range strings.Fields(cmdline) {
+		if f == "--" { // the rest is init's
+			break
+		}
+		mod, param, ok := strings.Cut(f, ".")
+		if !ok || canonical(mod) != module || param == "" || strings.Contains(mod, "=") {
+			continue
+		}
+		out = append(out, param)
+	}
+	return strings.Join(out, " ")
+}
+
 // Default is the module set a k0s node needs on a stock kernel. Modules absent
 // from the kernel are skipped, so this list is safe on a monolithic kernel too.
 var Default = []string{
@@ -335,7 +363,11 @@ func (r *resolver) load(name string) {
 	// driver whose hardware is absent. One image boots many machines, so that is
 	// expected, not a failure -- but it is reported, since the same errno is how
 	// kvm_amd says SVM is disabled in firmware.
-	err = r.l.InitModule(image, "")
+	params := ""
+	if p, ok := r.l.(ParamSource); ok {
+		params = p.ModuleParams(key)
+	}
+	err = r.l.InitModule(image, params)
 	if errors.Is(err, syscall.ENODEV) || errors.Is(err, syscall.EOPNOTSUPP) {
 		r.absent[key] = true
 		r.refused = append(r.refused, fmt.Sprintf("%s (%v)", key, err))

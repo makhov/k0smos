@@ -742,6 +742,16 @@ func carryFirmware(s *sys.Sys) {
 	logf("carried %s from the initramfs to the new root", firmwareDir)
 }
 
+// paramLoader gives modules their options from the kernel command line.
+type paramLoader struct {
+	*sys.Sys
+	cmdline string
+}
+
+func (l paramLoader) ModuleParams(name string) string {
+	return module.CmdlineParams(l.cmdline, name)
+}
+
 // imageModules returns the modules the image names in module.LoadDir, in file
 // name order. They add to the configured set rather than replace it: they come
 // with drivers the image carries, so a k0smos.modules= list written for the
@@ -841,7 +851,7 @@ func loadModules(s *sys.Sys, cfg config.Config) error {
 	base := "/lib/modules/" + release
 	// The named set plus whatever the hardware asks for. Both in one call so a
 	// driver found twice is counted once — see module.LoadAll.
-	res, err := module.LoadAll(s, base, names, s.Modaliases)
+	res, err := module.LoadAll(paramLoader{s, readCmdline(cmdlinePath)}, base, names, s.Modaliases)
 	if err != nil {
 		// Individual failures are collected rather than fatal: one undriveable
 		// device or one bad module must not cost the machine the others.

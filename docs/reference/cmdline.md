@@ -55,3 +55,8 @@ An image that carries extra drivers names the modules no device asks for in
 `/etc/modules-load.d/*.conf` in its initramfs (the `modules-load.d(5)` format):
 the NVIDIA image lists `nvidia_uvm` there. Those load alongside the built-in set
 or a `k0smos.modules=` list, and not at all with `k0smos.modules=none`.
+
+Module options come from the command line as `module.param=value`, as modprobe
+takes them elsewhere: `kvm_amd.nested=1` loads `kvm_amd` with `nested=1`. Every
+other argument -- `hugepagesz=2M hugepages=512`, `spec_rstack_overflow=safe-ret`
+-- is the kernel's own and needs nothing from k0smos.
