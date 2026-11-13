@@ -12,6 +12,9 @@ ARCH=x86_64 make metal-nvidia NVIDIA_VERSION=580.196.07  # R580
 The output is `dist/k0smos-metal-nvidia-<version>-x86_64.qcow2`. It boots a
 machine without a GPU like the plain metal image does.
 
+For KubeVirt, `ARCH=x86_64 make oci-nvidia NVIDIA_VERSION=...` builds the
+`kernelBoot` image `k0smos:<tag>-nvidia-<version>` (see [below](#kubevirt)).
+
 ## What the image provides
 
 The image takes the place of the GPU Operator's driver container:
@@ -52,3 +55,44 @@ helm install gpu-operator nvidia/gpu-operator -n gpu-operator --create-namespace
 `hostPaths.driverInstallDir` keeps its default, `/run/nvidia/driver`, which is
 where k0smos mounts the driver. `/etc` is rebuilt at each boot, and the toolkit
 writes its containerd file again whenever its pod starts.
+
+## KubeVirt
+
+The usual KubeVirt image boots Kata's kernel, which cannot load modules, so GPU
+VMs use `k0smos:<tag>-nvidia-<version>`: the metal kernel, an initramfs with the
+modules, firmware and root, and the driver root at `/disk/k0smos.img`. The same
+image is the `kernelBoot` container and a `containerDisk`:
+
+```yaml
+spec:
+  domain:
+    firmware:
+      bootloader:
+        efi:
+          secureBoot: false # the kernel and modules are not signed
+      kernelBoot:
+        container:
+          image: ghcr.io/amakhov/k0smos:dev-nvidia-620.70.06
+          kernelPath: /boot/vmlinuz
+          initrdPath: /boot/initramfs.gz
+        kernelArgs: "console=ttyS0 k0smos.ip=dhcp k0smos.data=auto"
+    devices:
+      disks:
+        - name: nvidia-driver
+          disk: {bus: virtio}
+        - name: data
+          disk: {bus: virtio}
+      gpus:
+        - name: gpu0
+          deviceName: nvidia.com/GH100_H100_SXM5_80GB # as permittedHostDevices names it
+  volumes:
+    - name: nvidia-driver
+      containerDisk:
+        image: ghcr.io/amakhov/k0smos:dev-nvidia-620.70.06
+    - name: data
+      emptyDisk:
+        capacity: 100Gi
+```
+
+EFI rather than BIOS because H100, H200 and B200 have memory windows larger
+than BIOS maps.

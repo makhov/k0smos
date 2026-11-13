@@ -6,7 +6,7 @@ TARGET_APKARCH := $(if $(filter arm64 aarch64,$(TARGET_MACHINE)),aarch64,x86_64)
 # a host build on macOS would just produce the "linux only" stub.
 GO_BUILD := GOOS=linux GOARCH=$(TARGET_GOARCH) CGO_ENABLED=0 go build -ldflags '-extldflags "-static"'
 
-.PHONY: build ctl test vet kernel kernel-alpine kernel-metal k0s firecracker initramfs root rootfs disk artifacts verify-artifacts metal metal-nvidia e2e-artifacts boot smoke oci e2e e2e-full accept clean-dist
+.PHONY: build ctl test vet kernel kernel-alpine kernel-metal k0s firecracker initramfs root rootfs disk artifacts verify-artifacts metal metal-nvidia oci-nvidia e2e-artifacts boot smoke oci e2e e2e-full accept clean-dist
 build:
 	$(GO_BUILD) -o $(BIN) ./cmd/k0smos
 
@@ -127,6 +127,27 @@ metal-nvidia: kernel-metal k0s root
 	METAL_WORK_DIR=dist/metal-nvidia-$(NVIDIA_VERSION) \
 	METAL_OUTPUT=dist/k0smos-metal-nvidia-$(NVIDIA_VERSION)-x86_64.qcow2 \
 		./image/build-metal.sh
+
+# The KubeVirt kernelBoot image for GPU VMs. The metal kernel, because Kata's
+# cannot load modules; an initramfs with the NVIDIA overlay and the embedded root;
+# and the driver root as a containerDisk in the same image, found by its label.
+oci-nvidia: kernel-metal k0s root
+	@[ "$(TARGET_APKARCH)" = x86_64 ] || { echo "oci-nvidia is x86_64 only: ARCH=x86_64 make oci-nvidia" >&2; exit 1; }
+	NVIDIA_VERSION=$(NVIDIA_VERSION) ./image/fetch-nvidia.sh
+	ARCH=x86_64 \
+	MODULES_DIR=dist/kernel-metal/x86_64/lib/modules \
+	KERNEL_CONFIG=dist/kernel-metal/x86_64/config \
+	INITRAMFS_OVERLAY=dist/nvidia/$(NVIDIA_VERSION)/x86_64 \
+	EMBED_ROOT=dist/k0smos.erofs \
+		./image/mkinitramfs.sh dist/oci-nvidia-$(NVIDIA_VERSION)/initramfs.gz
+	ARCH=x86_64 KERNEL=$(CURDIR)/dist/kernel-metal/x86_64/vmlinuz \
+	INITRAMFS=$(CURDIR)/dist/oci-nvidia-$(NVIDIA_VERSION)/initramfs.gz \
+		./image/verify-artifacts.sh
+	ARCH=x86_64 KERNEL=dist/kernel-metal/x86_64/vmlinuz \
+	INITRAMFS=dist/oci-nvidia-$(NVIDIA_VERSION)/initramfs.gz \
+	IMG=dist/nvidia/$(NVIDIA_VERSION)/driver-x86_64.erofs \
+	TAG=$(or $(TAG),dev)-nvidia-$(NVIDIA_VERSION) \
+		./image/mkoci.sh
 
 # Everything the e2e suite boots: the default node, plus the ext4 disk most of the
 # tests switch onto. No kernel prerequisite, so a caller can choose one first — CI
