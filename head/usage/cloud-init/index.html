@@ -495,6 +495,15 @@ You are not viewing the documentation for the current stable release of k0smos.
 </li>
         
           <li class="md-nav__item">
+  <a href="#kernel-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      Kernel arguments
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#network-config" class="md-nav__link">
     <span class="md-ellipsis">
       network-config
@@ -657,6 +666,29 @@ You are not viewing the documentation for the current stable release of k0smos.
   
   <span class="md-ellipsis">
     Bare metal and Metal3
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/gpus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    NVIDIA GPUs
     
   </span>
   
@@ -986,6 +1018,15 @@ You are not viewing the documentation for the current stable release of k0smos.
 </li>
         
           <li class="md-nav__item">
+  <a href="#kernel-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      Kernel arguments
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#network-config" class="md-nav__link">
     <span class="md-ellipsis">
       network-config
@@ -1102,6 +1143,21 @@ cloud-config sets machine networking:</p>
 <span class="w">  </span><span class="nt">dns</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10.20.0.53</span>
 </code></pre></div>
 <p>Values supplied here override the corresponding kernel command-line fields.</p>
+<h3 id="kernel-arguments">Kernel arguments<a class="headerlink" href="#kernel-arguments" title="Permanent link">#</a></h3>
+<p><code>k0smos.kernel_args</code> adds arguments to the kernel command line of a machine
+booted from the metal image, which boots through GRUB:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">#cloud-config</span>
+<span class="nt">k0smos</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">kernel_args</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;hugepagesz=2M</span><span class="nv"> </span><span class="s">hugepages=512</span><span class="nv"> </span><span class="s">spec_rstack_overflow=safe-ret</span><span class="nv"> </span><span class="s">kvm_amd.nested=1&quot;</span>
+</code></pre></div>
+<p>The kernel has already started when cloud-init is read. So on the first boot
+with new arguments, k0smos stores them in a GRUB environment block on the data
+volume (<code>/var/lib/k0smos/grubenv</code>) and reboots once. GRUB adds them after the
+image's own arguments. Leaving <code>kernel_args</code> out keeps whatever was stored, and
+<code>kernel_args: ""</code> clears it.</p>
+<p>A machine booted without the metal image's GRUB -- KubeVirt <code>kernelBoot</code>, or
+QEMU and libvirt booting the kernel directly -- takes its arguments where its
+kernel is booted: <code>kernelArgs</code>, <code>-append</code> or <code>&lt;cmdline&gt;</code>.</p>
 <h3 id="network-config"><code>network-config</code><a class="headerlink" href="#network-config" title="Permanent link">#</a></h3>
 <p>A NoCloud drive's <code>network-config</code> file, as <code>cloud-localds -N</code> writes it, configures interfaces in netplan's version 2
 format, with or without a top-level <code>network:</code> key:</p>

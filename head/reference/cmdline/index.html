@@ -536,6 +536,29 @@ You are not viewing the documentation for the current stable release of k0smos.
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/gpus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    NVIDIA GPUs
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1009,6 +1032,10 @@ list is safe on a monolithic kernel.</p>
 <code>/etc/modules-load.d/*.conf</code> in its initramfs (the <code>modules-load.d(5)</code> format):
 the NVIDIA image lists <code>nvidia_uvm</code> there. Those load alongside the built-in set
 or a <code>k0smos.modules=</code> list, and not at all with <code>k0smos.modules=none</code>.</p>
+<p>Module options come from the command line as <code>module.param=value</code>, as modprobe
+takes them elsewhere: <code>kvm_amd.nested=1</code> loads <code>kvm_amd</code> with <code>nested=1</code>. Every
+other argument -- <code>hugepagesz=2M hugepages=512</code>, <code>spec_rstack_overflow=safe-ret</code>
+-- is the kernel's own and needs nothing from k0smos.</p>
 
 
 
