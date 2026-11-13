@@ -27,9 +27,12 @@ qcow2=${METAL_OUTPUT:-dist/k0smos-metal-$apkarch.qcow2}
   exit 1
 }
 
+# METAL_OVERLAY adds drivers that do not come with the kernel: a tree laid over
+# the initramfs, as fetch-nvidia.sh builds.
 ARCH=$arch \
 MODULES_DIR=dist/kernel-metal/$apkarch/lib/modules \
 KERNEL_CONFIG=dist/kernel-metal/$apkarch/config \
+INITRAMFS_OVERLAY=${METAL_OVERLAY:-} \
 EMBED_ROOT=none \
   "$here/mkinitramfs.sh" "$initramfs"
 

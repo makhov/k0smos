@@ -6,7 +6,7 @@ TARGET_APKARCH := $(if $(filter arm64 aarch64,$(TARGET_MACHINE)),aarch64,x86_64)
 # a host build on macOS would just produce the "linux only" stub.
 GO_BUILD := GOOS=linux GOARCH=$(TARGET_GOARCH) CGO_ENABLED=0 go build -ldflags '-extldflags "-static"'
 
-.PHONY: build ctl test vet kernel kernel-alpine kernel-metal k0s firecracker initramfs root rootfs disk artifacts verify-artifacts metal e2e-artifacts boot smoke oci e2e e2e-full accept clean-dist
+.PHONY: build ctl test vet kernel kernel-alpine kernel-metal k0s firecracker initramfs root rootfs disk artifacts verify-artifacts metal metal-nvidia e2e-artifacts boot smoke oci e2e e2e-full accept clean-dist
 build:
 	$(GO_BUILD) -o $(BIN) ./cmd/k0smos
 
@@ -112,6 +112,20 @@ verify-artifacts: artifacts
 # GPT disk first, but only the bootable qcow2 is the product users consume.
 metal: kernel-metal k0s root
 	./image/build-metal.sh
+
+# The metal image with NVIDIA's data center driver, for H100/H200/B200 GPUs:
+# NVIDIA_VERSION picks the long-term support branch, R620 or R580 (see
+# image/fetch-nvidia.sh for the pinned releases). x86_64 only. The driver goes
+# into the initramfs; the root is the same canonical image as everywhere else.
+NVIDIA_VERSION ?= 620.70.06
+metal-nvidia: kernel-metal k0s root
+	@[ "$(TARGET_APKARCH)" = x86_64 ] || { echo "metal-nvidia is x86_64 only: ARCH=x86_64 make metal-nvidia" >&2; exit 1; }
+	NVIDIA_VERSION=$(NVIDIA_VERSION) ./image/fetch-nvidia.sh
+	ARCH=x86_64 \
+	METAL_OVERLAY=dist/nvidia/$(NVIDIA_VERSION)/x86_64 \
+	METAL_WORK_DIR=dist/metal-nvidia-$(NVIDIA_VERSION) \
+	METAL_OUTPUT=dist/k0smos-metal-nvidia-$(NVIDIA_VERSION)-x86_64.qcow2 \
+		./image/build-metal.sh
 
 # Everything the e2e suite boots: the default node, plus the ext4 disk most of the
 # tests switch onto. No kernel prerequisite, so a caller can choose one first — CI

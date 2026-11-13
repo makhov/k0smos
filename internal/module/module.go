@@ -270,6 +270,7 @@ func newResolver(l Loader, base string) (*resolver, error) {
 		alias:  exact,
 		device: device,
 		done:   map[string]bool{},
+		absent: map[string]bool{},
 	}, nil
 }
 
@@ -286,6 +287,7 @@ type resolver struct {
 	alias   map[string]string   // exact alias, as written -> module
 	device  []aliasEntry        // modalias glob -> module
 	done    map[string]bool
+	absent  map[string]bool // refused as not for this machine
 	loaded  int
 	errs    []error
 	refused []string // see Result.NotForThisMachine
@@ -309,6 +311,14 @@ func (r *resolver) load(name string) {
 	}
 	for _, dep := range r.deps[key].deps {
 		r.load(dep)
+		// A module whose dependency is not for this machine is not either:
+		// nvidia_uvm on a machine without a GPU would otherwise fail on the
+		// symbols nvidia never got to export.
+		if r.absent[r.resolve(dep)] {
+			r.absent[key] = true
+			r.refused = append(r.refused, fmt.Sprintf("%s (needs %s)", key, r.resolve(dep)))
+			return
+		}
 	}
 
 	image, err := r.l.ReadFile(path.Join(r.base, r.deps[key].path))
@@ -327,6 +337,7 @@ func (r *resolver) load(name string) {
 	// kvm_amd says SVM is disabled in firmware.
 	err = r.l.InitModule(image, "")
 	if errors.Is(err, syscall.ENODEV) || errors.Is(err, syscall.EOPNOTSUPP) {
+		r.absent[key] = true
 		r.refused = append(r.refused, fmt.Sprintf("%s (%v)", key, err))
 		return
 	}
@@ -523,4 +534,25 @@ func decompress(image []byte) ([]byte, error) {
 	}
 	defer r.Close()
 	return io.ReadAll(r)
+}
+
+// LoadDir is where an image names modules to load beyond Default, one file per
+// driver bundle, in the modules-load.d(5) format. It is for modules no device
+// asks for: nvidia autoloads by the GPU's PCI id, but nvidia_uvm, which CUDA
+// needs, matches nothing. The files live in the initramfs, next to the modules
+// they name, so the binary and the canonical root know nothing of the driver.
+const LoadDir = "/etc/modules-load.d"
+
+// ParseLoadConf returns the module names in a modules-load.d file: one per
+// line, with blank lines and lines starting with '#' or ';' ignored.
+func ParseLoadConf(data []byte) []string {
+	var names []string
+	for line := range strings.Lines(string(data)) {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] == '#' || line[0] == ';' {
+			continue
+		}
+		names = append(names, line)
+	}
+	return names
 }
