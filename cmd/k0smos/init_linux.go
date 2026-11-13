@@ -28,6 +28,7 @@ import (
 	"github.com/amakhov/k0smos/internal/module"
 	"github.com/amakhov/k0smos/internal/mount"
 	knet "github.com/amakhov/k0smos/internal/net"
+	"github.com/amakhov/k0smos/internal/nvidia"
 	"github.com/amakhov/k0smos/internal/power"
 	"github.com/amakhov/k0smos/internal/reaper"
 	"github.com/amakhov/k0smos/internal/shutdown"
@@ -765,6 +766,58 @@ func imageModules() []string {
 	return names
 }
 
+// nvidiaDeviceNodes creates /dev/nvidia* for the GPUs the driver found. 0666
+// like nvidia-modprobe's default: which pods get a GPU is the device plugin's
+// decision, made by what it mounts into them. Nothing to do without a GPU.
+func nvidiaDeviceNodes() {
+	nodes, err := nvidia.Nodes("/proc")
+	if err != nil {
+		logf("warn: NVIDIA device nodes: %v", err)
+		return
+	}
+	for _, n := range nodes {
+		err := unix.Mknod(n.Path, unix.S_IFCHR|0o666, int(unix.Mkdev(n.Major, n.Minor)))
+		if err != nil && !errors.Is(err, unix.EEXIST) {
+			logf("warn: mknod %s: %v", n.Path, err)
+			continue
+		}
+		if err := os.Chmod(n.Path, 0o666); err != nil { // mknod's mode is masked by the umask
+			logf("warn: chmod %s: %v", n.Path, err)
+		}
+	}
+	if len(nodes) > 0 {
+		logf("created %d NVIDIA device nodes", len(nodes))
+	}
+}
+
+// The NVIDIA driver's user-space half -- libcuda, NVML, nvidia-smi and the
+// glibc they need -- as a self-contained root on its own erofs partition. Its
+// version has to match the kernel module exactly, so it ships with the image
+// rather than with the GPU Operator. Mounted where the operator's own driver
+// container would put it, which is the operator's default driverInstallDir.
+const (
+	nvidiaDriverSpec = "LABEL=k0smos-nvidia"
+	nvidiaDriverRoot = "/run/nvidia/driver"
+)
+
+func mountNvidiaDriver(s *sys.Sys) {
+	dev, err := blkid.Resolve(s, nvidiaDriverSpec)
+	if err != nil {
+		return // not a GPU image
+	}
+	if err := s.MkdirAll(nvidiaDriverRoot, 0o755); err != nil {
+		logf("warn: mkdir %s: %v", nvidiaDriverRoot, err)
+		return
+	}
+	if err := s.Mount(dev, nvidiaDriverRoot, "erofs", msReadOnly, ""); err != nil {
+		logf("warn: mount the NVIDIA driver %s at %s: %v", dev, nvidiaDriverRoot, err)
+		step("nvidia", err, "")
+		return
+	}
+	logf("mounted the NVIDIA driver %s at %s", dev, nvidiaDriverRoot)
+	step("nvidia", nil, dev)
+}
+
 // loadModules loads the configured kernel modules from the running kernel's
 // /lib/modules directory.
 func loadModules(s *sys.Sys, cfg config.Config) error {
@@ -869,6 +922,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 			logf("warn: chmod %s: %v", dev, err)
 		}
 	}
+	nvidiaDeviceNodes()
 
 	// configfs and hugetlbfs come after the modules that provide them, and are
 	// never fatal: a kernel built without either must still boot a plain k0s
@@ -915,6 +969,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 			logf("root is read-only; overlaid %v with tmpfs", mount.WritablePaths)
 		}
 	}
+	mountNvidiaDriver(s)
 
 	// Metadata is local block-device input, so it does not need networking. Read
 	// it before configuring interfaces: a platform artifact has one immutable

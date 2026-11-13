@@ -48,6 +48,7 @@ if [ ${#missing[@]} -gt 0 ] && [ "${K0SMOS_METAL_CONTAINER:-0}" != 1 ]; then
     -e ARCH="$arch" -e KERNEL="$kernel" -e INITRAMFS="$initramfs" \
     -e ROOTFS_IMAGE="$rootfs" -e METAL_QCOW2="$qcow2" \
     -e METAL_DATA_MB="${METAL_DATA_MB:-}" -e METAL_KERNEL_ARGS="${METAL_KERNEL_ARGS:-}" \
+    -e DRIVER_IMAGE="${DRIVER_IMAGE:-}" \
     -e K0SMOS_METAL_CONTAINER=1 -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
     -v "$repo:/repo" -w /repo "$tag" bash image/mkmetal.sh "$raw"
 fi
@@ -56,7 +57,10 @@ if [ ${#missing[@]} -gt 0 ]; then
   exit 1
 fi
 
-for artifact in "$kernel" "$initramfs" "$rootfs"; do
+# Optional: a read-only image for a partition of its own, such as the NVIDIA
+# driver root (fetch-nvidia.sh), which k0smos finds by its filesystem label.
+driver=${DRIVER_IMAGE:-}
+for artifact in "$kernel" "$initramfs" "$rootfs" ${driver:+"$driver"}; do
   [ -s "$artifact" ] || { echo "missing or empty artifact: $artifact" >&2; exit 1; }
 done
 
@@ -74,7 +78,13 @@ root_bytes=$(wc -c < "$rootfs" | tr -d ' ')
 root_sectors=$(((root_bytes + sector_size - 1) / sector_size))
 root_sectors=$((((root_sectors + alignment - 1) / alignment) * alignment))
 root_start=$((esp_start + esp_sectors))
-data_start=$((root_start + root_sectors))
+driver_start=$((root_start + root_sectors))
+driver_sectors=0
+if [ -n "$driver" ]; then
+  driver_sectors=$((($(wc -c < "$driver" | tr -d ' ') + sector_size - 1) / sector_size))
+  driver_sectors=$((((driver_sectors + alignment - 1) / alignment) * alignment))
+fi
+data_start=$((driver_start + driver_sectors))
 data_sectors=$((data_mb * 1024 * 1024 / sector_size))
 data_end=$((data_start + data_sectors - 1))
 # Room for the backup GPT plus an alignment-sized tail.
@@ -119,6 +129,11 @@ mkfs.ext4 -q -F -L k0smos-data \
 # /var grow into a bigger disk.
 bios_start=34
 bios_end=$((esp_start - 1))
+driver_part=()
+if [ -n "$driver" ]; then
+  driver_part=(--new=5:${driver_start}:$((data_start - 1)) --typecode=5:8300 --change-name=5:K0SMOS-DRIVER
+    --partition-guid=5:c0dec0de-0000-4000-8000-000000000015)
+fi
 bios_part=()
 if $bios; then
   bios_part=(--set-alignment=1 --new=4:${bios_start}:${bios_end} --typecode=4:ef02
@@ -131,16 +146,19 @@ sgdisk --clear \
   --disk-guid=c0dec0de-0000-4000-8000-000000000010 \
   --new=1:${esp_start}:$((root_start - 1)) --typecode=1:ef00 --change-name=1:K0SMOS-BOOT \
   --partition-guid=1:c0dec0de-0000-4000-8000-000000000011 \
-  --new=2:${root_start}:$((data_start - 1)) --typecode=2:8300 --change-name=2:K0SMOS-ROOT \
+  --new=2:${root_start}:$((driver_start - 1)) --typecode=2:8300 --change-name=2:K0SMOS-ROOT \
   --partition-guid=2:c0dec0de-0000-4000-8000-000000000012 \
   --new=3:${data_start}:${data_end} --typecode=3:8300 --change-name=3:K0SMOS-DATA \
   --partition-guid=3:c0dec0de-0000-4000-8000-000000000013 \
-  "${bios_part[@]}" \
+  "${bios_part[@]}" "${driver_part[@]}" \
   "$raw" >/dev/null
 
 dd if="$esp" of="$raw" bs=$sector_size seek=$esp_start conv=notrunc,sparse status=none
 dd if="$rootfs" of="$raw" bs=$sector_size seek=$root_start conv=notrunc,sparse status=none
 dd if="$data" of="$raw" bs=$sector_size seek=$data_start conv=notrunc,sparse status=none
+if [ -n "$driver" ]; then
+  dd if="$driver" of="$raw" bs=$sector_size seek=$driver_start conv=notrunc,sparse status=none
+fi
 
 # GRUB for BIOS, installed by hand rather than by grub-bios-setup, which probes
 # the build host's own mounts and fails in a container. The steps are the ones

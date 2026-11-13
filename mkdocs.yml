@@ -17,6 +17,7 @@ nav:
       - Artifacts and releases: deployment/artifacts.md
       - KubeVirt and Cluster API: deployment/kubevirt.md
       - Bare metal and Metal3: deployment/bare-metal.md
+      - NVIDIA GPUs: deployment/gpus.md
   - Operate: deployment/operating.md
   - Limits: known-limitations.md
   - Troubleshooting: troubleshooting.md

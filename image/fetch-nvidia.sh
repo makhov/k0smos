@@ -7,14 +7,22 @@
 #   lib/firmware/nvidia/<version>/       GSP firmware and ucodes
 #   etc/modules-load.d/nvidia.conf       nvidia_uvm, which no device asks for
 #
+# and next to it, outside the overlay, driver-<arch>.erofs: the user-space
+# driver, a root of its own (see below).
+#
 # build-metal.sh lays it over the initramfs (METAL_OVERLAY). Everything goes
 # there, not into the root: the modules belong to one exact kernel like every
 # other module, and the canonical root stays the same for every platform.
 # k0smos carries the firmware onto the root at switch_root, because the driver
 # reads it when it first initialises the GPU, long after.
 #
+# driver-<arch>.erofs is what the GPU Operator's driver container would otherwise
+# provide: libcuda, NVML, nvidia-smi and the glibc they run on, laid out like a
+# glibc distro with its own ld.so.cache. mkmetal.sh gives it a partition and
+# k0smos mounts it at /run/nvidia/driver, the operator's driverInstallDir.
+#
 # Everything comes from one NVIDIA package per version, pinned by digest: the
-# open module sources, the firmware and, later, the user-space libraries are
+# open module sources, the firmware and the user-space libraries are
 # then guaranteed to be the same release. The modules match one kernel build
 # exactly, so this refuses a kernel tree that is not the one Alpine's headers
 # describe -- re-run 'make kernel-metal' when Alpine's linux-lts moves on.
@@ -30,6 +38,7 @@ version=${NVIDIA_VERSION:?set NVIDIA_VERSION, e.g. 620.70.06 or 580.196.07}
 arch=x86_64
 kernel_dir=${KERNEL_DIR:-dist/kernel-metal/$arch}
 out=dist/nvidia/$version/$arch
+driver=dist/nvidia/$version/driver-$arch.erofs
 
 # NVIDIA's data center packages: the R580 and R620 long-term support branches.
 case "$version" in
@@ -56,6 +65,7 @@ mkdir -p "$out"
 
 docker run --rm --platform linux/amd64 -v "$repo:/repo" -w /repo \
   -e version="$version" -e release="$release" -e pkg="$pkg" -e out="$out" -e kernel_dir="$kernel_dir" \
+  -e owner="$(id -u):$(id -g)" \
   alpine:3.23 sh -euc '
 apk add -q --no-cache build-base linux-lts-dev perl kmod binutils >/dev/null
 headers=$(ls /usr/src | sed -n "s/^linux-headers-//p")
@@ -84,6 +94,50 @@ mkdir -p "$out/lib/modules/$release" "$out/lib/firmware/nvidia/$version" "$out/e
 cp -R /tmp/tree/lib/modules/$release/extra /tmp/tree/lib/modules/$release/modules.* "$out/lib/modules/$release/"
 cp /tmp/pkg/firmware/*.bin "$out/lib/firmware/nvidia/$version/"
 printf "# CUDA needs it, and no device asks for it: nvidia autoloads by PCI id.\nnvidia_uvm\n" >"$out/etc/modules-load.d/nvidia.conf"
+chown -R "$owner" "$out"
 '
 
-echo "built NVIDIA $version for $release: $(du -sh "$out/lib/modules/$release/extra/nvidia" | cut -f1) of modules, $(du -sh "$out/lib/firmware" | cut -f1) of firmware in $out"
+# The user-space driver, built on Debian for its glibc. Compute and utility
+# only -- what NVIDIA_DRIVER_CAPABILITIES=compute,utility mounts into a pod.
+# shortcut: no OpenCL, video (NVENC/NVDEC) or graphics libraries; add their
+# names below when a workload needs them.
+docker run --rm --platform linux/amd64 -v "$repo:/repo" -w /repo \
+  -e version="$version" -e pkg="$pkg" -e driver="$driver" -e owner="$(id -u):$(id -g)" \
+  debian:trixie-slim bash -euo pipefail -c '
+apt-get update -qq >/dev/null && apt-get install -qq -y --no-install-recommends erofs-utils libssl3t64 >/dev/null
+sh "$pkg" -x --target /tmp/pkg >/dev/null
+r=/tmp/driver lib=/tmp/driver/usr/lib/x86_64-linux-gnu
+mkdir -p "$lib" "$r/usr/bin" "$r/usr/sbin" "$r/usr/lib64" "$r/etc" "$r/proc" "$r/sys" "$r/dev" "$r/tmp" "$r/run"
+ln -s usr/lib "$r/lib"; ln -s usr/lib64 "$r/lib64"; ln -s usr/bin "$r/bin"; ln -s usr/sbin "$r/sbin"
+for f in /tmp/pkg/lib{cuda,cudadebugger,nvidia-ml,nvidia-cfg,nvidia-ptxjitcompiler,nvidia-nvvm,nvidia-nvvm70,nvidia-gpucomp,nvidia-allocator,nvidia-pkcs11-openssl3,nvidia-tileiras,nvidia-sandboxutils}.so.*; do
+  if [ -e "$f" ]; then cp "$f" "$lib/"; fi
+done
+for b in nvidia-smi nvidia-debugdump nvidia-persistenced nvidia-cuda-mps-control nvidia-cuda-mps-server; do
+  cp "/tmp/pkg/$b" "$r/usr/bin/"
+done
+# libnvidia-pkcs11 (confidential computing) only in its OpenSSL 3 build: 1.1 is
+# long gone from Debian. Soname links first, which the libraries link by.
+ldconfig -n "$lib"
+# glibc and whatever else they link against, from this Debian. The NVIDIA
+# libraries resolve among themselves through the root'"'"'s own path.
+for f in "$r"/usr/bin/* "$lib"/*; do
+  LD_LIBRARY_PATH=$lib ldd "$f" | awk "{for (i = 1; i <= NF; i++) if (\$i ~ /^\//) print \$i}"
+done | sort -u | while read -r dep; do
+  case "$dep" in "$r"/*) continue ;; esac
+  [ -e "$lib/${dep##*/}" ] || cp -L "$dep" "$lib/"
+done
+if LD_LIBRARY_PATH=$lib ldd "$r"/usr/bin/* "$lib"/* | grep "not found"; then exit 1; fi
+ln -s ../lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 "$r/usr/lib64/ld-linux-x86-64.so.2"
+# The toolkit runs this ldconfig (Debian'"'"'s is static) to update containers'"'"' caches.
+cp /sbin/ldconfig "$r/usr/sbin/ldconfig"
+echo /usr/lib/x86_64-linux-gnu > "$r/etc/ld.so.conf"
+ldconfig -r "$r"
+for f in "$lib"/libcuda.so.1 "$lib"/libnvidia-ml.so.1; do ln -s "${f##*/}" "${f%.1}"; done
+printf "NAME=k0smos-nvidia\nID=k0smos-nvidia\nVERSION_ID=%s\n" "$version" > "$r/etc/os-release"
+# Proves the root is complete: the binary starts on its own glibc, no GPU needed.
+chroot "$r" /usr/bin/nvidia-smi --help >/dev/null
+mkfs.erofs -zlz4hc -T0 --all-root -L k0smos-nvidia "$driver" "$r" >/dev/null
+chown "$owner" "$driver"
+'
+
+echo "built NVIDIA $version for $release: $(du -sh "$out/lib/modules/$release/extra/nvidia" | cut -f1) of modules, $(du -sh "$out/lib/firmware" | cut -f1) of firmware in $out, $(du -h "$driver" | cut -f1) driver root in $driver"
