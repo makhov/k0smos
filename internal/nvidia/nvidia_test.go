@@ -67,3 +67,21 @@ func TestNodesWithoutUVM(t *testing.T) {
 		t.Errorf("got %v, %v; want nvidia0 and nvidiactl", got, err)
 	}
 }
+
+// A GPU whose information file says nothing is reported, but the machine keeps
+// the GPUs that did answer -- and nvidiactl, without which none of them work.
+func TestNodesSkipsUnreadableGPU(t *testing.T) {
+	proc := t.TempDir()
+	write(t, filepath.Join(proc, "driver/nvidia/gpus/0000:18:00.0/information"), "Device Minor: 0\n")
+	write(t, filepath.Join(proc, "driver/nvidia/gpus/0000:2a:00.0/information"), "Model: NVIDIA H100 80GB HBM3\n")
+	write(t, filepath.Join(proc, "devices"), "Character devices:\n195 nvidia\n")
+
+	got, err := Nodes(proc)
+	if err == nil {
+		t.Error("want an error naming the GPU that could not be read")
+	}
+	want := []Node{{"/dev/nvidia0", 195, 0}, {"/dev/nvidiactl", 195, 255}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v\nwant %v", got, want)
+	}
+}

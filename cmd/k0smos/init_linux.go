@@ -863,9 +863,8 @@ func imageModules() []string {
 // decision, made by what it mounts into them. Nothing to do without a GPU.
 func nvidiaDeviceNodes() {
 	nodes, err := nvidia.Nodes("/proc")
-	if err != nil {
+	if err != nil { // a GPU that could not be read; the rest still get their nodes
 		logf("warn: NVIDIA device nodes: %v", err)
-		return
 	}
 	for _, n := range nodes {
 		err := unix.Mknod(n.Path, unix.S_IFCHR|0o666, int(unix.Mkdev(n.Major, n.Minor)))

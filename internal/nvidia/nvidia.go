@@ -5,6 +5,7 @@ package nvidia
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,6 +30,10 @@ const (
 // nvidia-uvm-tools when nvidia_uvm is loaded. Nothing, and no error, when
 // nvidia.ko is not loaded or found no GPU.
 //
+// A GPU that cannot be read is reported but does not stop the others: one card
+// off the bus must not cost the machine every GPU it has. So the nodes come
+// back alongside an error, and the caller creates what it was given.
+//
 // shortcut: no /dev/nvidia-caps nodes, so no MIG partitioning or IMEX; add
 // them from /proc/driver/nvidia/capabilities when MIG is wanted.
 func Nodes(proc string) ([]Node, error) {
@@ -40,26 +45,28 @@ func Nodes(proc string) ([]Node, error) {
 		return nil, err
 	}
 	var nodes []Node
+	var errs error
 	for _, g := range gpus {
 		minor, err := deviceMinor(filepath.Join(proc, "driver/nvidia/gpus", g.Name(), "information"))
 		if err != nil {
-			return nil, fmt.Errorf("GPU %s: %w", g.Name(), err)
+			errs = errors.Join(errs, fmt.Errorf("GPU %s: %w", g.Name(), err))
+			continue
 		}
 		nodes = append(nodes, Node{fmt.Sprintf("/dev/nvidia%d", minor), major, minor})
 	}
 	if len(nodes) == 0 {
-		return nil, nil
+		return nil, errs
 	}
 	nodes = append(nodes, Node{"/dev/nvidiactl", major, controlNode})
 
 	uvm, err := charMajor(filepath.Join(proc, "devices"), "nvidia-uvm")
 	if err != nil {
-		return nil, err
+		return nodes, errors.Join(errs, err)
 	}
 	if uvm != 0 {
 		nodes = append(nodes, Node{"/dev/nvidia-uvm", uvm, 0}, Node{"/dev/nvidia-uvm-tools", uvm, 1})
 	}
-	return nodes, nil
+	return nodes, errs
 }
 
 // deviceMinor reads the "Device Minor:" line of a GPU's information file.
