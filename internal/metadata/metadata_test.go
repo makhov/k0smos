@@ -311,3 +311,23 @@ mounts:
 		}
 	}
 }
+
+// nil leaves the stored arguments alone; "" is what clears them.
+func TestParseUserDataKernelArgs(t *testing.T) {
+	for doc, want := range map[string]*string{
+		"#cloud-config\nk0smos: {ip: dhcp}\n":                          nil,
+		"#cloud-config\nk0smos: {kernel_args: \"\"}\n":                 ptr(""),
+		"#cloud-config\nk0smos:\n  kernel_args: hugepages=512 a.b=1\n": ptr("hugepages=512 a.b=1"),
+	} {
+		ud, err := ParseUserData([]byte(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := ud.Machine.KernelArgs
+		if (got == nil) != (want == nil) || (got != nil && *got != *want) {
+			t.Errorf("%q: got %v, want %v", doc, got, want)
+		}
+	}
+}
+
+func ptr(s string) *string { return &s }

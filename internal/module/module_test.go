@@ -541,3 +541,59 @@ func TestParseLoadConf(t *testing.T) {
 		t.Errorf("ParseLoadConf = %q, want %q", got, want)
 	}
 }
+
+func TestCmdlineParams(t *testing.T) {
+	cmdline := "BOOT_IMAGE=/boot/vmlinuz console=ttyS0 kvm-amd.nested=1 kvm_amd.avic=1 kvm.ignore_msrs nvidia.NVreg_EnableGpuFirmware=1 k0smos.ip=dhcp root=LABEL=x.y -- kvm_amd.npt=0"
+	for module, want := range map[string]string{
+		"kvm_amd": "nested=1 avic=1",
+		"kvm":     "ignore_msrs",
+		"nvidia":  "NVreg_EnableGpuFirmware=1",
+		"virtio":  "",
+	} {
+		if got := CmdlineParams(cmdline, module); got != want {
+			t.Errorf("%s: got %q, want %q", module, got, want)
+		}
+	}
+}
+
+// fileLoader takes compressed modules by path, as finit_module does.
+type fileLoader struct {
+	*fakeLoader
+	files []string
+}
+
+func (f *fileLoader) FinitModule(path, params string) error {
+	f.files = append(f.files, path+" "+params)
+	return nil
+}
+
+// Debian's xz modules go to the kernel to decompress, with their options;
+// gzip ones are still undone here.
+func TestLoadHandsXZModulesToTheKernel(t *testing.T) {
+	f := &fileLoader{fakeLoader: newFake(t)}
+	f.fakeLoader.files["/lib/modules/test/modules.dep"] = []byte(depFile +
+		"kernel/arch/x86/kvm/kvm-amd.ko.xz: kernel/arch/x86/kvm/kvm.ko.xz\nkernel/arch/x86/kvm/kvm.ko.xz:\n")
+	if _, err := Load(paramFake{f}, "/lib/modules/test", []string{"kvm_amd", "ext4"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/lib/modules/test/kernel/arch/x86/kvm/kvm.ko.xz ", "/lib/modules/test/kernel/arch/x86/kvm/kvm-amd.ko.xz nested=1"}
+	if !slices.Equal(f.files, want) || !slices.Equal(f.loaded, []string{"ext4"}) {
+		t.Errorf("by path %q, by image %q", f.files, f.loaded)
+	}
+
+	// A loader that cannot is told so, rather than handed compressed bytes.
+	if _, err := Load(newFake(t), "/lib/modules/test", nil); err != nil {
+		t.Fatal(err)
+	}
+	g := newFake(t)
+	g.files["/lib/modules/test/modules.dep"] = []byte("kernel/kvm.ko.xz:\n")
+	if _, err := Load(g, "/lib/modules/test", []string{"kvm"}); err == nil || !strings.Contains(err.Error(), "finit_module") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+type paramFake struct{ *fileLoader }
+
+func (p paramFake) ModuleParams(name string) string {
+	return CmdlineParams("kvm_amd.nested=1", name)
+}

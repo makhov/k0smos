@@ -69,6 +69,27 @@ k0smos:
 
 Values supplied here override the corresponding kernel command-line fields.
 
+### Kernel arguments
+
+`k0smos.kernel_args` adds arguments to the kernel command line of a machine
+booted from the metal image, which boots through GRUB:
+
+```yaml
+#cloud-config
+k0smos:
+  kernel_args: "hugepagesz=2M hugepages=512 spec_rstack_overflow=safe-ret kvm_amd.nested=1"
+```
+
+The kernel has already started when cloud-init is read. So on the first boot
+with new arguments, k0smos stores them in a GRUB environment block on the data
+volume (`/var/lib/k0smos/grubenv`) and reboots once. GRUB adds them after the
+image's own arguments. Leaving `kernel_args` out keeps whatever was stored, and
+`kernel_args: ""` clears it.
+
+A machine booted without the metal image's GRUB -- KubeVirt `kernelBoot`, or
+QEMU and libvirt booting the kernel directly -- takes its arguments where its
+kernel is booted: `kernelArgs`, `-append` or `<cmdline>`.
+
 ### `network-config`
 
 A NoCloud drive's `network-config` file, as `cloud-localds -N` writes it, configures interfaces in netplan's version 2
