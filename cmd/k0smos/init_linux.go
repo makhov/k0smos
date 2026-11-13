@@ -23,11 +23,13 @@ import (
 	"github.com/amakhov/k0smos/internal/datavol"
 	"github.com/amakhov/k0smos/internal/dhcp"
 	"github.com/amakhov/k0smos/internal/etcd"
+	"github.com/amakhov/k0smos/internal/grubenv"
 	"github.com/amakhov/k0smos/internal/iso9660"
 	"github.com/amakhov/k0smos/internal/metadata"
 	"github.com/amakhov/k0smos/internal/module"
 	"github.com/amakhov/k0smos/internal/mount"
 	knet "github.com/amakhov/k0smos/internal/net"
+	"github.com/amakhov/k0smos/internal/nvidia"
 	"github.com/amakhov/k0smos/internal/power"
 	"github.com/amakhov/k0smos/internal/reaper"
 	"github.com/amakhov/k0smos/internal/shutdown"
@@ -741,6 +743,97 @@ func carryFirmware(s *sys.Sys) {
 	logf("carried %s from the initramfs to the new root", firmwareDir)
 }
 
+// GRUB's environment block on the data volume, which the metal image's
+// grub.cfg reads before it boots the kernel: the per-machine part of the
+// command line. On the data volume rather than the FAT boot partition, because
+// GRUB already reads ext4, and a write cut short there costs the arguments,
+// where one on the boot partition could cost the boot.
+const (
+	grubEnvPath   = "lib/k0smos/grubenv" // under the data volume, as grub.cfg names it
+	grubEnvKey    = "k0smos_kernel_args"
+	bootPartition = "LABEL=K0SMOSBOOT"
+)
+
+// kernelArgs stores cloud-init's k0smos.kernel_args where GRUB picks them up,
+// and reports whether they changed, so the machine must reboot to run with
+// them. It compares with what is stored, not with the running command line:
+// after the one reboot they match even if GRUB did not apply them, so a
+// machine never reboots twice for the same arguments.
+func kernelArgs(s *sys.Sys, cfg config.Config, want *string) bool {
+	if want == nil {
+		return false
+	}
+	args := strings.Join(strings.Fields(*want), " ")
+	if _, err := blkid.Resolve(s, bootPartition); err != nil {
+		logf("warn: kernel_args given, but this machine was not booted by the metal image's GRUB; set them where its kernel is booted")
+		return false
+	}
+	path := filepath.Join(cfg.DataDir, grubEnvPath)
+	old, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		logf("warn: kernel_args: %v", err)
+		return false
+	}
+	if cur, _ := grubenv.Get(old, grubEnvKey); cur == args {
+		if args != "" && !strings.Contains(" "+readCmdline(cmdlinePath)+" ", " "+args+" ") {
+			logf("warn: kernel_args %q are stored but not on this boot's command line; is the image's GRUB older than the setting?", args)
+		}
+		return false
+	}
+	block, err := grubenv.Encode(grubEnvKey, args)
+	if err == nil {
+		err = writeSynced(path, block)
+	}
+	if err != nil {
+		logf("warn: kernel_args: %v", err)
+		step("kernel-args", err, "")
+		return false
+	}
+	logf("stored kernel arguments %q for the next boot", args)
+	step("kernel-args", nil, args)
+	return true
+}
+
+// writeSynced replaces path atomically and durably: a reboot follows at once.
+func writeSynced(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".new"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		return err
+	}
+	if d, err := os.Open(filepath.Dir(path)); err == nil {
+		defer d.Close()
+		return d.Sync()
+	}
+	return nil
+}
+
+// paramLoader gives modules their options from the kernel command line.
+type paramLoader struct {
+	*sys.Sys
+	cmdline string
+}
+
+func (l paramLoader) ModuleParams(name string) string {
+	return module.CmdlineParams(l.cmdline, name)
+}
+
 // imageModules returns the modules the image names in module.LoadDir, in file
 // name order. They add to the configured set rather than replace it: they come
 // with drivers the image carries, so a k0smos.modules= list written for the
@@ -763,6 +856,57 @@ func imageModules() []string {
 		names = append(names, module.ParseLoadConf(data)...)
 	}
 	return names
+}
+
+// nvidiaDeviceNodes creates /dev/nvidia* for the GPUs the driver found. 0666
+// like nvidia-modprobe's default: which pods get a GPU is the device plugin's
+// decision, made by what it mounts into them. Nothing to do without a GPU.
+func nvidiaDeviceNodes() {
+	nodes, err := nvidia.Nodes("/proc")
+	if err != nil { // a GPU that could not be read; the rest still get their nodes
+		logf("warn: NVIDIA device nodes: %v", err)
+	}
+	for _, n := range nodes {
+		err := unix.Mknod(n.Path, unix.S_IFCHR|0o666, int(unix.Mkdev(n.Major, n.Minor)))
+		if err != nil && !errors.Is(err, unix.EEXIST) {
+			logf("warn: mknod %s: %v", n.Path, err)
+			continue
+		}
+		if err := os.Chmod(n.Path, 0o666); err != nil { // mknod's mode is masked by the umask
+			logf("warn: chmod %s: %v", n.Path, err)
+		}
+	}
+	if len(nodes) > 0 {
+		logf("created %d NVIDIA device nodes", len(nodes))
+	}
+}
+
+// The NVIDIA driver's user-space half -- libcuda, NVML, nvidia-smi and the
+// glibc they need -- as a self-contained root on its own erofs partition. Its
+// version has to match the kernel module exactly, so it ships with the image
+// rather than with the GPU Operator. Mounted where the operator's own driver
+// container would put it, which is the operator's default driverInstallDir.
+const (
+	nvidiaDriverSpec = "LABEL=k0smos-nvidia"
+	nvidiaDriverRoot = "/run/nvidia/driver"
+)
+
+func mountNvidiaDriver(s *sys.Sys) {
+	dev, err := blkid.Resolve(s, nvidiaDriverSpec)
+	if err != nil {
+		return // not a GPU image
+	}
+	if err := s.MkdirAll(nvidiaDriverRoot, 0o755); err != nil {
+		logf("warn: mkdir %s: %v", nvidiaDriverRoot, err)
+		return
+	}
+	if err := s.Mount(dev, nvidiaDriverRoot, "erofs", msReadOnly, ""); err != nil {
+		logf("warn: mount the NVIDIA driver %s at %s: %v", dev, nvidiaDriverRoot, err)
+		step("nvidia", err, "")
+		return
+	}
+	logf("mounted the NVIDIA driver %s at %s", dev, nvidiaDriverRoot)
+	step("nvidia", nil, dev)
 }
 
 // loadModules loads the configured kernel modules from the running kernel's
@@ -788,7 +932,7 @@ func loadModules(s *sys.Sys, cfg config.Config) error {
 	base := "/lib/modules/" + release
 	// The named set plus whatever the hardware asks for. Both in one call so a
 	// driver found twice is counted once — see module.LoadAll.
-	res, err := module.LoadAll(s, base, names, s.Modaliases)
+	res, err := module.LoadAll(paramLoader{s, readCmdline(cmdlinePath)}, base, names, s.Modaliases)
 	if err != nil {
 		// Individual failures are collected rather than fatal: one undriveable
 		// device or one bad module must not cost the machine the others.
@@ -869,6 +1013,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 			logf("warn: chmod %s: %v", dev, err)
 		}
 	}
+	nvidiaDeviceNodes()
 
 	// configfs and hugetlbfs come after the modules that provide them, and are
 	// never fatal: a kernel built without either must still boot a plain k0s
@@ -915,6 +1060,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 			logf("root is read-only; overlaid %v with tmpfs", mount.WritablePaths)
 		}
 	}
+	mountNvidiaDriver(s)
 
 	// Metadata is local block-device input, so it does not need networking. Read
 	// it before configuring interfaces: a platform artifact has one immutable
@@ -955,6 +1101,10 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		}
 		if err != nil {
 			logf("warn: grow data volume: %v", err)
+		}
+		if kernelArgs(s, cfg, userData.Machine.KernelArgs) {
+			logf("rebooting for the new kernel arguments")
+			return shutdown.Do(shutdownAdapter{s}, shutdown.Reboot)
 		}
 		// /opt is a symlink to /var/opt on a read-only root, so the target has to
 		// exist before containerd stages plugins into it.

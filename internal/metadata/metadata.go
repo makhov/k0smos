@@ -56,6 +56,10 @@ type MachineConfig struct {
 	Iface   string
 	Gateway string
 	DNS     string
+	// KernelArgs are added to the kernel command line of a machine booted by
+	// the metal image's GRUB. nil when not given, which leaves them as they
+	// are; "" clears them.
+	KernelArgs *string
 }
 
 // FSSetup is one entry of cloud-init's fs_setup: give a blank device a
@@ -113,10 +117,11 @@ type cloudConfig struct {
 	Mounts    [][]any `json:"mounts"`
 	DiskSetup any     `json:"disk_setup"`
 	K0smos    struct {
-		IP      string `json:"ip"`
-		Iface   string `json:"iface"`
-		Gateway string `json:"gateway"`
-		DNS     string `json:"dns"`
+		IP         string  `json:"ip"`
+		Iface      string  `json:"iface"`
+		Gateway    string  `json:"gateway"`
+		DNS        string  `json:"dns"`
+		KernelArgs *string `json:"kernel_args"`
 	} `json:"k0smos"`
 }
 
@@ -185,6 +190,7 @@ func ParseUserData(b []byte) (UserData, error) {
 	out.Machine = MachineConfig{
 		IP: cc.K0smos.IP, Iface: cc.K0smos.Iface,
 		Gateway: cc.K0smos.Gateway, DNS: cc.K0smos.DNS,
+		KernelArgs: cc.K0smos.KernelArgs,
 	}
 
 	out.FSSetup, out.Warnings = parseFSSetup(cc, out.Warnings)

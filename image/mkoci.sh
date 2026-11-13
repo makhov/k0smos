@@ -12,8 +12,9 @@
 # and root could be paired at mismatched versions — the skew k0smos reports at boot
 # as "kernel and modules are out of step". Neither is expressible now.
 #
-# IMG= still adds a root disk at /disk/k0smos.img, for booting from a disk rather
-# than carrying the root along.
+# IMG= adds a disk at /disk/k0smos.img, used as a containerDisk: a root disk, for
+# booting from a disk rather than carrying the root along, or the NVIDIA driver
+# root (make oci-nvidia), which k0smos finds by its label.
 #
 # FROM scratch: it carries data, not a runtime. Set PUSH=1 to push.
 set -euo pipefail

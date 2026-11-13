@@ -19,6 +19,62 @@ type Loader interface {
 	InitModule(image []byte, params string) error
 }
 
+// FileLoader is implemented by a Loader that can hand the kernel a module file
+// to decompress itself: finit_module(2) with MODULE_INIT_COMPRESSED_FILE. That
+// is how xz- and zstd-compressed modules -- Debian's, Ubuntu's -- are loaded.
+type FileLoader interface {
+	FinitModule(path, params string) error
+}
+
+// insert loads one module file. gzip, Alpine's compression, is undone here;
+// xz and zstd go to the kernel, which has decompressors for what its own
+// modules use, and this would otherwise need both.
+func (r *resolver) insert(file, params string) error {
+	if strings.HasSuffix(file, ".xz") || strings.HasSuffix(file, ".zst") {
+		fl, ok := r.l.(FileLoader)
+		if !ok {
+			return fmt.Errorf("%s: compressed modules need finit_module", file)
+		}
+		return fl.FinitModule(file, params)
+	}
+	image, err := r.l.ReadFile(file)
+	if err != nil {
+		return fmt.Errorf("read: %w", err)
+	}
+	if image, err = decompress(image); err != nil {
+		return fmt.Errorf("decompress: %w", err)
+	}
+	return r.l.InitModule(image, params)
+}
+
+// ParamSource is implemented by a Loader that has options for modules, as
+// modprobe has from the kernel command line.
+type ParamSource interface {
+	ModuleParams(module string) string
+}
+
+// CmdlineParams returns module's options from a kernel command line, as the
+// space-separated param=value list init_module takes: "kvm_amd.nested=1" gives
+// kvm_amd "nested=1". The kernel applies these itself only to built-in code;
+// for a loadable module it is the loader's job, which is modprobe's elsewhere.
+//
+// shortcut: quoted values containing spaces are not supported; none of the
+// usual module options need them.
+func CmdlineParams(cmdline, module string) string {
+	var out []string
+	for _, f := range strings.Fields(cmdline) {
+		if f == "--" { // the rest is init's
+			break
+		}
+		mod, param, ok := strings.Cut(f, ".")
+		if !ok || canonical(mod) != module || param == "" || strings.Contains(mod, "=") {
+			continue
+		}
+		out = append(out, param)
+	}
+	return strings.Join(out, " ")
+}
+
 // Default is the module set a k0s node needs on a stock kernel. Modules absent
 // from the kernel are skipped, so this list is safe on a monolithic kernel too.
 var Default = []string{
@@ -321,21 +377,17 @@ func (r *resolver) load(name string) {
 		}
 	}
 
-	image, err := r.l.ReadFile(path.Join(r.base, r.deps[key].path))
-	if err != nil {
-		r.errs = append(r.errs, fmt.Errorf("read module %s: %w", key, err))
-		return
-	}
-	if image, err = decompress(image); err != nil {
-		r.errs = append(r.errs, fmt.Errorf("decompress module %s: %w", key, err))
-		return
-	}
+	file := path.Join(r.base, r.deps[key].path)
 	// EEXIST means the kernel already has it — the desired end state either way.
 	// ENODEV and EOPNOTSUPP mean it is not for this machine: kvm_intel on AMD, a
 	// driver whose hardware is absent. One image boots many machines, so that is
 	// expected, not a failure -- but it is reported, since the same errno is how
 	// kvm_amd says SVM is disabled in firmware.
-	err = r.l.InitModule(image, "")
+	params := ""
+	if p, ok := r.l.(ParamSource); ok {
+		params = p.ModuleParams(key)
+	}
+	err := r.insert(file, params)
 	if errors.Is(err, syscall.ENODEV) || errors.Is(err, syscall.EOPNOTSUPP) {
 		r.absent[key] = true
 		r.refused = append(r.refused, fmt.Sprintf("%s (%v)", key, err))
