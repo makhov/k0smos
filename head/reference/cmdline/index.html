@@ -1005,6 +1005,10 @@ drivers are autoloaded by matching each device's <code>modalias</code> against
 <code>modules.alias</code>, the same way udev does — so a distro kernel drives hardware
 nothing named in advance. Modules absent from the kernel are skipped, so the same
 list is safe on a monolithic kernel.</p>
+<p>An image that carries extra drivers names the modules no device asks for in
+<code>/etc/modules-load.d/*.conf</code> in its initramfs (the <code>modules-load.d(5)</code> format):
+the NVIDIA image lists <code>nvidia_uvm</code> there. Those load alongside the built-in set
+or a <code>k0smos.modules=</code> list, and not at all with <code>k0smos.modules=none</code>.</p>
 
 
 
