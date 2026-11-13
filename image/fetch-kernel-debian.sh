@@ -52,4 +52,7 @@ depmod -b /out "$release"
 chown -R "$owner" /out
 echo "wrote $release"
 '
-grep -E '^CONFIG_(USERFAULTFD|MODULE_DECOMPRESS|EROFS_FS)=' "$out/config"
+# One at a time: a single grep over all three passes while any one of them is set.
+for c in USERFAULTFD MODULE_DECOMPRESS EROFS_FS; do
+  grep -q "^CONFIG_$c=" "$out/config" || { echo "Debian's kernel is built without CONFIG_$c" >&2; exit 1; }
+done
