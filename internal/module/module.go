@@ -19,6 +19,34 @@ type Loader interface {
 	InitModule(image []byte, params string) error
 }
 
+// FileLoader is implemented by a Loader that can hand the kernel a module file
+// to decompress itself: finit_module(2) with MODULE_INIT_COMPRESSED_FILE. That
+// is how xz- and zstd-compressed modules -- Debian's, Ubuntu's -- are loaded.
+type FileLoader interface {
+	FinitModule(path, params string) error
+}
+
+// insert loads one module file. gzip, Alpine's compression, is undone here;
+// xz and zstd go to the kernel, which has decompressors for what its own
+// modules use, and this would otherwise need both.
+func (r *resolver) insert(file, params string) error {
+	if strings.HasSuffix(file, ".xz") || strings.HasSuffix(file, ".zst") {
+		fl, ok := r.l.(FileLoader)
+		if !ok {
+			return fmt.Errorf("%s: compressed modules need finit_module", file)
+		}
+		return fl.FinitModule(file, params)
+	}
+	image, err := r.l.ReadFile(file)
+	if err != nil {
+		return fmt.Errorf("read: %w", err)
+	}
+	if image, err = decompress(image); err != nil {
+		return fmt.Errorf("decompress: %w", err)
+	}
+	return r.l.InitModule(image, params)
+}
+
 // ParamSource is implemented by a Loader that has options for modules, as
 // modprobe has from the kernel command line.
 type ParamSource interface {
@@ -349,15 +377,7 @@ func (r *resolver) load(name string) {
 		}
 	}
 
-	image, err := r.l.ReadFile(path.Join(r.base, r.deps[key].path))
-	if err != nil {
-		r.errs = append(r.errs, fmt.Errorf("read module %s: %w", key, err))
-		return
-	}
-	if image, err = decompress(image); err != nil {
-		r.errs = append(r.errs, fmt.Errorf("decompress module %s: %w", key, err))
-		return
-	}
+	file := path.Join(r.base, r.deps[key].path)
 	// EEXIST means the kernel already has it — the desired end state either way.
 	// ENODEV and EOPNOTSUPP mean it is not for this machine: kvm_intel on AMD, a
 	// driver whose hardware is absent. One image boots many machines, so that is
@@ -367,7 +387,7 @@ func (r *resolver) load(name string) {
 	if p, ok := r.l.(ParamSource); ok {
 		params = p.ModuleParams(key)
 	}
-	err = r.l.InitModule(image, params)
+	err := r.insert(file, params)
 	if errors.Is(err, syscall.ENODEV) || errors.Is(err, syscall.EOPNOTSUPP) {
 		r.absent[key] = true
 		r.refused = append(r.refused, fmt.Sprintf("%s (%v)", key, err))

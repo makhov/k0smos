@@ -144,6 +144,16 @@ func (s *Sys) InitModule(image []byte, params string) error {
 	return unix.InitModule(image, params)
 }
 
+// FinitModule loads a compressed module file, which the kernel decompresses.
+func (s *Sys) FinitModule(path, params string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return unix.FinitModule(int(f.Fd()), params, unix.MODULE_INIT_COMPRESSED_FILE)
+}
+
 // Release is the running kernel's release string, e.g. "6.6.142-0-virt". It
 // names the /lib/modules subdirectory holding that kernel's modules.
 func (s *Sys) Release() (string, error) {

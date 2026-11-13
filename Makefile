@@ -42,10 +42,12 @@ kernel:
 kernel-alpine:
 	./image/fetch-kernel.sh
 
-# Alpine linux-lts for physical machines: unlike linux-virt it includes the
-# broad NIC, storage, USB and platform driver set reached by modalias autoloading.
+# Debian's kernel for physical machines and the VMs the metal image boots: the
+# broad NIC, storage, USB and platform driver set reached by modalias
+# autoloading, userfaultfd (which Alpine's linux-lts leaves out), and headers
+# for each exact build, which the NVIDIA modules are compiled against.
 kernel-metal:
-	KERNEL_PACKAGE=linux-lts KERNEL_ROOT=dist/kernel-metal ./image/fetch-kernel.sh
+	KERNEL_ROOT=dist/kernel-metal ./image/fetch-kernel-debian.sh
 
 # Latest k0s release binary for the host arch (~240MB).
 k0s:
