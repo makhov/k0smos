@@ -68,7 +68,9 @@ mkdir -p "$(dirname "$raw")" "$(dirname "$qcow2")"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-esp_mb=256
+# The kernel and initramfs live here, and the initramfs carries the module tree
+# and any driver overlay: the NVIDIA one alone is ~135M.
+esp_mb=512
 data_mb=${METAL_DATA_MB:-8192}
 sector_size=512
 alignment=2048

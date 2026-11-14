@@ -42,12 +42,13 @@ kernel:
 kernel-alpine:
 	./image/fetch-kernel.sh
 
-# Debian's kernel for physical machines and the VMs the metal image boots: the
-# broad NIC, storage, USB and platform driver set reached by modalias
-# autoloading, userfaultfd (which Alpine's linux-lts leaves out), and headers
-# for each exact build, which the NVIDIA modules are compiled against.
+# Ubuntu's generic kernel from the current LTS for physical machines and the VMs
+# the metal image boots: a recent KVM, which is what sandboxes on a nested node
+# run under, the broad NIC, storage, USB and platform driver set reached by
+# modalias autoloading, userfaultfd, and headers for each exact build, which the
+# NVIDIA modules are compiled against.
 kernel-metal:
-	KERNEL_ROOT=dist/kernel-metal ./image/fetch-kernel-debian.sh
+	KERNEL_ROOT=dist/kernel-metal ./image/fetch-kernel-ubuntu.sh
 
 # Latest k0s release binary for the host arch (~240MB).
 k0s:

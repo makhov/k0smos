@@ -24,9 +24,9 @@
 # Everything comes from one NVIDIA package per version, pinned by digest: the
 # open module sources, the firmware and the user-space libraries are
 # then guaranteed to be the same release. The modules match one kernel build
-# exactly, so they are built against Debian's headers for that exact build,
-# and this fails when Debian no longer has them -- re-run 'make kernel-metal'
-# when Debian's kernel moves on.
+# exactly, so they are built against Ubuntu's headers for that exact build,
+# and this fails when Ubuntu no longer has them -- re-run 'make kernel-metal'
+# when Ubuntu's kernel moves on.
 #
 # x86_64 only, for data center GPUs: H100, H200 and B200 are what this targets.
 # NVSwitch systems run their fabric manager on the host, not in guests.
@@ -67,16 +67,17 @@ mkdir -p "$out"
 docker run --rm --platform linux/amd64 -v "$repo:/repo" -w /repo \
   -e version="$version" -e release="$release" -e pkg="$pkg" -e out="$out" -e kernel_dir="$kernel_dir" \
   -e owner="$(id -u):$(id -g)" \
-  debian:trixie-slim bash -euo pipefail -c '
+  ubuntu:26.04 bash -euo pipefail -c '
 apt-get update -qq >/dev/null
 if ! apt-get install -qq -y --no-install-recommends build-essential kmod "linux-headers-$release" >/tmp/apt.log 2>&1; then
   tail -5 /tmp/apt.log >&2
-  echo "no Debian headers for the metal kernel $release: it has moved on, run make kernel-metal" >&2
+  echo "no Ubuntu headers for the metal kernel $release: it has moved on, run make kernel-metal" >&2
   exit 1
 fi
 sh "$pkg" -x --target /tmp/pkg >/dev/null
-# Debian splits the headers: sources in -common, the build tree per flavour.
-common=$(ls -d /usr/src/linux-headers-*-common | head -1)
+# The headers come split: the sources in one directory, the build tree of
+# this flavour in another, linux-headers-<release>.
+common=$(ls -d /usr/src/linux-headers-* | grep -vx "/usr/src/linux-headers-$release" | head -1)
 make -C /tmp/pkg/kernel-open -j"$(nproc)" SYSSRC="$common" SYSOUT="/usr/src/linux-headers-$release" modules >/tmp/build.log 2>&1 || {
   tail -30 /tmp/build.log >&2
   exit 1
