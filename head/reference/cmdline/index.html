@@ -997,7 +997,7 @@ You are not viewing the documentation for the current stable release of k0smos.
 <tr>
 <td><code>k0smos.modules=</code></td>
 <td><em>(built-in set)</em></td>
-<td>Comma-separated module list, or <code>none</code> to disable module loading entirely</td>
+<td>Comma-separated module list, or <code>+list</code> to add to the built-in set, or <code>none</code> to disable module loading entirely</td>
 </tr>
 <tr>
 <td><code>k0smos.path=</code></td>
@@ -1028,6 +1028,10 @@ drivers are autoloaded by matching each device's <code>modalias</code> against
 <code>modules.alias</code>, the same way udev does — so a distro kernel drives hardware
 nothing named in advance. Modules absent from the kernel are skipped, so the same
 list is safe on a monolithic kernel.</p>
+<p>A list written with a leading <code>+</code> adds to the built-in set instead of replacing
+it: <code>k0smos.modules=+netconsole</code> keeps every default and loads one module more.
+Replacing the set means restating the drivers the machine needs for its own disk
+and NIC, so prefer <code>+</code> for anything additive.</p>
 <p>An image that carries extra drivers names the modules no device asks for in
 <code>/etc/modules-load.d/*.conf</code> in its initramfs (the <code>modules-load.d(5)</code> format):
 the NVIDIA image lists <code>nvidia_uvm</code> there. Those load alongside the built-in set

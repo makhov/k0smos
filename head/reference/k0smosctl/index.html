@@ -1579,7 +1579,8 @@ boot far enough to answer.</p>
 <p>Asks a running machine for its kernel ring buffer.</p>
 <p>Kernel messages do not reach the console when <code>console=</code> is wrong or the failure
 precedes PID 1, and on real hardware they are where driver, disk-controller and
-firmware problems appear.</p>
+firmware problems appear. k0smos writes its own messages there too, so this is
+the one place that shows a driver error and what init made of it in order.</p>
 <table>
 <thead>
 <tr>

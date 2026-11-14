@@ -629,6 +629,48 @@ You are not viewing the documentation for the current stable release of k0smos.
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Observe">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#without-k0smosctl" class="md-nav__link">
+    <span class="md-ellipsis">
+      Without k0smosctl
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kubevirt" class="md-nav__link">
+    <span class="md-ellipsis">
+      KubeVirt
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bare-metal-over-the-network" class="md-nav__link">
+    <span class="md-ellipsis">
+      Bare metal, over the network
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#from-inside-the-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      From inside the cluster
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -934,6 +976,48 @@ You are not viewing the documentation for the current stable release of k0smos.
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Observe">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#without-k0smosctl" class="md-nav__link">
+    <span class="md-ellipsis">
+      Without k0smosctl
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kubevirt" class="md-nav__link">
+    <span class="md-ellipsis">
+      KubeVirt
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bare-metal-over-the-network" class="md-nav__link">
+    <span class="md-ellipsis">
+      Bare metal, over the network
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#from-inside-the-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      From inside the cluster
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1000,12 +1084,56 @@ write to the machine console:</p>
 </ul>
 <p>For a local machine you can also ask it directly rather than reading scrollback:</p>
 <div class="highlight"><pre><span></span><code>k0smosctl<span class="w"> </span>machine<span class="w"> </span>status<span class="w"> </span>--name<span class="w"> </span>node-1<span class="w">   </span><span class="c1"># what the init decided, and workload restarts</span>
-k0smosctl<span class="w"> </span>machine<span class="w"> </span>dmesg<span class="w">  </span>--name<span class="w"> </span>node-1<span class="w">   </span><span class="c1"># kernel ring buffer</span>
+k0smosctl<span class="w"> </span>machine<span class="w"> </span>dmesg<span class="w">  </span>--name<span class="w"> </span>node-1<span class="w">   </span><span class="c1"># kernel ring buffer, k0smos&#39;s own lines included</span>
 k0smosctl<span class="w"> </span>machine<span class="w"> </span>cat<span class="w">    </span>--name<span class="w"> </span>node-1<span class="w"> </span>/etc/k0s/k0s.yaml
 </code></pre></div>
 <p>These use the control port, which <code>k0smosctl</code> attaches locally. On KubeVirt and
 bare metal the serial console is the channel; the same boot record is on the
 machine at <code>/run/k0smos/boot.json</code>.</p>
+<p>Everything k0smos prints also goes to the kernel ring buffer, so <code>dmesg</code> holds
+the whole boot -- init's decisions in order against the kernel's own messages --
+after the console has scrolled. The last line init prints is the verdict, which
+is what to look for first in a captured console:</p>
+<div class="highlight"><pre><span></span><code>k0smos: boot ok in 4.2s, 11 stages
+k0smos: boot DEGRADED in 6.1s, 11 stages: network (dhcp on eth0: no lease)
+</code></pre></div>
+<h3 id="without-k0smosctl">Without <code>k0smosctl</code><a class="headerlink" href="#without-k0smosctl" title="Permanent link">#</a></h3>
+<p>The control port is a virtio-serial port and a line protocol, so any tool can
+ask. A machine booted by hand needs the port wired up:</p>
+<div class="highlight"><pre><span></span><code>-chardev socket,path=/tmp/ctl.sock,server=on,wait=off,id=ctl
+-device virtio-serial-pci
+-device virtserialport,chardev=ctl,name=k0smos.control
+</code></pre></div>
+<p>Then a request is a line, and the reply is <code>ok &lt;bytes&gt;</code> followed by that many
+bytes (or <code>err &lt;message&gt;</code>):</p>
+<div class="highlight"><pre><span></span><code><span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;status\n&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>socat<span class="w"> </span>-<span class="w"> </span>UNIX-CONNECT<span class="o">=</span>/tmp/ctl.sock
+</code></pre></div>
+<p>The requests are <code>status</code>, <code>dmesg</code>, <code>cat &lt;absolute path&gt;</code>, <code>kubeconfig</code> and
+<code>token controller|worker</code>. Whatever can write to that socket holds
+cluster-admin, so it belongs where the machine's disk already is.</p>
+<h3 id="kubevirt">KubeVirt<a class="headerlink" href="#kubevirt" title="Permanent link">#</a></h3>
+<p><code>virtctl console &lt;vm&gt;</code> shows a boot as it happens. To keep it, the VM sets
+<code>logSerialConsole: true</code> under <code>spec.template.spec.domain.devices</code>, as the
+manifests in this repository do, and the console becomes a pod log:</p>
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>logs<span class="w"> </span>-l<span class="w"> </span>kubevirt.io/domain<span class="o">=</span>node-1<span class="w"> </span>-c<span class="w"> </span>guest-console-log<span class="w"> </span>--tail<span class="o">=</span>-1
+</code></pre></div>
+<p>It lives as long as the launcher pod, so copy it before replacing a machine.</p>
+<h3 id="bare-metal-over-the-network">Bare metal, over the network<a class="headerlink" href="#bare-metal-over-the-network" title="Permanent link">#</a></h3>
+<p>A machine with no usable BMC can stream its kernel ring buffer -- which holds
+k0smos's own lines too -- to a collector over UDP, using the kernel's
+netconsole. It is a module, so it is added on the command line along with its
+target, <code>[source-port]@[source-ip]/[dev],[target-port]@&lt;target-ip&gt;/[target-mac]</code>:</p>
+<div class="highlight"><pre><span></span><code>k0smos.modules=+netconsole netconsole.netconsole=6666@/,514@10.0.0.5/
+</code></pre></div>
+<p>Collect it with anything that reads syslog, or <code>socat -u UDP-RECV:514 -</code>. It is
+plaintext UDP with no retransmission, so treat it as a console and not as an
+audit log; it also starts only once its NIC driver is loaded, so the first
+kernel messages of a boot are not in it.</p>
+<h3 id="from-inside-the-cluster">From inside the cluster<a class="headerlink" href="#from-inside-the-cluster" title="Permanent link">#</a></h3>
+<p>Once k0s is up, the boot record is reachable on every platform without a
+console, because the machine is a node:</p>
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>debug<span class="w"> </span>node/node-1<span class="w"> </span>-it<span class="w"> </span>--image<span class="o">=</span>busybox<span class="w"> </span>--<span class="w"> </span>cat<span class="w"> </span>/host/run/k0smos/boot.json
+</code></pre></div>
 <p>See <a href="../../troubleshooting/">troubleshooting</a> for how to read them.</p>
 <p>Container workload logs remain Kubernetes logs and should be collected through
 the cluster logging stack.</p>
