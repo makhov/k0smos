@@ -17,7 +17,7 @@ All optional; k0smos boots with defaults if none are given.
 | `k0smos.iface=` | `eth0` | Interface a bare `k0smos.ip=` configures, and the one `k0smos.gw=` attaches to |
 | `k0smos.hostname=` | `k0smos` | Hostname, also sent as the DHCP hostname |
 | `k0smos.exec=` | `/usr/local/bin/k0s,controller,--single` | Supervised child, comma-separated (a cmdline value cannot contain spaces) |
-| `k0smos.modules=` | *(built-in set)* | Comma-separated module list, or `none` to disable module loading entirely |
+| `k0smos.modules=` | *(built-in set)* | Comma-separated module list, or `+list` to add to the built-in set, or `none` to disable module loading entirely |
 | `k0smos.path=` | see below | `PATH` exported to children |
 
 `k0smos.path` defaults to
@@ -50,6 +50,11 @@ drivers are autoloaded by matching each device's `modalias` against
 `modules.alias`, the same way udev does — so a distro kernel drives hardware
 nothing named in advance. Modules absent from the kernel are skipped, so the same
 list is safe on a monolithic kernel.
+
+A list written with a leading `+` adds to the built-in set instead of replacing
+it: `k0smos.modules=+netconsole` keeps every default and loads one module more.
+Replacing the set means restating the drivers the machine needs for its own disk
+and NIC, so prefer `+` for anything additive.
 
 An image that carries extra drivers names the modules no device asks for in
 `/etc/modules-load.d/*.conf` in its initramfs (the `modules-load.d(5)` format):

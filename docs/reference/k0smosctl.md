@@ -190,7 +190,8 @@ Asks a running machine for its kernel ring buffer.
 
 Kernel messages do not reach the console when `console=` is wrong or the failure
 precedes PID 1, and on real hardware they are where driver, disk-controller and
-firmware problems appear.
+firmware problems appear. k0smos writes its own messages there too, so this is
+the one place that shows a driver error and what init made of it in order.
 
 | Flag | Description |
 |---|---|

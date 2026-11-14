@@ -64,7 +64,7 @@ type Recorder struct {
 func New(sink func([]byte) error) *Recorder {
 	r := &Recorder{sink: sink, now: time.Now}
 	r.rec.Schema = Schema
-	r.rec.Boot = time.Now().UTC().Format(time.RFC3339)
+	r.rec.Boot = time.Now().UTC().Format(time.RFC3339Nano)
 	return r
 }
 
@@ -80,7 +80,7 @@ func NewFrom(old *Recorder, sink func([]byte) error) *Recorder {
 		r.rec = old.Snapshot()
 	} else {
 		r.rec.Schema = Schema
-		r.rec.Boot = time.Now().UTC().Format(time.RFC3339)
+		r.rec.Boot = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 	r.flush()
 	return r
@@ -89,7 +89,7 @@ func NewFrom(old *Recorder, sink func([]byte) error) *Recorder {
 // Step records a stage. A non-nil err marks it failed.
 func (r *Recorder) Step(name string, err error, detail string) {
 	r.mu.Lock()
-	s := Step{Name: name, OK: err == nil, Detail: detail, At: r.now().UTC().Format(time.RFC3339)}
+	s := Step{Name: name, OK: err == nil, Detail: detail, At: r.now().UTC().Format(time.RFC3339Nano)}
 	if err != nil {
 		s.Error = err.Error()
 	}
@@ -163,10 +163,65 @@ func (r *Recorder) flush() {
 	_ = r.sink(b)
 }
 
+// Summary is the one line a boot can be judged by: how long it took, how many
+// stages ran, and which of them failed. A machine with no shell reports through
+// a console that scrolls away, and a serial capture may keep only the tail, so
+// init prints this once its own work is done -- and a reader of the record gets
+// the same verdict without reading every stage.
+func Summary(rec Record) string {
+	var failed []string
+	for _, s := range rec.Steps {
+		if !s.OK {
+			failed = append(failed, s.Name+" ("+brief(s.Error)+")")
+		}
+	}
+	verdict := "ok"
+	if len(failed) > 0 {
+		verdict = "DEGRADED"
+	}
+	took := ""
+	if d, ok := span(rec); ok {
+		took = " in " + d.Round(100*time.Millisecond).String()
+	}
+	out := fmt.Sprintf("boot %s%s, %d stages", verdict, took, len(rec.Steps))
+	if len(failed) > 0 {
+		out += ": " + strings.Join(failed, ", ")
+	}
+	return out
+}
+
+// span is boot start to last stage, taken from the record itself rather than
+// the clock, so reading an old record reports what that boot took.
+func span(rec Record) (time.Duration, bool) {
+	if len(rec.Steps) == 0 {
+		return 0, false
+	}
+	start, err := time.Parse(time.RFC3339, rec.Boot)
+	if err != nil {
+		return 0, false
+	}
+	end, err := time.Parse(time.RFC3339, rec.Steps[len(rec.Steps)-1].At)
+	if err != nil || end.Before(start) {
+		return 0, false
+	}
+	return end.Sub(start), true
+}
+
+// brief puts an error on one line, short enough that the verdict stays one
+// line on an 80-column console. The whole error is in the record.
+func brief(err string) string {
+	err = strings.Join(strings.Fields(err), " ")
+	if len(err) > 60 {
+		err = err[:57] + "..."
+	}
+	return err
+}
+
 // Text renders a record for a person. Failures are called out rather than left
 // for the reader to spot among the successes.
 func Text(rec Record) string {
 	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", Summary(rec))
 	fmt.Fprintf(&b, "boot        %s\n", rec.Boot)
 	if rec.Hostname != "" {
 		fmt.Fprintf(&b, "hostname    %s\n", rec.Hostname)

@@ -126,3 +126,43 @@ func TestJSONRoundTrips(t *testing.T) {
 		t.Error("schema version should be recorded so a reader can tell the shape")
 	}
 }
+
+// The verdict a serial capture may be the only record of: how long, how many
+// stages, and nothing else when they all passed.
+func TestSummaryIsTheOneLineVerdict(t *testing.T) {
+	rec := Record{Boot: "2026-11-14T10:00:00Z", Steps: []Step{
+		{Name: "mounts", OK: true, At: "2026-11-14T10:00:01.5Z"},
+		{Name: "root", OK: true, At: "2026-11-14T10:00:04.2Z"},
+	}}
+	if got, want := Summary(rec), "boot ok in 4.2s, 2 stages"; got != want {
+		t.Errorf("Summary = %q, want %q", got, want)
+	}
+}
+
+// A failed stage has to be named in that line, with its error on it, and the
+// line has to stay one line however long the error is.
+func TestSummaryNamesWhatFailed(t *testing.T) {
+	rec := Record{Boot: "2026-11-14T10:00:00Z", Steps: []Step{
+		{Name: "mounts", OK: true, At: "2026-11-14T10:00:01Z"},
+		{Name: "network", At: "2026-11-14T10:00:02Z", Error: "dhcp on eth0:\n  no lease"},
+		{Name: "metadata", At: "2026-11-14T10:00:03Z", Error: strings.Repeat("x", 80)},
+	}}
+	got := Summary(rec)
+	if strings.ContainsAny(got, "\n\t") {
+		t.Errorf("the verdict must be one line: %q", got)
+	}
+	for _, want := range []string{"DEGRADED", " in 3s,", "network (dhcp on eth0: no lease)",
+		"metadata (" + strings.Repeat("x", 57) + "...)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Summary = %q, missing %q", got, want)
+		}
+	}
+}
+
+// Nothing recorded yet means nothing to time; the verdict still renders, since
+// Text leads with it.
+func TestSummaryWithoutStepsOmitsTheTime(t *testing.T) {
+	if got, want := Summary(Record{Boot: "2026-11-14T10:00:00Z"}), "boot ok, 0 stages"; got != want {
+		t.Errorf("Summary = %q, want %q", got, want)
+	}
+}

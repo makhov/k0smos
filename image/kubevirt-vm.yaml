@@ -31,6 +31,10 @@ spec:
               kernelPath: /boot/vmlinuz
               initrdPath: /boot/initramfs.gz
         devices:
+          # The guest has no shell, so its console is the boot record: this
+          # keeps it as `kubectl logs -l kubevirt.io/domain=<vm>
+          # -c guest-console-log`, instead of only live in virtctl console.
+          logSerialConsole: true
           disks:
             - name: bootstrap
               disk:

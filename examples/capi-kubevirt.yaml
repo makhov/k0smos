@@ -128,6 +128,10 @@ spec:
                       kernelPath: /boot/vmlinuz
                       initrdPath: /boot/initramfs.gz
                 devices:
+                  # Keeps the guest console as a pod log, which is the only
+                  # record of a boot on a machine with no shell: kubectl logs
+                  # -l kubevirt.io/domain=<vm> -c guest-console-log
+                  logSerialConsole: true
                   disks:
                     - name: data
                       disk:
@@ -229,6 +233,10 @@ spec:
                       kernelPath: /boot/vmlinuz
                       initrdPath: /boot/initramfs.gz
                 devices:
+                  # Keeps the guest console as a pod log, which is the only
+                  # record of a boot on a machine with no shell: kubectl logs
+                  # -l kubevirt.io/domain=<vm> -c guest-console-log
+                  logSerialConsole: true
                   disks:
                     - name: data
                       disk:
