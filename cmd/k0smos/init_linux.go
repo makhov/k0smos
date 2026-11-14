@@ -113,7 +113,30 @@ const (
 // logf writes a progress line to the console. As PID1 there is nowhere else to
 // report to, and a silent init is undebuggable when a boot goes wrong.
 func logf(format string, args ...any) {
-	fmt.Fprintf(os.Stdout, "k0smos: "+format+"\n", args...)
+	line := fmt.Sprintf("k0smos: "+format+"\n", args...)
+	fmt.Fprint(os.Stdout, line)
+	if kmsg != nil {
+		// One write is one kernel log record; <6> is KERN_INFO. Errors are
+		// dropped rather than logged, which would recurse.
+		fmt.Fprintf(kmsg, "<6>%s", line)
+	}
+}
+
+// kmsg is the kernel's own log, so that everything init decides lands in the
+// ring buffer beside the kernel's messages: dmesg then carries the whole boot
+// in order, the control port can fetch it long after the console scrolled, and
+// a driver error and the k0smos line about it can finally be told apart by
+// which came first. Nil until /dev exists, and on a kernel without /dev/kmsg,
+// where the console still has everything.
+var kmsg *os.File
+
+func openKmsg() {
+	f, err := os.OpenFile("/dev/kmsg", os.O_WRONLY, 0)
+	if err != nil {
+		logf("warn: no /dev/kmsg, so dmesg will not carry init's own messages: %v", err)
+		return
+	}
+	kmsg = f
 }
 
 // rec is the boot record. The console shows a boot as it happens and then loses
@@ -987,6 +1010,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	// /run exists now, so the record can start persisting. Anything recorded
 	// above was held in memory and is carried over.
 	recordTo(bootRecordPath)
+	openKmsg()
 
 	// Only readable now that /proc is mounted.
 	cfg := config.Parse(readCmdline(cmdlinePath))
@@ -1239,6 +1263,11 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	if len(plan.Env) > 0 {
 		logf("workload env from user-data: %v", plan.Env)
 	}
+
+	// Init's own work ends here; the rest of this machine's life is the
+	// workload. The verdict goes out as one line, which is all a serial capture
+	// may keep of a boot that went wrong.
+	logf("%s", status.Summary(rec.Snapshot()))
 
 	logf("supervising %v", workloadCmd)
 	rec.SetChild(workloadCmd)

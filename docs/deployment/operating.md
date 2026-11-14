@@ -15,13 +15,23 @@ For a local machine you can also ask it directly rather than reading scrollback:
 
 ```bash
 k0smosctl machine status --name node-1   # what the init decided, and workload restarts
-k0smosctl machine dmesg  --name node-1   # kernel ring buffer
+k0smosctl machine dmesg  --name node-1   # kernel ring buffer, k0smos's own lines included
 k0smosctl machine cat    --name node-1 /etc/k0s/k0s.yaml
 ```
 
 These use the control port, which `k0smosctl` attaches locally. On KubeVirt and
 bare metal the serial console is the channel; the same boot record is on the
 machine at `/run/k0smos/boot.json`.
+
+Everything k0smos prints also goes to the kernel ring buffer, so `dmesg` holds
+the whole boot -- init's decisions in order against the kernel's own messages --
+after the console has scrolled. The last line init prints is the verdict, which
+is what to look for first in a captured console:
+
+```text
+k0smos: boot ok in 4.2s, 11 stages
+k0smos: boot DEGRADED in 6.1s, 11 stages: network (dhcp on eth0: no lease)
+```
 
 See [troubleshooting](../troubleshooting.md) for how to read them.
 
