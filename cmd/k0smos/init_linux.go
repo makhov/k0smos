@@ -948,6 +948,10 @@ func loadModules(s *sys.Sys, cfg config.Config) error {
 		logf("modules named by the image: %s", strings.Join(declared, ", "))
 		names = append(slices.Clone(names), declared...)
 	}
+	if len(cfg.AddModules) > 0 {
+		logf("modules added on the command line: %s", strings.Join(cfg.AddModules, ", "))
+		names = append(slices.Clone(names), cfg.AddModules...)
+	}
 	release, err := s.Release()
 	if err != nil {
 		return fmt.Errorf("uname: %w", err)

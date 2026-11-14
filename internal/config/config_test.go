@@ -167,6 +167,25 @@ func TestParseModulesOverride(t *testing.T) {
 	}
 }
 
+// A leading "+" adds to the default set instead of replacing it: one module
+// more than the image ships must not cost a machine the driver for its disk.
+func TestParseModulesWithPlusAddsToTheDefaultSet(t *testing.T) {
+	c := Parse("k0smos.modules=+netconsole,ramoops")
+	if c.Modules != nil {
+		t.Errorf("modules = %v, want nil so the default set still applies", c.Modules)
+	}
+	if !slices.Equal(c.AddModules, []string{"netconsole", "ramoops"}) {
+		t.Errorf("addModules = %v", c.AddModules)
+	}
+}
+
+func TestParseModulesPlusWithNothingAfterItIsIgnored(t *testing.T) {
+	c := Parse("k0smos.modules=+")
+	if c.Modules != nil || c.AddModules != nil {
+		t.Errorf("modules = %v, add = %v, want both nil", c.Modules, c.AddModules)
+	}
+}
+
 // "none" must be distinguishable from "unset", so it needs to be non-nil.
 func TestParseModulesNoneDisablesLoading(t *testing.T) {
 	c := Parse("k0smos.modules=none")

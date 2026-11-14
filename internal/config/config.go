@@ -10,6 +10,10 @@ type Config struct {
 	// Modules are the kernel modules to load. Nil means "use the built-in
 	// default set"; empty (via k0smos.modules=none) disables module loading.
 	Modules []string
+	// AddModules are loaded besides the set above, from a list written with a
+	// leading "+". Adding one module otherwise meant restating every default,
+	// which is how a machine ends up without the driver for its own disk.
+	AddModules []string
 
 	// Iface, IP, Gateway and DNS configure networking. IP empty means leave
 	// networking alone (loopback only). The kernel's own ip= autoconfiguration
@@ -192,10 +196,14 @@ func Parse(cmdline string) Config {
 		case "dns":
 			c.DNS = v
 		case "modules":
-			// "none" disables loading entirely; otherwise a comma-separated
-			// list replaces the default set.
+			// "none" disables loading entirely; a list starting with "+" adds
+			// to the default set; otherwise it replaces it.
 			if v == "none" {
 				c.Modules = []string{}
+			} else if add, plus := strings.CutPrefix(v, "+"); plus {
+				if parts := strings.Split(add, ","); parts[0] != "" {
+					c.AddModules = parts
+				}
 			} else if parts := strings.Split(v, ","); parts[0] != "" {
 				c.Modules = parts
 			}

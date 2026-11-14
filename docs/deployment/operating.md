@@ -33,6 +33,65 @@ k0smos: boot ok in 4.2s, 11 stages
 k0smos: boot DEGRADED in 6.1s, 11 stages: network (dhcp on eth0: no lease)
 ```
 
+### Without `k0smosctl`
+
+The control port is a virtio-serial port and a line protocol, so any tool can
+ask. A machine booted by hand needs the port wired up:
+
+```
+-chardev socket,path=/tmp/ctl.sock,server=on,wait=off,id=ctl
+-device virtio-serial-pci
+-device virtserialport,chardev=ctl,name=k0smos.control
+```
+
+Then a request is a line, and the reply is `ok <bytes>` followed by that many
+bytes (or `err <message>`):
+
+```bash
+printf 'status\n' | socat - UNIX-CONNECT=/tmp/ctl.sock
+```
+
+The requests are `status`, `dmesg`, `cat <absolute path>`, `kubeconfig` and
+`token controller|worker`. Whatever can write to that socket holds
+cluster-admin, so it belongs where the machine's disk already is.
+
+### KubeVirt
+
+`virtctl console <vm>` shows a boot as it happens. To keep it, the VM sets
+`logSerialConsole: true` under `spec.template.spec.domain.devices`, as the
+manifests in this repository do, and the console becomes a pod log:
+
+```bash
+kubectl logs -l kubevirt.io/domain=node-1 -c guest-console-log --tail=-1
+```
+
+It lives as long as the launcher pod, so copy it before replacing a machine.
+
+### Bare metal, over the network
+
+A machine with no usable BMC can stream its kernel ring buffer -- which holds
+k0smos's own lines too -- to a collector over UDP, using the kernel's
+netconsole. It is a module, so it is added on the command line along with its
+target, `[source-port]@[source-ip]/[dev],[target-port]@<target-ip>/[target-mac]`:
+
+```
+k0smos.modules=+netconsole netconsole.netconsole=6666@/,514@10.0.0.5/
+```
+
+Collect it with anything that reads syslog, or `socat -u UDP-RECV:514 -`. It is
+plaintext UDP with no retransmission, so treat it as a console and not as an
+audit log; it also starts only once its NIC driver is loaded, so the first
+kernel messages of a boot are not in it.
+
+### From inside the cluster
+
+Once k0s is up, the boot record is reachable on every platform without a
+console, because the machine is a node:
+
+```bash
+kubectl debug node/node-1 -it --image=busybox -- cat /host/run/k0smos/boot.json
+```
+
 See [troubleshooting](../troubleshooting.md) for how to read them.
 
 Container workload logs remain Kubernetes logs and should be collected through
