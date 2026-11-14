@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Fetch an Alpine kernel for the target arch into dist/kernel/.
 # KERNEL_PACKAGE defaults to linux-virt for VM/e2e use; linux-lts has the
-# broader driver set of physical hardware. The metal images use Debian's kernel
-# instead (fetch-kernel-debian.sh), for userfaultfd, which Alpine leaves out.
+# broader driver set of physical hardware. The metal images use Ubuntu's kernel
+# instead (fetch-kernel-ubuntu.sh), for userfaultfd, which Alpine leaves out.
 # Uses docker because the kernel ships as an .apk; only tar/gzip are needed
 # inside, so any linux image with busybox works.
 set -euo pipefail
