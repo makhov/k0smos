@@ -402,3 +402,63 @@ jobs:
             --title "k0smos for k0s $K0S_VERSION" \
             --notes-file release-notes.md \
             --draft=false
+
+  docs:
+    # The docs for this version, deployed here rather than from publish-docs.yml:
+    # that workflow's `release: published` trigger can never fire, because this
+    # one publishes the release with GITHUB_TOKEN and GitHub does not start
+    # workflow runs from events made with that token. The result was a site that
+    # only ever had `head` on it.
+    #
+    # A failure here leaves the release published and the docs behind, which is
+    # the right way round.
+    name: Publish docs for ${{ needs.resolve.outputs.version }}
+    needs: [resolve, release]
+    if: needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The same group publish-docs.yml uses: both push to gh-pages, and the
+    # loser of a race gets a non-fast-forward rejection.
+    concurrency:
+      group: k0smos-docs-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install --disable-pip-version-check -r docs/requirements_pip.txt
+          pip install --disable-pip-version-check -r docs/requirements.txt
+
+      - name: git config
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+      - name: Deploy this version's docs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          make -C docs docs
+          # stable follows the newest published release, which a scheduled run
+          # always is -- but a workflow_dispatch can ask for an older k0s, and
+          # that must not drag the site's default backwards.
+          NEWEST=$(gh release list -L 100 --exclude-drafts --exclude-pre-releases \
+            --json tagName --jq '.[].tagName' | sort -V | tail -1)
+          if [ "$NEWEST" = "$VERSION" ]; then
+            K0SMOS_VERSION="$VERSION" mike deploy --push --update-aliases "$VERSION" stable
+            mike set-default --push stable
+          else
+            echo "$NEWEST is newer than $VERSION; deploying without moving stable"
+            K0SMOS_VERSION="$VERSION" mike deploy --push "$VERSION"
+          fi
