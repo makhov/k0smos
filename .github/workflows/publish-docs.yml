@@ -74,7 +74,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mike alias -u head main
+          mike alias --push -u head main
           STABLE=$(gh release list -L 100 --exclude-drafts --exclude-pre-releases \
             --json tagName --jq '.[].tagName' | sort -V | tail -1)
           # Only alias a version whose docs are actually on the site. A release
@@ -82,11 +82,14 @@ jobs:
           # to a missing identifier fails the whole run -- which is how a broken
           # build kept head docs from publishing long after the build was fixed.
           # Self-healing: the next release deploys its own docs and sets stable.
-          if [ -z "$STABLE" ]; then
-            echo "no published release yet; leaving stable alone"
-          elif ! mike list "$STABLE" >/dev/null 2>&1; then
-            echo "release $STABLE has no deployed docs; leaving stable alone"
+          #
+          # Something must be the default either way: the default is the only
+          # thing that puts an index.html at the site root, and without one the
+          # site's own URL is a 404 however many versions are deployed.
+          if [ -z "$STABLE" ] || ! mike list "$STABLE" >/dev/null 2>&1; then
+            echo "no deployed release docs; head stays the default"
+            mike set-default --push head
           else
-            mike alias -u "$STABLE" stable
+            mike alias --push -u "$STABLE" stable
             mike set-default --push stable
           fi
