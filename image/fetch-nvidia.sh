@@ -61,6 +61,15 @@ fi
 if command -v sha256sum >/dev/null; then got=$(sha256sum "$pkg" | cut -d' ' -f1); else got=$(shasum -a 256 "$pkg" | cut -d' ' -f1); fi
 [ "$got" = "$sha256" ] || { echo "$pkg: sha256 $got, want $sha256" >&2; exit 1; }
 
+# Both inputs are pinned -- the driver version in the path, the kernel release
+# in the module directory -- so an output that is already there was built from
+# exactly these. Skipping it saves a second module compile when metal-nvidia
+# and oci-nvidia run one after the other. NVIDIA_REBUILD=1 forces it.
+if [ -z "${NVIDIA_REBUILD:-}" ] && [ -d "$out/lib/modules/$release/extra/nvidia" ] && [ -s "$driver" ]; then
+  echo "NVIDIA $version for $release already built in $out"
+  exit 0
+fi
+
 rm -rf "$out"
 mkdir -p "$out"
 

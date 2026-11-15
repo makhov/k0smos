@@ -18,8 +18,12 @@
 # Ubuntu compresses modules with zstd. k0smos hands those to the kernel, which
 # decompresses them itself (CONFIG_MODULE_DECOMPRESS).
 #
-# Tracks the release's current kernel, security updates included; the release
-# it got is printed and is in the module tree's name.
+# KERNEL_RELEASE pins the exact build, e.g. 7.0.0-43-generic, because the
+# NVIDIA modules are compiled against headers for that one build and nothing
+# else reproduces a GPU image. Ubuntu drops both from the archive when the
+# release moves on, so a stale pin fails here, loudly, instead of silently
+# building a different kernel than the last time. Leave it empty to take
+# whatever linux-image-generic currently resolves to.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/.." && pwd)
@@ -36,14 +40,21 @@ command -v docker >/dev/null || { echo "docker required to unpack the .deb" >&2;
 mkdir -p "$out"
 
 docker run --rm --platform "$platform" -v "$out:/out" -e owner="$(id -u):$(id -g)" \
+  -e release="${KERNEL_RELEASE:-}" \
   "ubuntu:$ubuntu" bash -euo pipefail -c '
 apt-get update -qq >/dev/null
 apt-get install -qq -y --no-install-recommends kmod >/dev/null
 cd /tmp
-apt-get download -qq linux-image-generic >/dev/null
-release=$(dpkg-deb -f linux-image-generic_*.deb Depends | grep -o "linux-image-[0-9][^ ,]*" | head -1)
-release=${release#linux-image-}
-apt-get download -qq "linux-image-$release" "linux-modules-$release" >/dev/null
+if [ -z "$release" ]; then
+  apt-get download -qq linux-image-generic >/dev/null
+  release=$(dpkg-deb -f linux-image-generic_*.deb Depends | grep -o "linux-image-[0-9][^ ,]*" | head -1)
+  release=${release#linux-image-}
+fi
+apt-get download -qq "linux-image-$release" "linux-modules-$release" >/dev/null || {
+  echo "linux-image-$release is not in this Ubuntu archive any more." >&2
+  echo "Bump KERNEL_RELEASE in the Makefile to a build it still has." >&2
+  exit 1
+}
 for d in linux-image-"$release"_*.deb linux-modules-"$release"_*.deb; do dpkg-deb -x "$d" x; done
 mods=x/usr/lib/modules/$release
 before=$(du -sm "$mods" | cut -f1)

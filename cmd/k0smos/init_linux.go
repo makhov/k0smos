@@ -43,6 +43,9 @@ import (
 
 const (
 	cmdlinePath = "/proc/cmdline"
+	// osReleasePath identifies the image; mkrootfs.sh and mkinitramfs.sh
+	// write the same values into both halves of a boot.
+	osReleasePath = "/etc/os-release"
 
 	// newRootDir is where the real root filesystem is mounted before the switch.
 	newRootDir = "/newroot"
@@ -881,6 +884,26 @@ func imageModules() []string {
 	return names
 }
 
+// recordImage works out which build this machine is running and puts it in the
+// record and on the console. There is no shell to ask and no package manager to
+// query, so a node that cannot answer "which image is this?" cannot be told
+// apart from the one next to it when deciding what to rebuild.
+//
+// Called after the modules are loaded, so the GPU driver can be asked its
+// version; everything else is readable from the start.
+func recordImage(s *sys.Sys) {
+	img := status.Image{NVIDIA: nvidia.Version("/proc")}
+	if release, err := s.Release(); err == nil {
+		img.Kernel = release
+	}
+	// Absent on a custom initramfs, which then reports the kernel it can see
+	// rather than nothing at all.
+	text, _ := os.ReadFile(osReleasePath)
+	img.K0s, img.Build = osReleaseIDs(string(text))
+	rec.SetImage(img)
+	logf("image: %s", img)
+}
+
 // nvidiaDeviceNodes creates /dev/nvidia* for the GPUs the driver found. 0666
 // like nvidia-modprobe's default: which pods get a GPU is the device plugin's
 // decision, made by what it mounts into them. Nothing to do without a GPU.
@@ -1042,6 +1065,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		}
 	}
 	nvidiaDeviceNodes()
+	recordImage(s)
 
 	// configfs and hugetlbfs come after the modules that provide them, and are
 	// never fatal: a kernel built without either must still boot a plain k0s

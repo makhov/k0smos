@@ -85,3 +85,27 @@ func TestNodesSkipsUnreadableGPU(t *testing.T) {
 		t.Errorf("got %v\nwant %v", got, want)
 	}
 }
+
+// The banner NVIDIA's driver writes, with the version buried in the middle of
+// a line that also carries the architecture and the build date.
+func TestVersionReadsTheDriverBanner(t *testing.T) {
+	proc := t.TempDir()
+	write(t, filepath.Join(proc, "driver/nvidia/version"),
+		"NVRM version: NVIDIA UNIX x86_64 Kernel Module  620.70.06  Tue Sep  9 10:00:00 UTC 2025\nGCC version:  gcc 14\n")
+	if got := Version(proc); got != "620.70.06" {
+		t.Errorf("Version() = %q, want 620.70.06", got)
+	}
+}
+
+// No driver loaded is the normal case on a node without a GPU, and must read
+// as "nothing to report" rather than an error or a panic.
+func TestVersionWithoutTheDriverIsEmpty(t *testing.T) {
+	proc := t.TempDir()
+	if got := Version(proc); got != "" {
+		t.Errorf("Version() = %q, want empty", got)
+	}
+	write(t, filepath.Join(proc, "driver/nvidia/version"), "NVRM version: NVIDIA UNIX x86_64 Kernel Module\n")
+	if got := Version(proc); got != "" {
+		t.Errorf("Version() on a truncated banner = %q, want empty", got)
+	}
+}
