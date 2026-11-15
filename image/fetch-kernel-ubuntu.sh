@@ -18,8 +18,12 @@
 # Ubuntu compresses modules with zstd. k0smos hands those to the kernel, which
 # decompresses them itself (CONFIG_MODULE_DECOMPRESS).
 #
-# Tracks the release's current kernel, security updates included; the release
-# it got is printed and is in the module tree's name.
+# KERNEL_RELEASE pins the exact build, e.g. 7.0.0-43-generic, because the
+# NVIDIA modules are compiled against headers for that one build and nothing
+# else reproduces a GPU image. Ubuntu drops both from the archive when the
+# release moves on, so a stale pin fails here, loudly, instead of silently
+# building a different kernel than the last time. Leave it empty to take
+# whatever linux-image-generic currently resolves to.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/.." && pwd)
@@ -35,15 +39,36 @@ ubuntu=${UBUNTU_RELEASE:-26.04}
 command -v docker >/dev/null || { echo "docker required to unpack the .deb" >&2; exit 1; }
 mkdir -p "$out"
 
+# netfilter ships xt_DSCP.ko and xt_dscp.ko, and three more pairs like them.
+# On a case-insensitive filesystem -- macOS's default -- they land on each
+# other as the module tree is copied out, which surfaces as a bare "cp: File
+# exists" from inside the container. Say what it actually is instead.
+: > "$out/.case-test"
+if [ -e "$out/.CASE-TEST" ]; then
+  rm -f "$out/.case-test"
+  echo "$out is on a case-insensitive filesystem, which cannot hold the kernel's" >&2
+  echo "module tree (xt_DSCP.ko and xt_dscp.ko are different modules)." >&2
+  echo "Build on Linux, or put the repository on a case-sensitive volume." >&2
+  exit 1
+fi
+rm -f "$out/.case-test"
+
 docker run --rm --platform "$platform" -v "$out:/out" -e owner="$(id -u):$(id -g)" \
+  -e release="${KERNEL_RELEASE:-}" \
   "ubuntu:$ubuntu" bash -euo pipefail -c '
 apt-get update -qq >/dev/null
 apt-get install -qq -y --no-install-recommends kmod >/dev/null
 cd /tmp
-apt-get download -qq linux-image-generic >/dev/null
-release=$(dpkg-deb -f linux-image-generic_*.deb Depends | grep -o "linux-image-[0-9][^ ,]*" | head -1)
-release=${release#linux-image-}
-apt-get download -qq "linux-image-$release" "linux-modules-$release" >/dev/null
+if [ -z "$release" ]; then
+  apt-get download -qq linux-image-generic >/dev/null
+  release=$(dpkg-deb -f linux-image-generic_*.deb Depends | grep -o "linux-image-[0-9][^ ,]*" | head -1)
+  release=${release#linux-image-}
+fi
+apt-get download -qq "linux-image-$release" "linux-modules-$release" >/dev/null || {
+  echo "linux-image-$release is not in this Ubuntu archive any more." >&2
+  echo "Bump KERNEL_RELEASE in the Makefile to a build it still has." >&2
+  exit 1
+}
 for d in linux-image-"$release"_*.deb linux-modules-"$release"_*.deb; do dpkg-deb -x "$d" x; done
 mods=x/usr/lib/modules/$release
 before=$(du -sm "$mods" | cut -f1)

@@ -34,7 +34,13 @@ mkdir -p "$root"/{proc,sys,dev,run,tmp,etc/k0s,usr/local/bin,var/lib/k0s}
 printf 'k0smos\n' > "$root/etc/hostname"
 printf '127.0.0.1 localhost\n' > "$root/etc/hosts"
 printf 'nameserver 1.1.1.1\n' > "$root/etc/resolv.conf"
-printf 'NAME=k0smos\nID=k0smos\n' > "$root/etc/os-release"
+# The same identity mkrootfs.sh writes, so the boot before the switch_root
+# reports the same image as the one after it. Resolved the same way: the k0s
+# version from what fetch-k0s.sh recorded, the build from git.
+k0s_version=${K0S_VERSION:-$(cat "$repo/dist/k0s-$goarch.version" 2>/dev/null || echo unknown)}
+k0smos_build=${K0SMOS_BUILD:-$(git -C "$repo" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)}
+printf 'NAME=k0smos\nID=k0smos\nVERSION_ID=%s\nBUILD_ID=%s\nPRETTY_NAME="k0smos (k0s %s)"\n' \
+  "$k0s_version" "$k0smos_build" "$k0s_version" > "$root/etc/os-release"
 # k0s looks up UIDs for its components and warns "open /etc/passwd: no such
 # file or directory" (then runs everything as root) without these.
 printf 'root:x:0:0:root:/root:/sbin/nologin\nnobody:x:65534:65534:nobody:/:/sbin/nologin\n' > "$root/etc/passwd"

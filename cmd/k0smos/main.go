@@ -26,6 +26,27 @@ func readCmdline(path string) string {
 	return strings.TrimSpace(string(data))
 }
 
+// osReleaseIDs picks VERSION_ID (the k0s release this image ships, which is
+// what a k0smos release is named after) and BUILD_ID (the k0smos commit) out
+// of an os-release file (see mkrootfs.sh). Values may be quoted; everything
+// else is ignored.
+func osReleaseIDs(text string) (version, build string) {
+	for _, line := range strings.Split(text, "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		value = strings.Trim(value, `"`)
+		switch key {
+		case "VERSION_ID":
+			version = value
+		case "BUILD_ID":
+			build = value
+		}
+	}
+	return version, build
+}
+
 // pump forwards signal arrivals to a coalescing trigger channel. Several
 // signals collapsing into one trigger is correct: the consumer drains until
 // there is no work left.

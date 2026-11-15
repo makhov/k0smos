@@ -30,6 +30,8 @@ keeps the k0s binary, k0smos PID 1, and userspace consistent across platforms.
 | `k0smos-initramfs-<arch>.gz` | custom/direct-kernel integrations |
 | `k0smos-<arch>.manifest` | k0s version, source commit, architecture, and root digest |
 | `SHA256SUMS-<arch>.txt` | release checksums |
+| `k0smos-metal-nvidia-<driver>-x86_64.qcow2` | GPU nodes; one asset per NVIDIA LTS branch ([GPUs](gpus.md)) |
+| `k0smos-metal-nvidia-<driver>-x86_64.raw.zst` | the same image for imaging tools |
 
 KubeVirt images are published to GHCR. Because `+` is not valid in an OCI tag,
 the k0s tag is written with `-` there:

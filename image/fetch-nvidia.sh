@@ -42,10 +42,16 @@ out=dist/nvidia/$version/$arch
 driver=dist/nvidia/$version/driver-$arch.erofs
 
 # NVIDIA's data center packages: the R580 and R620 long-term support branches.
+# Any other version needs its digest given, because the package is fetched over
+# the network and nothing else says it is the one that was meant:
+#   NVIDIA_VERSION=570.195.03 NVIDIA_SHA256=<digest> make metal-nvidia
+# The digest is on NVIDIA's download page for that driver.
 case "$version" in
   580.196.07) sha256=0aab0518db53cf73c412dc7f32bbc850ca95e839d8923d0de4bff42c1c9169ce ;;
   620.70.06) sha256=29118e3abd08c07559bcca3d9c76238d039490af0362a2e5bcfcbe7204afd4b1 ;;
-  *) echo "no pinned digest for NVIDIA $version; add one here" >&2; exit 1 ;;
+  *)
+    sha256=${NVIDIA_SHA256:?no pinned digest for NVIDIA $version; set NVIDIA_SHA256 to its sha256sum}
+    ;;
 esac
 
 [ -d "$kernel_dir/lib/modules" ] || { echo "no module tree in $kernel_dir — run 'make kernel-metal'" >&2; exit 1; }
@@ -60,6 +66,15 @@ if [ ! -s "$pkg" ]; then
 fi
 if command -v sha256sum >/dev/null; then got=$(sha256sum "$pkg" | cut -d' ' -f1); else got=$(shasum -a 256 "$pkg" | cut -d' ' -f1); fi
 [ "$got" = "$sha256" ] || { echo "$pkg: sha256 $got, want $sha256" >&2; exit 1; }
+
+# Both inputs are pinned -- the driver version in the path, the kernel release
+# in the module directory -- so an output that is already there was built from
+# exactly these. Skipping it saves a second module compile when metal-nvidia
+# and oci-nvidia run one after the other. NVIDIA_REBUILD=1 forces it.
+if [ -z "${NVIDIA_REBUILD:-}" ] && [ -d "$out/lib/modules/$release/extra/nvidia" ] && [ -s "$driver" ]; then
+  echo "NVIDIA $version for $release already built in $out"
+  exit 0
+fi
 
 rm -rf "$out"
 mkdir -p "$out"

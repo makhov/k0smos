@@ -21,7 +21,7 @@ import (
 
 // Schema is the record's shape version, so a reader can tell what it is looking
 // at when this grows fields.
-const Schema = 1
+const Schema = 2
 
 // Step is one stage of boot and how it went.
 type Step struct {
@@ -30,6 +30,34 @@ type Step struct {
 	Detail string `json:"detail,omitempty"`
 	Error  string `json:"error,omitempty"`
 	At     string `json:"at"`
+}
+
+// Image is what this machine is running. A node has no shell and no package
+// manager, so without this there is no way to ask a booted machine which build
+// it is -- which is the first question when deciding whether to rebuild it.
+// Every field is best-effort and empty when it could not be determined.
+type Image struct {
+	K0s    string `json:"k0s,omitempty"`    // the k0s release the image ships
+	Build  string `json:"build,omitempty"`  // the k0smos commit it was built from
+	Kernel string `json:"kernel,omitempty"` // the running kernel's release
+	NVIDIA string `json:"nvidia,omitempty"` // the loaded GPU driver, if any
+}
+
+// String is the one line an operator reads, with the fields that are unknown
+// left out rather than shown empty.
+func (i Image) String() string {
+	var parts []string
+	for _, p := range [][2]string{
+		{"k0s", i.K0s}, {"build", i.Build}, {"kernel", i.Kernel}, {"nvidia", i.NVIDIA},
+	} {
+		if p[1] != "" {
+			parts = append(parts, p[0]+" "+p[1])
+		}
+	}
+	if len(parts) == 0 {
+		return "unknown"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // Child describes the supervised workload.
@@ -46,6 +74,7 @@ type Record struct {
 	Boot         string `json:"boot"`
 	SwitchedRoot bool   `json:"switchedRoot"`
 	Hostname     string `json:"hostname,omitempty"`
+	Image        Image  `json:"image"`
 	Steps        []Step `json:"steps"`
 	Child        Child  `json:"child"`
 }
@@ -108,6 +137,13 @@ func (r *Recorder) SetSwitchedRoot(v bool) {
 func (r *Recorder) SetHostname(h string) {
 	r.mu.Lock()
 	r.rec.Hostname = h
+	r.mu.Unlock()
+	r.flush()
+}
+
+func (r *Recorder) SetImage(i Image) {
+	r.mu.Lock()
+	r.rec.Image = i
 	r.mu.Unlock()
 	r.flush()
 }
@@ -226,6 +262,7 @@ func Text(rec Record) string {
 	if rec.Hostname != "" {
 		fmt.Fprintf(&b, "hostname    %s\n", rec.Hostname)
 	}
+	fmt.Fprintf(&b, "image       %s\n", rec.Image)
 	fmt.Fprintf(&b, "switched    %t\n", rec.SwitchedRoot)
 
 	if len(rec.Child.Argv) > 0 {

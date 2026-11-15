@@ -29,4 +29,8 @@ mkdir -p "$repo/dist"
 curl -fsSL --retry 3 -o "$out.part" "$url"
 mv "$out.part" "$out"
 chmod 0755 "$out"
+# What version this is, for mkrootfs.sh to put in /etc/os-release: the binary
+# cannot be asked on a host of another architecture, and K0S_VERSION is unset
+# on a local build that took the latest release.
+printf '%s\n' "$ver" > "$out.version"
 echo "wrote dist/k0s-${k0sarch} ($(du -h "$out" | cut -f1), $ver)"

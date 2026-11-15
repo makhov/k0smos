@@ -47,8 +47,14 @@ kernel-alpine:
 # run under, the broad NIC, storage, USB and platform driver set reached by
 # modalias autoloading, userfaultfd, and headers for each exact build, which the
 # NVIDIA modules are compiled against.
+#
+# Pinned to one exact build: a GPU image is a kernel and modules compiled
+# against that kernel's headers, and an unpinned fetch quietly changes the
+# kernel under them. Bump it when Ubuntu drops this build from the archive --
+# the fetch says so -- and rebuild the NVIDIA images against the new one.
+KERNEL_RELEASE ?= 7.0.0-43-generic
 kernel-metal:
-	KERNEL_ROOT=dist/kernel-metal ./image/fetch-kernel-ubuntu.sh
+	KERNEL_ROOT=dist/kernel-metal KERNEL_RELEASE=$(KERNEL_RELEASE) ./image/fetch-kernel-ubuntu.sh
 
 # Latest k0s release binary for the host arch (~240MB).
 k0s:

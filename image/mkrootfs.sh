@@ -35,6 +35,15 @@ esac
 k0s_bin=${K0S_BIN:?set K0S_BIN to a linux k0s binary path}
 moddir=${MODULES_DIR:-dist/kernel/$apkarch/lib/modules}
 
+# Image identity for /etc/os-release. A node has no shell and no package
+# manager, so this is the only way to ask a running machine which build it is
+# -- and kubelet reports PRETTY_NAME as the node's OS-IMAGE, which puts it in
+# `kubectl get nodes -o wide`. Resolved here, on the host, because the
+# container stage below has neither git nor the dist tree's sibling files.
+K0S_VERSION=${K0S_VERSION:-$(cat "$k0s_bin.version" 2>/dev/null || echo unknown)}
+K0SMOS_BUILD=${K0SMOS_BUILD:-$(git -C "$repo" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)}
+export K0S_VERSION K0SMOS_BUILD
+
 # Cross-compile on the host so the container stage needs only mkfs.ext4.
 if [ -z "${K0SMOS_BIN:-}" ]; then
   K0SMOS_BIN=dist/k0smos-$goarch
@@ -77,7 +86,7 @@ if ! command -v "$mkfs_tool" >/dev/null 2>&1 || ! command -v apk >/dev/null 2>&1
   # Every knob has to be forwarded explicitly: the container stage re-runs this
   # script, and anything not listed here is silently lost on a macOS host.
   exec docker run --rm --platform "$platform" -v "$repo:/repo" -w /repo \
-    -e K0S_BIN -e K0SMOS_BIN -e MODULES_DIR -e ARCH \
+    -e K0S_BIN -e K0SMOS_BIN -e MODULES_DIR -e ARCH -e K0S_VERSION -e K0SMOS_BUILD \
     -e PAD_MB -e FSLABEL -e FSUUID -e APK_PKGS -e ROOTFS -e FIRECRACKER_DIR \
     alpine:3.23 sh -c 'apk add -q --no-cache '"$apk_build"' bash >/dev/null && exec bash image/mkrootfs.sh "$1"' _ "$img"
 fi
@@ -154,7 +163,8 @@ fi
 printf 'k0smos\n' > "$root/etc/hostname"
 printf '127.0.0.1 localhost\n' > "$root/etc/hosts"
 printf 'nameserver 1.1.1.1\n' > "$root/etc/resolv.conf"
-printf 'NAME=k0smos\nID=k0smos\n' > "$root/etc/os-release"
+printf 'NAME=k0smos\nID=k0smos\nVERSION_ID=%s\nBUILD_ID=%s\nPRETTY_NAME="k0smos (k0s %s)"\n' \
+  "$K0S_VERSION" "$K0SMOS_BUILD" "$K0S_VERSION" > "$root/etc/os-release"
 # k0s looks up UIDs for its components and warns "open /etc/passwd: no such
 # file or directory" (then runs everything as root) without these.
 printf 'root:x:0:0:root:/root:/sbin/nologin\nnobody:x:65534:65534:nobody:/:/sbin/nologin\n' > "$root/etc/passwd"

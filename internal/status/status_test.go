@@ -166,3 +166,19 @@ func TestSummaryWithoutStepsOmitsTheTime(t *testing.T) {
 		t.Errorf("Summary = %q, want %q", got, want)
 	}
 }
+
+// A GPU image reports all four; a plain node has no driver and must not show
+// an empty "nvidia" with nothing after it.
+func TestImageStringLeavesOutWhatIsUnknown(t *testing.T) {
+	full := Image{K0s: "v1.37.2+k0s.1", Build: "ff7354c2e5f1", Kernel: "7.0.0-43-generic", NVIDIA: "620.70.06"}
+	want := "k0s v1.37.2+k0s.1, build ff7354c2e5f1, kernel 7.0.0-43-generic, nvidia 620.70.06"
+	if got := full.String(); got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+	if got := (Image{Kernel: "7.0.0-43-generic"}).String(); got != "kernel 7.0.0-43-generic" {
+		t.Errorf("String() = %q", got)
+	}
+	if got := (Image{}).String(); got != "unknown" {
+		t.Errorf("String() = %q, want unknown", got)
+	}
+}

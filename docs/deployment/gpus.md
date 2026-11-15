@@ -2,12 +2,24 @@
 
 GPU nodes use a variant of the metal image that carries NVIDIA's data center
 driver. It is built for x86_64, for H100, H200 and B200, from one pinned
-NVIDIA package per driver branch:
+NVIDIA package per driver branch.
+
+Every release ships both branches, so picking a driver is a download rather
+than a build: `k0smos-metal-nvidia-620.70.06-x86_64.qcow2` and
+`k0smos-metal-nvidia-580.196.07-x86_64.qcow2`.
+
+To build one yourself, for another branch or another kernel:
 
 ```bash
 ARCH=x86_64 make metal-nvidia NVIDIA_VERSION=620.70.06   # R620
 ARCH=x86_64 make metal-nvidia NVIDIA_VERSION=580.196.07  # R580
 ```
+
+The modules are compiled against the exact kernel build pinned as
+`KERNEL_RELEASE` in the `Makefile`, which is why that pin exists: an image is
+a kernel and the modules built for it, and nothing else reproduces one. A
+driver branch other than those two needs its package digest added to
+`image/fetch-nvidia.sh` first.
 
 The output is `dist/k0smos-metal-nvidia-<version>-x86_64.qcow2`. It boots a
 machine without a GPU like the plain metal image does.

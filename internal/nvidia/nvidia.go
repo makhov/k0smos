@@ -69,6 +69,30 @@ func Nodes(proc string) ([]Node, error) {
 	return nodes, errs
 }
 
+// Version is the loaded driver's version, read from proc (normally "/proc"),
+// or "" when nvidia.ko is not loaded. The image is built against one driver
+// release, so this says which one a machine actually got.
+//
+// The file's first line is NVIDIA's own banner:
+//
+//	NVRM version: NVIDIA UNIX x86_64 Kernel Module  620.70.06  Tue Sep 9 ...
+func Version(proc string) string {
+	b, err := os.ReadFile(filepath.Join(proc, "driver/nvidia/version"))
+	if err != nil {
+		return ""
+	}
+	line, _, _ := strings.Cut(string(b), "\n")
+	_, after, ok := strings.Cut(line, "Kernel Module")
+	if !ok {
+		return ""
+	}
+	fields := strings.Fields(after)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
 // deviceMinor reads the "Device Minor:" line of a GPU's information file.
 func deviceMinor(path string) (uint32, error) {
 	b, err := os.ReadFile(path)

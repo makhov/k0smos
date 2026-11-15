@@ -59,3 +59,23 @@ func TestPumpCoalescesSignalsAndExitsOnClose(t *testing.T) {
 		t.Fatal("pump did not exit after sigs closed")
 	}
 }
+
+// The os-release the image scripts write: the wanted values sit among keys
+// that must be ignored, and PRETTY_NAME is quoted and full of spaces.
+func TestOSReleaseIDs(t *testing.T) {
+	version, build := osReleaseIDs("NAME=k0smos\nID=k0smos\nVERSION_ID=v1.37.2+k0s.1\nBUILD_ID=ff7354c2e5f1\nPRETTY_NAME=\"k0smos (k0s v1.37.2+k0s.1)\"\n")
+	if version != "v1.37.2+k0s.1" {
+		t.Errorf("version = %q", version)
+	}
+	if build != "ff7354c2e5f1" {
+		t.Errorf("build = %q", build)
+	}
+}
+
+// A custom initramfs may carry no os-release at all. That machine reports the
+// kernel it can see rather than refusing to report anything.
+func TestOSReleaseIDsWithoutAFileIsEmpty(t *testing.T) {
+	if version, build := osReleaseIDs(""); version != "" || build != "" {
+		t.Errorf("version = %q, build = %q, want both empty", version, build)
+	}
+}

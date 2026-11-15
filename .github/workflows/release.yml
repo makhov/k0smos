@@ -190,6 +190,98 @@ jobs:
           set -euo pipefail
           TAG="${OCI_VERSION}-${{ matrix.goarch }}" ./image/mkoci.sh
 
+  gpu:
+    # The GPU images are a build, not a rebuild: one driver branch per leg, each
+    # pinned to the kernel in the Makefile. Shipping them is what makes the
+    # driver a choice a user downloads rather than one they have to build.
+    name: Build NVIDIA ${{ matrix.nvidia }} release set
+    needs: resolve
+    if: needs.resolve.outputs.exists != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        # The two long-term support branches, as in docs/deployment/gpus.md.
+        nvidia: ["620.70.06", "580.196.07"]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      ARCH: x86_64
+      K0S_VERSION: ${{ needs.resolve.outputs.version }}
+      NVIDIA_VERSION: ${{ matrix.nvidia }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install release tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-utils zstd
+
+      - name: Build the GPU metal image
+        run: |
+          set -euo pipefail
+          make build
+          make metal-nvidia
+
+      - name: Smoke-test firmware boot
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y --no-install-recommends ovmf qemu-system-x86
+          make ctl
+          # No GPU on a runner, so this proves the image still boots with the
+          # extra driver partition and finds its root -- not that CUDA works.
+          ./image/test-metal.sh "dist/k0smos-metal-nvidia-${NVIDIA_VERSION}-x86_64.qcow2"
+
+      - name: Package release artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          name="k0smos-metal-nvidia-${NVIDIA_VERSION}-x86_64"
+          cp "dist/$name.qcow2" "out/$name.qcow2"
+          zstd -12 -T0 -f \
+            "dist/metal-nvidia-${NVIDIA_VERSION}/k0smos-metal-x86_64.raw" \
+            -o "out/$name.raw.zst"
+          {
+            echo "k0s_version=$K0S_VERSION"
+            echo "k0smos_commit=$GITHUB_SHA"
+            echo "architecture=x86_64"
+            echo "nvidia_version=$NVIDIA_VERSION"
+          } > "out/$name.manifest"
+          cd out
+          sha256sum "$name.qcow2" "$name.raw.zst" "$name.manifest" \
+            > "SHA256SUMS-nvidia-${NVIDIA_VERSION}.txt"
+
+      # Named release-* so the publish job's existing download pattern picks it up.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-nvidia-${{ matrix.nvidia }}
+          path: out/*
+          if-no-files-found: error
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the KubeVirt OCI artifact
+        env:
+          OCI_VERSION: ${{ needs.resolve.outputs.oci_version }}
+          PUSH: "1"
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          # Builds the KubeVirt initramfs and pushes it; the driver and the
+          # modules are reused from the metal build above. The Makefile appends
+          # -nvidia-$NVIDIA_VERSION, and x86_64 is the only architecture, so the
+          # tag carries no architecture suffix.
+          make oci-nvidia TAG="${OCI_VERSION}"
+
   cli:
     name: Build k0smosctl
     needs: resolve
@@ -249,10 +341,11 @@ jobs:
 
   release:
     name: Publish k0s ${{ needs.resolve.outputs.version }} release set
-    needs: [resolve, build, cli]
+    needs: [resolve, build, gpu, cli]
     if: >-
       needs.resolve.outputs.exists != 'true'
       && needs.build.result == 'success'
+      && needs.gpu.result == 'success'
       && needs.cli.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -275,6 +368,10 @@ jobs:
             echo "This is the k0smos artifact set for upstream k0s \`$K0S_VERSION\`."
             echo
             echo "Every image in this release embeds that exact k0s version and the same immutable EROFS root for its architecture. The KubeVirt OCI images are \`ghcr.io/${GITHUB_REPOSITORY_OWNER}/k0smos:${OCI_VERSION}-amd64\` and \`ghcr.io/${GITHUB_REPOSITORY_OWNER}/k0smos:${OCI_VERSION}-arm64\`."
+            echo
+            echo "### GPU images"
+            echo
+            echo "\`k0smos-metal-nvidia-<driver>-x86_64.qcow2\` carries NVIDIA's data center driver, so the GPU Operator runs with \`driver.enabled=false\`. Pick a long-term support branch: \`620.70.06\` or \`580.196.07\`. The matching KubeVirt images are \`ghcr.io/${GITHUB_REPOSITORY_OWNER}/k0smos:${OCI_VERSION}-nvidia-620.70.06\` and \`…-nvidia-580.196.07\`."
             echo
             echo "### Install the CLI"
             echo

@@ -33,6 +33,21 @@ k0smos: boot ok in 4.2s, 11 stages
 k0smos: boot DEGRADED in 6.1s, 11 stages: network (dhcp on eth0: no lease)
 ```
 
+### Which image is this?
+
+A node has no shell and no package manager, so the versions it was built from
+are reported instead: init prints them, and they are the `image` block of the
+boot record and the `image` line of `k0smosctl machine status`.
+
+```text
+k0smos: image: k0s v1.37.2+k0s.1, build ff7354c2e5f1, kernel 7.0.0-43-generic, nvidia 620.70.06
+```
+
+`build` is the k0smos commit the image was built from. The driver is named only
+on a GPU image, and only once its module is loaded. The same k0s version and
+commit are in `/etc/os-release`, which is also what kubelet reports as the
+node's `OS-IMAGE` in `kubectl get nodes -o wide`.
+
 ### Without `k0smosctl`
 
 The control port is a virtio-serial port and a line protocol, so any tool can
