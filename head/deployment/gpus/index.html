@@ -613,6 +613,15 @@ You are not viewing the documentation for the current stable release of k0smos.
 </li>
       
         <li class="md-nav__item">
+  <a href="#mig" class="md-nav__link">
+    <span class="md-ellipsis">
+      MIG
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#kubevirt" class="md-nav__link">
     <span class="md-ellipsis">
       KubeVirt
@@ -953,6 +962,15 @@ You are not viewing the documentation for the current stable release of k0smos.
 </li>
       
         <li class="md-nav__item">
+  <a href="#mig" class="md-nav__link">
+    <span class="md-ellipsis">
+      MIG
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#kubevirt" class="md-nav__link">
     <span class="md-ellipsis">
       KubeVirt
@@ -1023,12 +1041,15 @@ machine without a GPU like the plain metal image does.</p>
 <td><code>/dev/nvidia*</code>, <code>/dev/nvidia-uvm</code></td>
 <td>created by k0smos once the driver has found the GPUs</td>
 </tr>
+<tr>
+<td><code>/dev/nvidia-caps/*</code>, the MIG capabilities</td>
+<td>created by k0smos at the same time</td>
+</tr>
 </tbody>
 </table>
 <p>The libraries must be exactly the version of the kernel module, so they come
 with the image. Only compute and utility are included: no OpenCL, video
-(NVENC/NVDEC) or graphics libraries. There are no <code>/dev/nvidia-caps</code> nodes, so
-MIG partitioning is not available.</p>
+(NVENC/NVDEC) or graphics libraries.</p>
 <p>On NVSwitch systems (HGX), Fabric Manager runs on the host that passes the GPUs
 through, not on the k0smos guest.</p>
 <h2 id="gpu-operator">GPU Operator<a class="headerlink" href="#gpu-operator" title="Permanent link">#</a></h2>
@@ -1048,6 +1069,22 @@ read-only:</p>
 <p><code>hostPaths.driverInstallDir</code> keeps its default, <code>/run/nvidia/driver</code>, which is
 where k0smos mounts the driver. <code>/etc</code> is rebuilt at each boot, and the toolkit
 writes its containerd file again whenever its pod starts.</p>
+<h2 id="mig">MIG<a class="headerlink" href="#mig" title="Permanent link">#</a></h2>
+<p>Multi-Instance GPU works, but there is no shell to run <code>nvidia-smi</code> in, so the
+partitioning is set from a pod. The GPU Operator's MIG manager does it from a
+node label, which is the usual way on any Kubernetes node:</p>
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>label<span class="w"> </span>node<span class="w"> </span>&lt;node&gt;<span class="w"> </span>nvidia.com/mig.config<span class="o">=</span>all-1g.10gb<span class="w"> </span>--overwrite
+</code></pre></div>
+<p>A process needs a capability node, <code>/dev/nvidia-caps/nvidia-cap&lt;N&gt;</code>, to
+partition a GPU, to monitor one, or to use a single instance. The driver does
+not create these; a distro has its libraries call setuid <code>nvidia-modprobe</code>
+each time one is missing, and the image carries neither that nor udev. So
+k0smos creates them itself at boot, from the driver's own table in
+<code>/proc/driver/nvidia-caps/</code>. That table is fixed — it lists every instance the
+driver could ever have, not the ones that exist — so an instance created hours
+later already has its node.</p>
+<p>MIG mode survives a reboot; the instance geometry does not. The MIG manager
+recreates it from the label when the node comes back.</p>
 <h2 id="kubevirt">KubeVirt<a class="headerlink" href="#kubevirt" title="Permanent link">#</a></h2>
 <p>The usual KubeVirt image boots Kata's kernel, which cannot load modules, so GPU
 VMs use <code>k0smos:&lt;tag&gt;-nvidia-&lt;version&gt;</code>: the metal kernel, an initramfs with the
@@ -1061,7 +1098,7 @@ image is the <code>kernelBoot</code> container and a <code>containerDisk</code>:
 <span class="w">          </span><span class="nt">secureBoot</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w"> </span><span class="c1"># the kernel and modules are not signed</span>
 <span class="w">      </span><span class="nt">kernelBoot</span><span class="p">:</span>
 <span class="w">        </span><span class="nt">container</span><span class="p">:</span>
-<span class="w">          </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ghcr.io/amakhov/k0smos:dev-nvidia-620.70.06</span>
+<span class="w">          </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ghcr.io/makhov/k0smos:dev-nvidia-620.70.06</span>
 <span class="w">          </span><span class="nt">kernelPath</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/boot/vmlinuz</span>
 <span class="w">          </span><span class="nt">initrdPath</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/boot/initramfs.gz</span>
 <span class="w">        </span><span class="nt">kernelArgs</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;console=ttyS0</span><span class="nv"> </span><span class="s">k0smos.ip=dhcp</span><span class="nv"> </span><span class="s">k0smos.data=auto&quot;</span>
@@ -1077,7 +1114,7 @@ image is the <code>kernelBoot</code> container and a <code>containerDisk</code>:
 <span class="w">  </span><span class="nt">volumes</span><span class="p">:</span>
 <span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nvidia-driver</span>
 <span class="w">      </span><span class="nt">containerDisk</span><span class="p">:</span>
-<span class="w">        </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ghcr.io/amakhov/k0smos:dev-nvidia-620.70.06</span>
+<span class="w">        </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ghcr.io/makhov/k0smos:dev-nvidia-620.70.06</span>
 <span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">data</span>
 <span class="w">      </span><span class="nt">emptyDisk</span><span class="p">:</span>
 <span class="w">        </span><span class="nt">capacity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100Gi</span>
