@@ -34,7 +34,7 @@ make metal                    # dist/k0smos-metal-<arch>.qcow2
 | `FIRECRACKER_DIR` | unset | A directory with `firecracker` and `jailer` to include, for a node that runs sandboxed workloads. Released images carry no VMM. |
 | `METAL_DATA_MB` | `8192` | The data partition's size in the built image. It grows into a bigger disk on first boot, so this is a floor, not a ceiling. |
 | `METAL_KERNEL_ARGS` | console, data volume and DHCP | The command line baked into the image's GRUB config ([Kernel parameters](../reference/cmdline.md)). |
-| `REGISTRY`, `TAG`, `PUSH` | `ghcr.io/amakhov`, `dev`, off | Where `make oci` and `make oci-nvidia` publish the KubeVirt artifact. |
+| `REGISTRY`, `TAG`, `PUSH` | `ghcr.io/makhov`, `dev`, off | Where `make oci` and `make oci-nvidia` publish the KubeVirt artifact. |
 
 Each variable goes on the `make` command line or in the environment:
 
