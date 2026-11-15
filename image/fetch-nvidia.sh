@@ -42,10 +42,16 @@ out=dist/nvidia/$version/$arch
 driver=dist/nvidia/$version/driver-$arch.erofs
 
 # NVIDIA's data center packages: the R580 and R620 long-term support branches.
+# Any other version needs its digest given, because the package is fetched over
+# the network and nothing else says it is the one that was meant:
+#   NVIDIA_VERSION=570.195.03 NVIDIA_SHA256=<digest> make metal-nvidia
+# The digest is on NVIDIA's download page for that driver.
 case "$version" in
   580.196.07) sha256=0aab0518db53cf73c412dc7f32bbc850ca95e839d8923d0de4bff42c1c9169ce ;;
   620.70.06) sha256=29118e3abd08c07559bcca3d9c76238d039490af0362a2e5bcfcbe7204afd4b1 ;;
-  *) echo "no pinned digest for NVIDIA $version; add one here" >&2; exit 1 ;;
+  *)
+    sha256=${NVIDIA_SHA256:?no pinned digest for NVIDIA $version; set NVIDIA_SHA256 to its sha256sum}
+    ;;
 esac
 
 [ -d "$kernel_dir/lib/modules" ] || { echo "no module tree in $kernel_dir — run 'make kernel-metal'" >&2; exit 1; }
