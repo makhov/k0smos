@@ -22,7 +22,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/.." && pwd)
 cd "$repo"
 
-registry=${REGISTRY:-ghcr.io/amakhov}
+registry=${REGISTRY:-ghcr.io/makhov}
 tag=${TAG:-dev}
 arch=${ARCH:-$(uname -m)}
 case "$arch" in

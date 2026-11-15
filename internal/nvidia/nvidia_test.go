@@ -30,11 +30,11 @@ func TestNodesForGPUsAndUVM(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Node{
-		{"/dev/nvidia1", 195, 1},
-		{"/dev/nvidia0", 195, 0},
-		{"/dev/nvidiactl", 195, 255},
-		{"/dev/nvidia-uvm", 507, 0},
-		{"/dev/nvidia-uvm-tools", 507, 1},
+		{"/dev/nvidia1", 195, 1, 0o666},
+		{"/dev/nvidia0", 195, 0, 0o666},
+		{"/dev/nvidiactl", 195, 255, 0o666},
+		{"/dev/nvidia-uvm", 507, 0, 0o666},
+		{"/dev/nvidia-uvm-tools", 507, 1, 0o666},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v\nwant %v", got, want)
@@ -80,7 +80,7 @@ func TestNodesSkipsUnreadableGPU(t *testing.T) {
 	if err == nil {
 		t.Error("want an error naming the GPU that could not be read")
 	}
-	want := []Node{{"/dev/nvidia0", 195, 0}, {"/dev/nvidiactl", 195, 255}}
+	want := []Node{{"/dev/nvidia0", 195, 0, 0o666}, {"/dev/nvidiactl", 195, 255, 0o666}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v\nwant %v", got, want)
 	}
@@ -107,5 +107,49 @@ func TestVersionWithoutTheDriverIsEmpty(t *testing.T) {
 	write(t, filepath.Join(proc, "driver/nvidia/version"), "NVRM version: NVIDIA UNIX x86_64 Kernel Module\n")
 	if got := Version(proc); got != "" {
 		t.Errorf("Version() on a truncated banner = %q, want empty", got)
+	}
+}
+
+// The capability table is static: the driver lists every GPU it could ever
+// see, with or without MIG instances. Only the lines for the GPUs this machine
+// has become nodes, and the capability that repartitions a GPU stays root-only.
+func TestNodesIncludeCapabilitiesForThisMachinesGPUs(t *testing.T) {
+	proc := t.TempDir()
+	write(t, filepath.Join(proc, "driver/nvidia/gpus/0000:18:00.0/information"), "Device Minor: 0\n")
+	write(t, filepath.Join(proc, "devices"), "Character devices:\n195 nvidia\n508 nvidia-caps\n")
+	write(t, filepath.Join(proc, "driver/nvidia-caps/mig-minors"),
+		"config 1\nmonitor 2\ngpu0/gi0/access 3\ngpu0/gi0/ci0/access 4\ngpu7/gi0/access 948\n")
+	write(t, filepath.Join(proc, "driver/nvidia-caps/sys-minors"), "fabric-imex-mgmt 4323\nprofiler-device 4324\n")
+
+	got, err := Nodes(proc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Node{
+		{"/dev/nvidia0", 195, 0, 0o666},
+		{"/dev/nvidiactl", 195, 255, 0o666},
+		{"/dev/nvidia-caps/nvidia-cap1", 508, 1, 0o400},
+		{"/dev/nvidia-caps/nvidia-cap2", 508, 2, 0o444},
+		{"/dev/nvidia-caps/nvidia-cap3", 508, 3, 0o444},
+		{"/dev/nvidia-caps/nvidia-cap4", 508, 4, 0o444},
+		{"/dev/nvidia-caps/nvidia-cap4323", 508, 4323, 0o400},
+		{"/dev/nvidia-caps/nvidia-cap4324", 508, 4324, 0o444},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v\nwant %v", got, want)
+	}
+}
+
+// A driver without the capability device -- too old, or built without it --
+// still gets its GPU nodes, and no capability node is invented for it.
+func TestNodesWithoutTheCapabilityDevice(t *testing.T) {
+	proc := t.TempDir()
+	write(t, filepath.Join(proc, "driver/nvidia/gpus/0000:18:00.0/information"), "Device Minor: 0\n")
+	write(t, filepath.Join(proc, "devices"), "Character devices:\n195 nvidia\n")
+	write(t, filepath.Join(proc, "driver/nvidia-caps/mig-minors"), "config 1\n")
+
+	got, err := Nodes(proc)
+	if err != nil || len(got) != 2 {
+		t.Errorf("got %v, %v; want nvidia0 and nvidiactl only", got, err)
 	}
 }

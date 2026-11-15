@@ -904,26 +904,47 @@ func recordImage(s *sys.Sys) {
 	logf("image: %s", img)
 }
 
-// nvidiaDeviceNodes creates /dev/nvidia* for the GPUs the driver found. 0666
-// like nvidia-modprobe's default: which pods get a GPU is the device plugin's
-// decision, made by what it mounts into them. Nothing to do without a GPU.
+// nvidiaDeviceNodes creates /dev/nvidia*, /dev/nvidia-uvm* and the MIG
+// capability nodes under /dev/nvidia-caps for what the driver found. Each gets
+// the mode nvidia-modprobe would give it, which for a GPU is 0666: which pods
+// get one is the device plugin's decision, made by what it mounts into them.
+// Nothing to do without a GPU.
 func nvidiaDeviceNodes() {
 	nodes, err := nvidia.Nodes("/proc")
 	if err != nil { // a GPU that could not be read; the rest still get their nodes
 		logf("warn: NVIDIA device nodes: %v", err)
 	}
-	for _, n := range nodes {
-		err := unix.Mknod(n.Path, unix.S_IFCHR|0o666, int(unix.Mkdev(n.Major, n.Minor)))
-		if err != nil && !errors.Is(err, unix.EEXIST) {
-			logf("warn: mknod %s: %v", n.Path, err)
-			continue
-		}
-		if err := os.Chmod(n.Path, 0o666); err != nil { // mknod's mode is masked by the umask
-			logf("warn: chmod %s: %v", n.Path, err)
+	var made, failed int
+	var first error
+	fail := func(err error) {
+		failed++
+		if first == nil {
+			first = err
 		}
 	}
-	if len(nodes) > 0 {
-		logf("created %d NVIDIA device nodes", len(nodes))
+	for _, n := range nodes {
+		if err := os.MkdirAll(filepath.Dir(n.Path), 0o755); err != nil {
+			fail(err)
+			continue
+		}
+		err := unix.Mknod(n.Path, unix.S_IFCHR|uint32(n.Mode), int(unix.Mkdev(n.Major, n.Minor)))
+		if err != nil && !errors.Is(err, unix.EEXIST) {
+			fail(fmt.Errorf("mknod %s: %w", n.Path, err))
+			continue
+		}
+		if err := os.Chmod(n.Path, n.Mode); err != nil { // mknod's mode is masked by the umask
+			fail(fmt.Errorf("chmod %s: %w", n.Path, err))
+			continue
+		}
+		made++
+	}
+	// Counted, not listed: a machine with eight GPUs has over a thousand
+	// capability nodes, and the console is the only place a failure shows.
+	if failed > 0 {
+		logf("warn: %d of %d NVIDIA device nodes: %v", failed, failed+made, first)
+	}
+	if made > 0 {
+		logf("created %d NVIDIA device nodes", made)
 	}
 }
 
