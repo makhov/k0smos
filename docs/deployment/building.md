@@ -9,6 +9,12 @@ You need `git`, `docker` and `make`. Nothing else: each step that needs a
 Linux tool (`mkfs.erofs`, `grub-install`, `depmod`, the NVIDIA module
 compiler) runs in a container the build starts for itself.
 
+The repository has to sit on a **case-sensitive filesystem**, which rules out
+a stock macOS checkout for anything that carries a kernel module tree: Linux
+ships `xt_DSCP.ko` and `xt_dscp.ko` as different modules, and they overwrite
+each other on APFS. `make kernel-metal` checks this and says so. Build on
+Linux, or make a case-sensitive APFS volume in Disk Utility and clone there.
+
 ```bash
 git clone https://github.com/makhov/k0smos && cd k0smos
 make metal                    # dist/k0smos-metal-<arch>.qcow2

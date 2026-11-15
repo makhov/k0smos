@@ -39,6 +39,20 @@ ubuntu=${UBUNTU_RELEASE:-26.04}
 command -v docker >/dev/null || { echo "docker required to unpack the .deb" >&2; exit 1; }
 mkdir -p "$out"
 
+# netfilter ships xt_DSCP.ko and xt_dscp.ko, and three more pairs like them.
+# On a case-insensitive filesystem -- macOS's default -- they land on each
+# other as the module tree is copied out, which surfaces as a bare "cp: File
+# exists" from inside the container. Say what it actually is instead.
+: > "$out/.case-test"
+if [ -e "$out/.CASE-TEST" ]; then
+  rm -f "$out/.case-test"
+  echo "$out is on a case-insensitive filesystem, which cannot hold the kernel's" >&2
+  echo "module tree (xt_DSCP.ko and xt_dscp.ko are different modules)." >&2
+  echo "Build on Linux, or put the repository on a case-sensitive volume." >&2
+  exit 1
+fi
+rm -f "$out/.case-test"
+
 docker run --rm --platform "$platform" -v "$out:/out" -e owner="$(id -u):$(id -g)" \
   -e release="${KERNEL_RELEASE:-}" \
   "ubuntu:$ubuntu" bash -euo pipefail -c '
