@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://makhov.github.io/k0smos/head/deployment/operating/">
       
       
-        <link rel="prev" href="../gpus/">
+        <link rel="prev" href="../building/">
       
       
         <link rel="next" href="../../known-limitations/">
@@ -559,6 +559,29 @@ You are not viewing the documentation for the current stable release of k0smos.
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../building/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Building your own image
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -631,6 +654,15 @@ You are not viewing the documentation for the current stable release of k0smos.
   
     <nav class="md-nav" aria-label="Observe">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#which-image-is-this" class="md-nav__link">
+    <span class="md-ellipsis">
+      Which image is this?
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#without-k0smosctl" class="md-nav__link">
@@ -980,6 +1012,15 @@ You are not viewing the documentation for the current stable release of k0smos.
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#which-image-is-this" class="md-nav__link">
+    <span class="md-ellipsis">
+      Which image is this?
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#without-k0smosctl" class="md-nav__link">
     <span class="md-ellipsis">
       Without k0smosctl
@@ -1097,6 +1138,16 @@ is what to look for first in a captured console:</p>
 <div class="highlight"><pre><span></span><code>k0smos: boot ok in 4.2s, 11 stages
 k0smos: boot DEGRADED in 6.1s, 11 stages: network (dhcp on eth0: no lease)
 </code></pre></div>
+<h3 id="which-image-is-this">Which image is this?<a class="headerlink" href="#which-image-is-this" title="Permanent link">#</a></h3>
+<p>A node has no shell and no package manager, so the versions it was built from
+are reported instead: init prints them, and they are the <code>image</code> block of the
+boot record and the <code>image</code> line of <code>k0smosctl machine status</code>.</p>
+<div class="highlight"><pre><span></span><code>k0smos: image: k0s v1.37.2+k0s.1, build ff7354c2e5f1, kernel 7.0.0-43-generic, nvidia 620.70.06
+</code></pre></div>
+<p><code>build</code> is the k0smos commit the image was built from. The driver is named only
+on a GPU image, and only once its module is loaded. The same k0s version and
+commit are in <code>/etc/os-release</code>, which is also what kubelet reports as the
+node's <code>OS-IMAGE</code> in <code>kubectl get nodes -o wide</code>.</p>
 <h3 id="without-k0smosctl">Without <code>k0smosctl</code><a class="headerlink" href="#without-k0smosctl" title="Permanent link">#</a></h3>
 <p>The control port is a virtio-serial port and a line protocol, so any tool can
 ask. A machine booted by hand needs the port wired up:</p>

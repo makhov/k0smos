@@ -16,7 +16,7 @@
         <link rel="prev" href="../bare-metal/">
       
       
-        <link rel="next" href="../operating/">
+        <link rel="next" href="../building/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -630,6 +630,29 @@ You are not viewing the documentation for the current stable release of k0smos.
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../building/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Building your own image
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -957,10 +980,19 @@ You are not viewing the documentation for the current stable release of k0smos.
 <h1 id="nvidia-gpus">NVIDIA GPUs<a class="headerlink" href="#nvidia-gpus" title="Permanent link">#</a></h1>
 <p>GPU nodes use a variant of the metal image that carries NVIDIA's data center
 driver. It is built for x86_64, for H100, H200 and B200, from one pinned
-NVIDIA package per driver branch:</p>
+NVIDIA package per driver branch.</p>
+<p>Every release ships both branches, so picking a driver is a download rather
+than a build: <code>k0smos-metal-nvidia-620.70.06-x86_64.qcow2</code> and
+<code>k0smos-metal-nvidia-580.196.07-x86_64.qcow2</code>.</p>
+<p>To build one yourself, for another branch or another kernel:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">ARCH</span><span class="o">=</span>x86_64<span class="w"> </span>make<span class="w"> </span>metal-nvidia<span class="w"> </span><span class="nv">NVIDIA_VERSION</span><span class="o">=</span><span class="m">620</span>.70.06<span class="w">   </span><span class="c1"># R620</span>
 <span class="nv">ARCH</span><span class="o">=</span>x86_64<span class="w"> </span>make<span class="w"> </span>metal-nvidia<span class="w"> </span><span class="nv">NVIDIA_VERSION</span><span class="o">=</span><span class="m">580</span>.196.07<span class="w">  </span><span class="c1"># R580</span>
 </code></pre></div>
+<p>The modules are compiled against the exact kernel build pinned as
+<code>KERNEL_RELEASE</code> in the <code>Makefile</code>, which is why that pin exists: an image is
+a kernel and the modules built for it, and nothing else reproduces one. A
+driver branch other than those two needs its package digest added to
+<code>image/fetch-nvidia.sh</code> first.</p>
 <p>The output is <code>dist/k0smos-metal-nvidia-&lt;version&gt;-x86_64.qcow2</code>. It boots a
 machine without a GPU like the plain metal image does.</p>
 <p>For KubeVirt, <code>ARCH=x86_64 make oci-nvidia NVIDIA_VERSION=...</code> builds the
