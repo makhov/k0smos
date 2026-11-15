@@ -2,6 +2,8 @@
   {
     "version": "head",
     "title": "head",
-    "aliases": []
+    "aliases": [
+      "main"
+    ]
   }
 ]
