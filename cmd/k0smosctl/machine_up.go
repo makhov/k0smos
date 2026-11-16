@@ -574,6 +574,14 @@ func qemuArgs(g guest, s bootSpec) ([]string, error) {
 		// server being reachable from the rest of the network.
 		netdev += fmt.Sprintf(",hostfwd=tcp:127.0.0.1:%d-:6443", s.apiPort)
 	}
+	// An entropy source. Without one the guest's random pool is seeded from
+	// interrupt timing alone, and a fresh VM has almost none of that: k0s stops
+	// for over a minute on "crypto/rand: blocked ... waiting to read random
+	// data from the kernel" before it can issue the cluster's certificates.
+	// The guest needs no configuration for this -- virtio-rng is bound by its
+	// PCI id like every other device.
+	args = append(args, "-device", "virtio-rng-pci")
+
 	args = append(args, "-netdev", netdev, "-device", "virtio-net-pci,netdev=n0")
 	if s.clusterNet != "" {
 		dev := "virtio-net-pci,netdev=n1"
