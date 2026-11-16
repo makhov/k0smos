@@ -1080,9 +1080,14 @@ make<span class="w"> </span>metal<span class="w">                    </span><spa
 <td>The user-space helpers on a glibc root, as absolute paths in the build container. k0s and kubelet need these; add to the list rather than replacing it.</td>
 </tr>
 <tr>
+<td><code>ROOT_LIBS</code></td>
+<td><code>libseccomp.so.2</code></td>
+<td>Shared libraries to put on a glibc root for software the image does not ship (<a href="../operating/#install-node-software">node software</a>).</td>
+</tr>
+<tr>
 <td><code>APK_PKGS</code></td>
 <td><code>mount umount ca-certificates-bundle e2fsprogs xfsprogs</code></td>
-<td>The same, for <code>LIBC=musl</code>, as Alpine package names.</td>
+<td>The same as <code>ROOT_TOOLS</code>, for <code>LIBC=musl</code>, as Alpine package names.</td>
 </tr>
 <tr>
 <td><code>FIRECRACKER_DIR</code></td>

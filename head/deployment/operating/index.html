@@ -715,6 +715,15 @@ You are not viewing the documentation for the current stable release of k0smos.
 </li>
       
         <li class="md-nav__item">
+  <a href="#install-node-software" class="md-nav__link">
+    <span class="md-ellipsis">
+      Install node software
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#shut-down-cleanly" class="md-nav__link">
     <span class="md-ellipsis">
       Shut down cleanly
@@ -1071,6 +1080,15 @@ You are not viewing the documentation for the current stable release of k0smos.
 </li>
       
         <li class="md-nav__item">
+  <a href="#install-node-software" class="md-nav__link">
+    <span class="md-ellipsis">
+      Install node software
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#shut-down-cleanly" class="md-nav__link">
     <span class="md-ellipsis">
       Shut down cleanly
@@ -1227,6 +1245,66 @@ no room, so the check costs nothing on later boots. Shrinking is not supported.<
 </table>
 <p>Cluster API machines should still be treated as replaceable even when their
 storage persists.</p>
+<h2 id="install-node-software">Install node software<a class="headerlink" href="#install-node-software" title="Permanent link">#</a></h2>
+<p>A container runtime, CSI driver or node agent that installs itself from a
+privileged DaemonSet — writing binaries to the host, dropping in a containerd
+configuration, loading a BPF program — works on k0smos, within what a
+single-artifact immutable node can offer. What it finds:</p>
+<table>
+<thead>
+<tr>
+<th>What an installer expects</th>
+<th>On k0smos</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/usr/local/bin</code> to write to</td>
+<td>Writable, as a tmpfs overlay. The image's own contents stay visible underneath.</td>
+</tr>
+<tr>
+<td>A containerd configuration drop-in</td>
+<td><code>/etc/k0s/containerd.d/&lt;name&gt;.toml</code>. k0s watches that directory and reloads containerd itself, so nothing needs restarting.</td>
+</tr>
+<tr>
+<td><code>/var/lib/&lt;name&gt;</code> for its payload</td>
+<td>On the data volume, and the right place for anything large.</td>
+</tr>
+<tr>
+<td><code>libseccomp</code></td>
+<td>On the root (<code>ROOT_LIBS</code>), since every container runtime links it.</td>
+</tr>
+<tr>
+<td><code>/sys/fs/bpf</code> to pin BPF objects</td>
+<td>Mounted when the kernel has BPF.</td>
+</tr>
+<tr>
+<td><code>/sys/kernel/security/lsm</code> to see which LSMs are active</td>
+<td>securityfs is mounted when the kernel has it.</td>
+</tr>
+<tr>
+<td><code>systemctl restart containerd</code></td>
+<td>Not available, and not needed — see the drop-in row. There is no init system to talk to.</td>
+</tr>
+<tr>
+<td>Kernel LSMs, sysctls, KSM</td>
+<td>A sysctl or <code>/sys</code> write a privileged pod can do itself. A kernel command line change — <code>lsm=</code>, for BPF LSM — is baked into the image with <code>METAL_KERNEL_ARGS</code> (<a href="../building/">building</a>).</td>
+</tr>
+</tbody>
+</table>
+<p>Two consequences of the root being read-only and <code>/usr/local</code> being a tmpfs:</p>
+<ul>
+<li><strong>Nothing installed on the host survives a reboot.</strong> The installer's
+  DaemonSet runs again and reinstalls, which is how these are built anyway —
+  they usually label the node when finished and the workload waits for the
+  label.</li>
+<li><strong>Keep the bulk off <code>/usr/local</code>.</strong> It is RAM. An installer that unpacks
+  hundreds of megabytes of payload belongs under <code>/var</code>, which is where these
+  are configured to put it.</li>
+</ul>
+<p>Anything needing a library the image does not carry fails at load time with a
+clear <code>error while loading shared libraries</code>. Add it with <code>ROOT_LIBS</code> and
+rebuild (<a href="../building/">building</a>); the released images carry <code>libseccomp</code> only.</p>
 <h2 id="shut-down-cleanly">Shut down cleanly<a class="headerlink" href="#shut-down-cleanly" title="Permanent link">#</a></h2>
 <p>Use the platform's normal graceful stop operation. Locally:</p>
 <div class="highlight"><pre><span></span><code>k0smosctl<span class="w"> </span>machine<span class="w"> </span>shutdown<span class="w"> </span>--name<span class="w"> </span>node-1
