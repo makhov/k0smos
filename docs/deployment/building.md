@@ -32,7 +32,8 @@ make metal                    # dist/k0smos-metal-<arch>.qcow2
 | `NVIDIA_SHA256` | the two pinned branches | The driver package's digest, needed only for a version this repo has no digest for. |
 | `LIBC` | `glibc` | The C library on the root, `glibc` or `musl` ([below](#the-c-library-on-the-root)). |
 | `ROOT_TOOLS` | `/usr/bin/mount /usr/bin/umount /usr/sbin/mkfs.ext4 /usr/sbin/mkfs.xfs` | The user-space helpers on a glibc root, as absolute paths in the build container. k0s and kubelet need these; add to the list rather than replacing it. |
-| `APK_PKGS` | `mount umount ca-certificates-bundle e2fsprogs xfsprogs` | The same, for `LIBC=musl`, as Alpine package names. |
+| `ROOT_LIBS` | `libseccomp.so.2` | Shared libraries to put on a glibc root for software the image does not ship ([node software](operating.md#install-node-software)). |
+| `APK_PKGS` | `mount umount ca-certificates-bundle e2fsprogs xfsprogs` | The same as `ROOT_TOOLS`, for `LIBC=musl`, as Alpine package names. |
 | `FIRECRACKER_DIR` | unset | A directory with `firecracker` and `jailer` to include, for a node that runs sandboxed workloads. Released images carry no VMM. |
 | `METAL_DATA_MB` | `8192` | The data partition's size in the built image. It grows into a bigger disk on first boot, so this is a floor, not a ceiling. |
 | `METAL_KERNEL_ARGS` | console, data volume and DHCP | The command line baked into the image's GRUB config ([Kernel parameters](../reference/cmdline.md)). |

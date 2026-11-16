@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/amakhov/k0smos/internal/mount"
 )
 
 // The init-only path: no k0s, so this is the fast check that the whole boot
@@ -331,13 +333,18 @@ func TestBootReportsSandboxHostPlumbing(t *testing.T) {
 	// A kernel without configfs or hugetlbfs must still reach its workload —
 	// that is the whole point of marking those mounts optional.
 	v.waitFor(`supervising \[/init\]`, bootTimeout)
+	// Which filesystems may be skipped is mount.Default's to say. Restating the
+	// list here meant every filesystem added to it broke a test that only ever
+	// checked one thing: that a *required* mount never goes quietly.
 	for _, line := range strings.Split(v.k0smosLines(), "\n") {
 		if !strings.Contains(line, "this kernel has no") {
 			continue
 		}
 		rest := line
-		for _, optional := range []string{"/sys/kernel/config", "/dev/hugepages"} {
-			rest = strings.ReplaceAll(rest, optional, "")
+		for _, s := range mount.Default {
+			if s.Optional {
+				rest = strings.ReplaceAll(rest, s.Target, "")
+			}
 		}
 		if strings.Contains(rest, "/") {
 			t.Errorf("a filesystem the boot depends on was skipped instead of fatal: %q", line)
