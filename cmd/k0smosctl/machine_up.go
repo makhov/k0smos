@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/amakhov/k0smos/internal/control"
+	"github.com/amakhov/k0smos/internal/iso9660"
 	"github.com/spf13/cobra"
 )
 
@@ -293,7 +294,7 @@ guest down cleanly rather than killing it.`,
 	f.Bool("from-disk", false,
 		"clone --image as a legacy ext4 root (direct-kernel development mode)")
 	f.Bool("no-image", false, "boot only the initramfs in direct-kernel smoke mode (kubelet cannot run there)")
-	f.StringVar(&cidata, "cidata", "", "cloud-init drive to attach, as written by 'k0smosctl gen'")
+	f.StringVar(&cidata, "cidata", "", "cloud-init drive to attach, as written by 'k0smosctl gen'. On macOS, set k0smos.dns in it: slirp's own resolver does not answer there, and supplying a drive replaces the one that would otherwise carry that setting")
 	f.StringVar(&data, "data", "", "data volume for /var (direct-kernel mode; platform artifacts include one)")
 	f.StringVar(&dataSize, "data-size", "4G", "size for a newly created --data volume")
 	f.StringVar(&name, "name", defaultGuestName, "name for this guest; its console and control socket are kept under it")
@@ -320,6 +321,21 @@ type guest struct {
 	console string
 	apkArch string
 	accel   []string
+}
+
+// writeResolverDrive writes a cloud-init drive at path that sets the guest's
+// nameserver and nothing else, so a machine booted with one is configured
+// exactly as it would be without it in every other respect.
+func writeResolverDrive(path string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return iso9660.Write(f, "cidata", []iso9660.File{
+		{Name: "user-data", Data: fmt.Appendf(nil, "#cloud-config\nk0smos:\n  dns: %s\n", guestDNS)},
+		{Name: "meta-data", Data: []byte("instance-id: k0smosctl\n")},
+	})
 }
 
 func guestFor(arch string) (guest, error) {
@@ -496,11 +512,29 @@ func qemuArgs(g guest, s bootSpec) ([]string, error) {
 	}
 
 	// Read-only, as an infrastructure provider attaches it.
-	if s.cidata != "" {
-		if _, err := os.Stat(s.cidata); err != nil {
-			return nil, fatalf("cloud-init drive %s not found", s.cidata)
+	cidata := s.cidata
+	if cidata == "" && runtime.GOOS == "darwin" && s.socket != "" {
+		// A machine booting its own GRUB takes no kernel command line from
+		// here, so the k0smos.dns= that the direct-kernel path above sets
+		// arrives on a cloud-init drive instead. Without it the guest keeps
+		// the resolver slirp advertises over DHCP, which on macOS accepts
+		// queries and never answers them: the node comes up, and then every
+		// image pull fails as "lookup quay.io ... i/o timeout".
+		//
+		// Only when the caller brought no drive of their own. One that does
+		// is theirs to get right, and saying so is the --cidata flag's job.
+		cidata = filepath.Join(filepath.Dir(s.socket), "resolver.iso")
+		if !s.dryRun {
+			if err := writeResolverDrive(cidata); err != nil {
+				return nil, err
+			}
 		}
-		args = append(args, "-drive", "file="+s.cidata+",if=virtio,format=raw,readonly=on")
+	}
+	if cidata != "" {
+		if _, err := os.Stat(cidata); err != nil && !s.dryRun {
+			return nil, fatalf("cloud-init drive %s not found", cidata)
+		}
+		args = append(args, "-drive", "file="+cidata+",if=virtio,format=raw,readonly=on")
 	}
 	if s.data != "" {
 		if s.artifact {
