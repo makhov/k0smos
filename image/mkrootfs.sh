@@ -27,8 +27,10 @@ cd "$repo"
 img=${1:-dist/k0smos.img}
 arch=${ARCH:-$(uname -m)}
 case "$arch" in
-  arm64 | aarch64) goarch=arm64; apkarch=aarch64; platform=linux/arm64 ;;
-  x86_64 | amd64) goarch=amd64; apkarch=x86_64; platform=linux/amd64 ;;
+  arm64 | aarch64) goarch=arm64; apkarch=aarch64; platform=linux/arm64
+    triple=aarch64-linux-gnu; loader=/lib/ld-linux-aarch64.so.1 ;;
+  x86_64 | amd64) goarch=amd64; apkarch=x86_64; platform=linux/amd64
+    triple=x86_64-linux-gnu; loader=/lib64/ld-linux-x86-64.so.2 ;;
   *) echo "unsupported ARCH=$arch" >&2; exit 1 ;;
 esac
 
@@ -55,20 +57,55 @@ fi
 
 rootfs=${ROOTFS:-erofs}
 case "$rootfs" in
-  ext4) mkfs_tool=mkfs.ext4; apk_build=e2fsprogs ;;
-  erofs) mkfs_tool=mkfs.erofs; apk_build=erofs-utils ;;
+  ext4) mkfs_tool=mkfs.ext4; mkfs_pkg=e2fsprogs ;;
+  erofs) mkfs_tool=mkfs.erofs; mkfs_pkg=erofs-utils ;;
   *) echo "unsupported ROOTFS=$rootfs (ext4 or erofs)" >&2; exit 1 ;;
 esac
 
-# Both tools are needed, not just the mkfs: apk populates the userspace helpers
-# below. A host with mkfs.ext4 but no apk — any Ubuntu, so every CI runner — used
-# to build natively and then skip those helpers silently, producing an image with
-# no mount(8), no e2fsprogs and no CA bundle. That surfaced only at runtime, as
-# "mkfs.ext4: executable file not found in $PATH" while formatting a data volume,
-# and would equally have broken kubelet and every image pull.
-if ! command -v "$mkfs_tool" >/dev/null 2>&1 || ! command -v apk >/dev/null 2>&1; then
+# The C library on the root. Only four binaries link against one at all --
+# mount, umount, mkfs.ext4 and mkfs.xfs -- because k0smos, k0s and everything
+# k0s stages are static Go. So this decides what *other* software can run on a
+# node, not what k0smos needs: anything built for an ordinary distro expects
+# glibc, and on a musl root it either falls back to a reduced static build or
+# does not run. Both roots come out within a megabyte of each other, so the
+# default is not about size.
+#
+# LIBC=musl assembles the Alpine-based root instead, which is what every k0smos
+# image before this one carried.
+libc=${LIBC:-glibc}
+case "$libc" in
+  glibc)
+    build_img=ubuntu:${UBUNTU_RELEASE:-26.04}
+    build_install="export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -qq -y --no-install-recommends $mkfs_pkg e2fsprogs xfsprogs mount ca-certificates >/dev/null"
+    build_need=("$mkfs_tool" mount umount mkfs.ext4 mkfs.xfs ldconfig)
+    ;;
+  musl)
+    build_img=alpine:3.23
+    build_install="apk add -q --no-cache $mkfs_pkg bash >/dev/null"
+    build_need=("$mkfs_tool" apk)
+    ;;
+  *) echo "unsupported LIBC=$libc (glibc or musl)" >&2; exit 1 ;;
+esac
+
+# Every tool is needed, not just the mkfs: this step also populates the
+# userspace helpers below. A host with mkfs.ext4 but none of the rest — any
+# Ubuntu, so every CI runner — used to build natively and then skip those
+# helpers silently, producing an image with no mount(8), no e2fsprogs and no CA
+# bundle. That surfaced only at runtime, as "mkfs.ext4: executable file not
+# found in $PATH" while formatting a data volume, and would equally have broken
+# kubelet and every image pull.
+native=1
+for t in "${build_need[@]}"; do
+  command -v "$t" >/dev/null 2>&1 || native=
+done
+# Nothing to copy onto the root without one, and a root with no trust store
+# fails every image pull.
+if [ "$libc" = glibc ] && [ ! -e /etc/ssl/certs/ca-certificates.crt ]; then
+  native=
+fi
+if [ -z "$native" ]; then
   command -v docker >/dev/null || {
-    echo "need docker, or both $mkfs_tool and apk, to build the root image" >&2
+    echo "need docker, or all of ${build_need[*]} on this host, to build the root image" >&2
     exit 1
   }
   # The container sees only the repository, mounted at /repo, so an absolute host
@@ -82,13 +119,14 @@ if ! command -v "$mkfs_tool" >/dev/null 2>&1 || ! command -v apk >/dev/null 2>&1
       exit 1
       ;;
   esac
-  echo "assembling inside $platform container (need $mkfs_tool and apk)"
+  echo "assembling $libc root inside $platform container (need ${build_need[*]})"
   # Every knob has to be forwarded explicitly: the container stage re-runs this
   # script, and anything not listed here is silently lost on a macOS host.
   exec docker run --rm --platform "$platform" -v "$repo:/repo" -w /repo \
     -e K0S_BIN -e K0SMOS_BIN -e MODULES_DIR -e ARCH -e K0S_VERSION -e K0SMOS_BUILD \
-    -e PAD_MB -e FSLABEL -e FSUUID -e APK_PKGS -e ROOTFS -e FIRECRACKER_DIR \
-    alpine:3.23 sh -c 'apk add -q --no-cache '"$apk_build"' bash >/dev/null && exec bash image/mkrootfs.sh "$1"' _ "$img"
+    -e PAD_MB -e FSLABEL -e FSUUID -e APK_PKGS -e ROOT_TOOLS -e LIBC -e UBUNTU_RELEASE \
+    -e ROOTFS -e FIRECRACKER_DIR \
+    "$build_img" sh -c "$build_install"' && exec bash image/mkrootfs.sh "$1"' _ "$img"
 fi
 
 root=$(mktemp -d)
@@ -129,22 +167,70 @@ mkdir -p "$root/lib/modules"
 #                  to be XFS.
 # k0s stages its own iptables, so those are not needed here.
 #
-# Deliberately the narrow subpackages, not the "util-linux" meta package: that
-# one pulls in busybox and /bin/sh, and this image is specified to have no shell.
-apk_pkgs=${APK_PKGS:-mount umount ca-certificates-bundle e2fsprogs xfsprogs}
-if [ -n "$apk_pkgs" ] && ! command -v apk >/dev/null 2>&1; then
-  # Never skip these quietly: the image boots and then fails in ways that point
-  # nowhere near the build.
-  echo "apk not available but APK_PKGS is set — cannot install $apk_pkgs" >&2
-  exit 1
-fi
-if [ -n "$apk_pkgs" ]; then
-  # --keys-dir and --repositories-file are required because --initdb creates an
-  # empty root with no signing keys or repository list of its own.
-  apk add -q --no-cache --root "$root" --initdb \
-    --keys-dir /etc/apk/keys --repositories-file /etc/apk/repositories \
-    $apk_pkgs
-  echo "installed userspace helpers: $apk_pkgs"
+# Neither path installs a shell: this image is specified to have none. On musl
+# that means the narrow Alpine subpackages rather than the "util-linux" meta
+# package, which would pull in busybox and /bin/sh. On glibc it means copying
+# the binaries instead of unpacking .debs, whose maintainer scripts want one.
+if [ "$libc" = musl ]; then
+  apk_pkgs=${APK_PKGS:-mount umount ca-certificates-bundle e2fsprogs xfsprogs}
+  if [ -n "$apk_pkgs" ] && ! command -v apk >/dev/null 2>&1; then
+    # Never skip these quietly: the image boots and then fails in ways that
+    # point nowhere near the build.
+    echo "apk not available but APK_PKGS is set — cannot install $apk_pkgs" >&2
+    exit 1
+  fi
+  if [ -n "$apk_pkgs" ]; then
+    # --keys-dir and --repositories-file are required because --initdb creates
+    # an empty root with no signing keys or repository list of its own.
+    apk add -q --no-cache --root "$root" --initdb \
+      --keys-dir /etc/apk/keys --repositories-file /etc/apk/repositories \
+      $apk_pkgs
+    echo "installed userspace helpers: $apk_pkgs (musl)"
+  fi
+else
+  # Each binary with everything it links against, the same way fetch-nvidia.sh
+  # assembles the NVIDIA driver root. ROOT_TOOLS is the glibc counterpart of
+  # APK_PKGS: absolute paths in the build container, so add a tool's package to
+  # build_install above when naming one that is not there already.
+  tools=${ROOT_TOOLS:-/usr/bin/mount /usr/bin/umount /usr/sbin/mkfs.ext4 /usr/sbin/mkfs.xfs}
+  lib=$root/usr/lib/$triple
+  mkdir -p "$lib" "$root/usr/bin" "$root/usr/sbin" "$root/etc/ssl/certs"
+  for t in $tools; do
+    [ -x "$t" ] || { echo "$t is not in the $build_img build container" >&2; exit 1; }
+    install -m 0755 "$t" "$root$t"
+  done
+  # The loader goes to the absolute path named in each binary's PT_INTERP;
+  # everything else to the multiarch directory the cache below will index.
+  for t in $tools; do
+    ldd "$t" | awk '{for (i = 1; i <= NF; i++) if ($i ~ /^\//) print $i}'
+  done | sort -u | while read -r dep; do
+    case "${dep##*/}" in
+      ld-linux* | ld64* | ld.so*)
+        mkdir -p "$root$(dirname "$dep")"
+        cp -L "$dep" "$root$dep"
+        ;;
+      *) [ -e "$lib/${dep##*/}" ] || cp -L "$dep" "$lib/" ;;
+    esac
+  done
+  # mkfs.ext4 reads this for its feature defaults. Without it a data volume
+  # comes out with a different feature set from every other ext4 around.
+  cp /etc/mke2fs.conf "$root/etc/mke2fs.conf"
+  # The trust store apk's ca-certificates-bundle provides on the musl root.
+  cp /etc/ssl/certs/ca-certificates.crt "$root/etc/ssl/certs/"
+  # A fresh root has no cache, and the multiarch directory is not on the
+  # loader's built-in search path.
+  echo "/usr/lib/$triple" > "$root/etc/ld.so.conf"
+  ldconfig -r "$root"
+  # Proves the root is self-contained: the loader resolves each helper from
+  # inside it, with no host directory in reach. Cheaper and more honest than
+  # running the tools, which have no common --version flag between them.
+  for t in $tools; do
+    if chroot "$root" "$loader" --list "$t" | grep -q "not found"; then
+      echo "$t on the assembled root is missing a library" >&2
+      exit 1
+    fi
+  done
+  echo "installed userspace helpers: $tools (glibc)"
 fi
 # /sbin/k0smos must match initPath in cmd/k0smos/init_linux.go — that is the
 # path the pre-switch k0smos re-executes after switching root.
