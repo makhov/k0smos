@@ -1087,6 +1087,13 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	}
 	nvidiaDeviceNodes()
 	recordImage(s)
+	for name, value := range sysctlDefaults(readCmdline(cmdlinePath)) {
+		path := "/proc/sys/" + strings.ReplaceAll(name, ".", "/")
+		// Absent on a kernel without the feature; nothing to harden then.
+		if err := s.WriteFile(path, []byte(value), 0o644); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logf("warn: sysctl %s=%s: %v", name, value, err)
+		}
+	}
 
 	// configfs and hugetlbfs come after the modules that provide them, and are
 	// never fatal: a kernel built without either must still boot a plain k0s
