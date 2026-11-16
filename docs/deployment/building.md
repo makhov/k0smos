@@ -30,7 +30,9 @@ make metal                    # dist/k0smos-metal-<arch>.qcow2
 | `UBUNTU_RELEASE` | `26.04` | The Ubuntu release that kernel comes from. |
 | `NVIDIA_VERSION` | `620.70.06` | The GPU driver branch ([GPUs](gpus.md)). |
 | `NVIDIA_SHA256` | the two pinned branches | The driver package's digest, needed only for a version this repo has no digest for. |
-| `APK_PKGS` | `mount umount ca-certificates-bundle e2fsprogs xfsprogs` | The user-space helpers on the root. k0s and kubelet need these; add to the list rather than replacing it. |
+| `LIBC` | `glibc` | The C library on the root, `glibc` or `musl` ([below](#the-c-library-on-the-root)). |
+| `ROOT_TOOLS` | `/usr/bin/mount /usr/bin/umount /usr/sbin/mkfs.ext4 /usr/sbin/mkfs.xfs` | The user-space helpers on a glibc root, as absolute paths in the build container. k0s and kubelet need these; add to the list rather than replacing it. |
+| `APK_PKGS` | `mount umount ca-certificates-bundle e2fsprogs xfsprogs` | The same, for `LIBC=musl`, as Alpine package names. |
 | `FIRECRACKER_DIR` | unset | A directory with `firecracker` and `jailer` to include, for a node that runs sandboxed workloads. Released images carry no VMM. |
 | `METAL_DATA_MB` | `8192` | The data partition's size in the built image. It grows into a bigger disk on first boot, so this is a floor, not a ceiling. |
 | `METAL_KERNEL_ARGS` | console, data volume and DHCP | The command line baked into the image's GRUB config ([Kernel parameters](../reference/cmdline.md)). |
@@ -42,7 +44,34 @@ Each variable goes on the `make` command line or in the environment:
 ARCH=x86_64 K0S_VERSION=v1.37.1+k0s.0 make metal
 ARCH=x86_64 KERNEL_RELEASE=7.0.0-41-generic make metal
 ARCH=x86_64 NVIDIA_VERSION=570.195.03 NVIDIA_SHA256=<digest> make metal-nvidia
+ARCH=x86_64 LIBC=musl make build metal
 ```
+
+## The C library on the root
+
+Four binaries on the root link against a C library at all — `mount`, `umount`,
+`mkfs.ext4` and `mkfs.xfs`. k0smos itself, k0s, and everything k0s stages at
+runtime are static Go and need none. So `LIBC` does not decide what k0smos
+needs; it decides what *else* can run on a node.
+
+The default is glibc, because software built for an ordinary distro expects it.
+A container runtime that ships its own CRIU, for instance, will install a
+reduced static build on a musl root and a full one on glibc. Released images are
+glibc.
+
+`LIBC=musl` assembles the Alpine-based root that k0smos carried before, which is
+a few megabytes smaller. The two are close enough in size that it is not a
+reason to choose; pick musl only if you want the smaller surface and nothing on
+the node needs glibc.
+
+Neither root has a shell, and neither has a package manager. On glibc the
+helpers are copied in with their libraries, because a `.deb`'s maintainer
+scripts would need a shell; on musl they come from the narrow Alpine
+subpackages, for the same reason. This is also why `ROOT_TOOLS` takes paths and
+`APK_PKGS` takes package names.
+
+Note that `LIBC` has nothing to do with `make kernel-alpine`, which is about
+whose *kernel* a test image boots.
 
 A built image says what went into it, so a machine booted from it can be
 asked rather than guessed at -- see [Which image is this?](operating.md#which-image-is-this).
