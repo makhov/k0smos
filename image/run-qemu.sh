@@ -157,6 +157,12 @@ fi
 # later boot fail with "Could not set up host forwarding rule". Nothing in the e2e
 # suite reaches the API server over TCP anyway: it uses the control port. Set
 # API_PORT to forward one.
+# An entropy source. Without one a fresh guest has almost no randomness to seed
+# its pool with, and k0s stops for over a minute on "crypto/rand: blocked ...
+# waiting to read random data from the kernel" before it can issue any
+# certificate. virtio-rng is bound by its PCI id, so the guest needs nothing.
+rng_args=(-device virtio-rng-pci)
+
 netdev_args=(-netdev user,id=n0 -device virtio-net-pci,netdev=n0)
 if [ -n "${API_PORT:-}" ]; then
   netdev_args=(
@@ -223,6 +229,7 @@ set -x
 exec "$qemu" \
   "${machine[@]}" "${accel[@]}" \
   -m "$mem" -smp "$cpus" \
+  "${rng_args[@]}" \
   -kernel "$kernel" -append "$append" \
   "${boot[@]}" \
   ${control_args[@]+"${control_args[@]}"} ${monitor_args[@]+"${monitor_args[@]}"} \
