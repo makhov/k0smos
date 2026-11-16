@@ -645,6 +645,15 @@ You are not viewing the documentation for the current stable release of k0smos.
 </li>
       
         <li class="md-nav__item">
+  <a href="#building-on-macos" class="md-nav__link">
+    <span class="md-ellipsis">
+      Building on macOS
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#when-a-pin-goes-stale" class="md-nav__link">
     <span class="md-ellipsis">
       When a pin goes stale
@@ -971,6 +980,15 @@ You are not viewing the documentation for the current stable release of k0smos.
 </li>
       
         <li class="md-nav__item">
+  <a href="#building-on-macos" class="md-nav__link">
+    <span class="md-ellipsis">
+      Building on macOS
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#when-a-pin-goes-stale" class="md-nav__link">
     <span class="md-ellipsis">
       When a pin goes stale
@@ -1151,6 +1169,23 @@ asked rather than guessed at -- see <a href="../operating/#which-image-is-this">
 </tr>
 </tbody>
 </table>
+<h2 id="building-on-macos">Building on macOS<a class="headerlink" href="#building-on-macos" title="Permanent link">#</a></h2>
+<p>One step needs a case-sensitive filesystem, and macOS does not format its boot
+volume that way. iptables names a target in upper case and a match in lower, so
+the kernel ships <code>xt_DSCP.ko</code> beside <code>xt_dscp.ko</code> — and <code>xt_HL</code>, <code>xt_RATEEST</code>
+and <code>xt_TCPMSS</code> beside their lower-case matches. Unpacking the module tree on a
+case-insensitive filesystem drops one of each pair, and the build stops.</p>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span><span class="k">case</span>-volume<span class="w">   </span><span class="c1"># once</span>
+make<span class="w"> </span>metal
+</code></pre></div>
+<p><code>make case-volume</code> attaches a sparse, case-sensitive disk image at
+<code>dist/kernel-metal</code>. It is a file, not a partition: nothing about the real disk
+changes, it grows only as the module tree fills it, and <code>make case-volume-detach</code>
+followed by deleting <code>dist/kernel-metal.sparseimage</code> undoes it entirely. The
+container builds write the tree through the mount and read it back, because the
+host filesystem share crosses into it.</p>
+<p>The target is a no-op anywhere the filesystem already distinguishes the two
+spellings, so it is safe in a script that also runs on Linux.</p>
 <h2 id="when-a-pin-goes-stale">When a pin goes stale<a class="headerlink" href="#when-a-pin-goes-stale" title="Permanent link">#</a></h2>
 <p><code>KERNEL_RELEASE</code> names one Ubuntu build, and Ubuntu drops a build from the
 archive once the release moves past it. The fetch then fails and says so,
