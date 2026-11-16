@@ -101,6 +101,7 @@ initramfs:
 # Metal3 can prove they carry the same root bytes.
 root: k0s
 	ROOTFS=erofs MODULES_DIR=dist/no-platform-modules \
+		KERNEL_CONFIG=$(KERNEL_CONFIG) KERNEL_RELEASE=$(KERNEL_RELEASE) \
 		K0S_BIN=dist/k0s-$(TARGET_GOARCH) ./image/mkrootfs.sh dist/k0smos.erofs
 
 # The root k0smos switch_roots onto in kernel-matrix tests. kubelet cannot run on the initramfs itself
@@ -130,6 +131,9 @@ verify-artifacts: artifacts
 
 # The single Cluster API/Metal3-facing artifact. Internally this assembles a raw
 # GPT disk first, but only the bootable qcow2 is the product users consume.
+# The root carries this kernel's configuration, so k0s can check what the
+# kernel actually supports instead of skipping five of its pre-flight checks.
+metal: KERNEL_CONFIG := dist/kernel-metal/$(TARGET_APKARCH)/config
 metal: kernel-metal k0s root
 	./image/build-metal.sh
 
