@@ -5,7 +5,36 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/amakhov/k0smos/internal/module"
 )
+
+// hostSysctls are hardening settings no workload needs: no kexec of a new
+// kernel, Ubuntu's protected FIFO and regular-file rules in sticky
+// directories, and no line-discipline autoload from an unprivileged tty.
+// Unprivileged user namespaces stay allowed: rootless builds and Chrome's
+// sandbox in ordinary pods need them; sysctl.kernel.unprivileged_userns_clone=0
+// on the command line turns them off.
+var hostSysctls = map[string]string{
+	"kernel.kexec_load_disabled": "1",
+	"fs.protected_fifos":         "1",
+	"fs.protected_regular":       "2",
+	"dev.tty.ldisc_autoload":     "0",
+}
+
+// sysctlDefaults is hostSysctls less those the command line sets: the kernel
+// applies sysctl.* arguments before init runs, and they must win.
+func sysctlDefaults(cmdline string) map[string]string {
+	out := make(map[string]string, len(hostSysctls))
+	for k, v := range hostSysctls {
+		out[k] = v
+	}
+	for _, p := range strings.Fields(module.CmdlineParams(cmdline, "sysctl")) {
+		name, _, _ := strings.Cut(p, "=")
+		delete(out, strings.ReplaceAll(name, "/", "."))
+	}
+	return out
+}
 
 func gate(pid int) error {
 	if pid != 1 {

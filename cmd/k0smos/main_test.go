@@ -79,3 +79,19 @@ func TestOSReleaseIDsWithoutAFileIsEmpty(t *testing.T) {
 		t.Errorf("version = %q, build = %q, want both empty", version, build)
 	}
 }
+
+func TestSysctlDefaultsYieldToCmdline(t *testing.T) {
+	got := sysctlDefaults("console=ttyS0 sysctl.fs.protected_regular=0 sysctl.kernel/kexec_load_disabled=0 kvm_amd.nested=1")
+	want := map[string]string{"fs.protected_fifos": "1", "dev.tty.ldisc_autoload": "0"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+	if len(sysctlDefaults("")) != len(hostSysctls) {
+		t.Error("an empty command line must keep every default")
+	}
+}

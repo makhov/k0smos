@@ -65,3 +65,10 @@ Module options come from the command line as `module.param=value`, as modprobe
 takes them elsewhere: `kvm_amd.nested=1` loads `kvm_amd` with `nested=1`. Every
 other argument -- `hugepagesz=2M hugepages=512`, `spec_rstack_overflow=safe-ret`
 -- is the kernel's own and needs nothing from k0smos.
+
+k0smos hardens a few sysctls at boot: `kernel.kexec_load_disabled=1`,
+`fs.protected_fifos=1`, `fs.protected_regular=2` and `dev.tty.ldisc_autoload=0`.
+A `sysctl.<name>=<value>` argument, which the kernel applies itself, overrides
+any of them. Unprivileged user namespaces stay allowed, since rootless builds and
+Chrome's sandbox in ordinary pods use them; a host that runs nothing of the kind
+can add `sysctl.kernel.unprivileged_userns_clone=0`.
