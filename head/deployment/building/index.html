@@ -627,6 +627,15 @@ You are not viewing the documentation for the current stable release of k0smos.
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-c-library-on-the-root" class="md-nav__link">
+    <span class="md-ellipsis">
+      The C library on the root
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#the-targets" class="md-nav__link">
     <span class="md-ellipsis">
       The targets
@@ -944,6 +953,15 @@ You are not viewing the documentation for the current stable release of k0smos.
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-c-library-on-the-root" class="md-nav__link">
+    <span class="md-ellipsis">
+      The C library on the root
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#the-targets" class="md-nav__link">
     <span class="md-ellipsis">
       The targets
@@ -1034,9 +1052,19 @@ make<span class="w"> </span>metal<span class="w">                    </span><spa
 <td>The driver package's digest, needed only for a version this repo has no digest for.</td>
 </tr>
 <tr>
+<td><code>LIBC</code></td>
+<td><code>glibc</code></td>
+<td>The C library on the root, <code>glibc</code> or <code>musl</code> (<a href="#the-c-library-on-the-root">below</a>).</td>
+</tr>
+<tr>
+<td><code>ROOT_TOOLS</code></td>
+<td><code>/usr/bin/mount /usr/bin/umount /usr/sbin/mkfs.ext4 /usr/sbin/mkfs.xfs</code></td>
+<td>The user-space helpers on a glibc root, as absolute paths in the build container. k0s and kubelet need these; add to the list rather than replacing it.</td>
+</tr>
+<tr>
 <td><code>APK_PKGS</code></td>
 <td><code>mount umount ca-certificates-bundle e2fsprogs xfsprogs</code></td>
-<td>The user-space helpers on the root. k0s and kubelet need these; add to the list rather than replacing it.</td>
+<td>The same, for <code>LIBC=musl</code>, as Alpine package names.</td>
 </tr>
 <tr>
 <td><code>FIRECRACKER_DIR</code></td>
@@ -1064,7 +1092,28 @@ make<span class="w"> </span>metal<span class="w">                    </span><spa
 <div class="highlight"><pre><span></span><code><span class="nv">ARCH</span><span class="o">=</span>x86_64<span class="w"> </span><span class="nv">K0S_VERSION</span><span class="o">=</span>v1.37.1+k0s.0<span class="w"> </span>make<span class="w"> </span>metal
 <span class="nv">ARCH</span><span class="o">=</span>x86_64<span class="w"> </span><span class="nv">KERNEL_RELEASE</span><span class="o">=</span><span class="m">7</span>.0.0-41-generic<span class="w"> </span>make<span class="w"> </span>metal
 <span class="nv">ARCH</span><span class="o">=</span>x86_64<span class="w"> </span><span class="nv">NVIDIA_VERSION</span><span class="o">=</span><span class="m">570</span>.195.03<span class="w"> </span><span class="nv">NVIDIA_SHA256</span><span class="o">=</span>&lt;digest&gt;<span class="w"> </span>make<span class="w"> </span>metal-nvidia
+<span class="nv">ARCH</span><span class="o">=</span>x86_64<span class="w"> </span><span class="nv">LIBC</span><span class="o">=</span>musl<span class="w"> </span>make<span class="w"> </span>build<span class="w"> </span>metal
 </code></pre></div>
+<h2 id="the-c-library-on-the-root">The C library on the root<a class="headerlink" href="#the-c-library-on-the-root" title="Permanent link">#</a></h2>
+<p>Four binaries on the root link against a C library at all — <code>mount</code>, <code>umount</code>,
+<code>mkfs.ext4</code> and <code>mkfs.xfs</code>. k0smos itself, k0s, and everything k0s stages at
+runtime are static Go and need none. So <code>LIBC</code> does not decide what k0smos
+needs; it decides what <em>else</em> can run on a node.</p>
+<p>The default is glibc, because software built for an ordinary distro expects it.
+A container runtime that ships its own CRIU, for instance, will install a
+reduced static build on a musl root and a full one on glibc. Released images are
+glibc.</p>
+<p><code>LIBC=musl</code> assembles the Alpine-based root that k0smos carried before, which is
+a few megabytes smaller. The two are close enough in size that it is not a
+reason to choose; pick musl only if you want the smaller surface and nothing on
+the node needs glibc.</p>
+<p>Neither root has a shell, and neither has a package manager. On glibc the
+helpers are copied in with their libraries, because a <code>.deb</code>'s maintainer
+scripts would need a shell; on musl they come from the narrow Alpine
+subpackages, for the same reason. This is also why <code>ROOT_TOOLS</code> takes paths and
+<code>APK_PKGS</code> takes package names.</p>
+<p>Note that <code>LIBC</code> has nothing to do with <code>make kernel-alpine</code>, which is about
+whose <em>kernel</em> a test image boots.</p>
 <p>A built image says what went into it, so a machine booted from it can be
 asked rather than guessed at -- see <a href="../operating/#which-image-is-this">Which image is this?</a>.</p>
 <h2 id="the-targets">The targets<a class="headerlink" href="#the-targets" title="Permanent link">#</a></h2>
