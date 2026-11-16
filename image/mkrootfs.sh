@@ -76,7 +76,7 @@ libc=${LIBC:-glibc}
 case "$libc" in
   glibc)
     build_img=ubuntu:${UBUNTU_RELEASE:-26.04}
-    build_install="export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -qq -y --no-install-recommends $mkfs_pkg e2fsprogs xfsprogs mount ca-certificates >/dev/null"
+    build_install="export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -qq -y --no-install-recommends $mkfs_pkg e2fsprogs xfsprogs mount ca-certificates libseccomp2 >/dev/null"
     build_need=("$mkfs_tool" mount umount mkfs.ext4 mkfs.xfs ldconfig)
     ;;
   musl)
@@ -199,9 +199,23 @@ else
     [ -x "$t" ] || { echo "$t is not in the $build_img build container" >&2; exit 1; }
     install -m 0755 "$t" "$root$t"
   done
+  # Libraries nothing in the image links, so the walk below cannot discover
+  # them. A node is a host for software the image does not ship, and a
+  # container runtime or a CSI driver installed by a privileged DaemonSet is
+  # linked against the host's libraries, not its own: libseccomp is the one
+  # every container runtime needs, and a root without it means such a pod
+  # either falls back to a reduced static build or does not run.
+  root_libs=${ROOT_LIBS:-libseccomp.so.2}
+  libs=
+  for l in $root_libs; do
+    src=/usr/lib/$triple/$l
+    [ -e "$src" ] || { echo "$l is not in the $build_img build container" >&2; exit 1; }
+    cp -L "$src" "$lib/"
+    libs="$libs $src"
+  done
   # The loader goes to the absolute path named in each binary's PT_INTERP;
   # everything else to the multiarch directory the cache below will index.
-  for t in $tools; do
+  for t in $tools $libs; do
     ldd "$t" | awk '{for (i = 1; i <= NF; i++) if ($i ~ /^\//) print $i}'
   done | sort -u | while read -r dep; do
     case "${dep##*/}" in
@@ -224,13 +238,14 @@ else
   # Proves the root is self-contained: the loader resolves each helper from
   # inside it, with no host directory in reach. Cheaper and more honest than
   # running the tools, which have no common --version flag between them.
-  for t in $tools; do
-    if chroot "$root" "$loader" --list "$t" | grep -q "not found"; then
-      echo "$t on the assembled root is missing a library" >&2
+  for t in $tools $root_libs; do
+    case "$t" in /*) in_root=$t ;; *) in_root=/usr/lib/$triple/$t ;; esac
+    if chroot "$root" "$loader" --list "$in_root" | grep -q "not found"; then
+      echo "$in_root on the assembled root is missing a library" >&2
       exit 1
     fi
   done
-  echo "installed userspace helpers: $tools (glibc)"
+  echo "installed userspace helpers:$(printf ' %s' $tools $root_libs) (glibc)"
 fi
 # /sbin/k0smos must match initPath in cmd/k0smos/init_linux.go — that is the
 # path the pre-switch k0smos re-executes after switching root.

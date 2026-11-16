@@ -144,6 +144,37 @@ Choose its lifecycle deliberately:
 Cluster API machines should still be treated as replaceable even when their
 storage persists.
 
+## Install node software
+
+A container runtime, CSI driver or node agent that installs itself from a
+privileged DaemonSet — writing binaries to the host, dropping in a containerd
+configuration, loading a BPF program — works on k0smos, within what a
+single-artifact immutable node can offer. What it finds:
+
+| What an installer expects | On k0smos |
+|---|---|
+| `/usr/local/bin` to write to | Writable, as a tmpfs overlay. The image's own contents stay visible underneath. |
+| A containerd configuration drop-in | `/etc/k0s/containerd.d/<name>.toml`. k0s watches that directory and reloads containerd itself, so nothing needs restarting. |
+| `/var/lib/<name>` for its payload | On the data volume, and the right place for anything large. |
+| `libseccomp` | On the root (`ROOT_LIBS`), since every container runtime links it. |
+| `/sys/fs/bpf` to pin BPF objects | Mounted when the kernel has BPF. |
+| `systemctl restart containerd` | Not available, and not needed — see the drop-in row. There is no init system to talk to. |
+| Kernel LSMs, sysctls, KSM | A sysctl or `/sys` write a privileged pod can do itself. A kernel command line change — `lsm=`, for BPF LSM — is baked into the image with `METAL_KERNEL_ARGS` ([building](building.md)). |
+
+Two consequences of the root being read-only and `/usr/local` being a tmpfs:
+
+- **Nothing installed on the host survives a reboot.** The installer's
+  DaemonSet runs again and reinstalls, which is how these are built anyway —
+  they usually label the node when finished and the workload waits for the
+  label.
+- **Keep the bulk off `/usr/local`.** It is RAM. An installer that unpacks
+  hundreds of megabytes of payload belongs under `/var`, which is where these
+  are configured to put it.
+
+Anything needing a library the image does not carry fails at load time with a
+clear `error while loading shared libraries`. Add it with `ROOT_LIBS` and
+rebuild ([building](building.md)); the released images carry `libseccomp` only.
+
 ## Shut down cleanly
 
 Use the platform's normal graceful stop operation. Locally:

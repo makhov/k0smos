@@ -52,6 +52,18 @@ var Default = []Spec{
 	// some, so it costs a node that wants neither nothing but the mount.
 	{Source: "configfs", Target: "/sys/kernel/config", FSType: "configfs", Perm: 0755, Optional: true},
 	{Source: "hugetlbfs", Target: "/dev/hugepages", FSType: "hugetlbfs", Perm: 0755, Optional: true},
+
+	// For node software that pins BPF objects -- an LSM policy, a tracing
+	// program -- which it does by path under /sys/fs/bpf. The kernel creates
+	// that mount point itself whenever CONFIG_BPF_SYSCALL is on, the same way
+	// it creates /sys/kernel/config, but nothing mounts bpffs on it: a distro
+	// leaves that to systemd, and this image has none. Without the mount such
+	// a program cannot persist anything and silently falls back to whatever it
+	// does without BPF.
+	//
+	// 0700 like systemd's sys-fs-bpf.mount, and optional like the rest: a
+	// kernel built without BPF must still boot.
+	{Source: "bpf", Target: "/sys/fs/bpf", FSType: "bpf", Perm: 0700, Optional: true},
 }
 
 // Ensure mounts the required Default specs not already present. The optional
@@ -126,6 +138,11 @@ const rwScratch = "/run/k0smos/rw"
 //	               k0smotron-supplied k0s.yaml, and where resolv.conf is written
 //	               from the DHCP lease.
 //	/usr/libexec   kubelet's dynamic plugin prober creates /usr/libexec/k0s.
+//	/usr/local     where node software installs itself. A container runtime or
+//	               CSI driver delivered as a privileged DaemonSet puts its
+//	               binaries in /usr/local/bin on the host, and has nowhere to
+//	               put them on a read-only root. The image's own /usr/local/bin/k0s
+//	               stays visible underneath, as overlayfs is what this uses.
 //	/srv, /mnt     where cloud-init's mounts put extra disks. The image ships
 //	               both empty, but a mount point below them -- /srv/data --
 //	               fails "mkdir: read-only file system" without this.
@@ -135,7 +152,13 @@ const rwScratch = "/run/k0smos/rw"
 // symlink to /run for that reason. And those that hold real data go on the data
 // volume instead of a tmpfs: /opt is a symlink to /var/opt, because containerd
 // stages plugins there and CNI binaries are tens of megabytes.
-var WritablePaths = []string{"/etc", "/usr/libexec", "/srv", "/mnt"}
+//
+// /usr/local is the one borderline case: an installer that unpacks hundreds of
+// megabytes there is paying RAM for it, and every reboot starts empty, so its
+// DaemonSet has to run again. Installers that keep their bulk on the data
+// volume -- under /var, as they are configured to -- and only their binaries
+// here are what this suits.
+var WritablePaths = []string{"/etc", "/usr/local", "/usr/libexec", "/srv", "/mnt"}
 
 // MakeWritable overlays a tmpfs on each path so it can be written on a read-only
 // root, with the root's own contents showing through underneath.
