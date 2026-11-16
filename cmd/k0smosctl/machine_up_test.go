@@ -502,7 +502,7 @@ func flagValue(t *testing.T, args []string, name string) string {
 // slirp's resolver and then fails every image pull.
 func TestResolverDriveSetsTheGuestNameserver(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "resolver.iso")
-	if err := writeResolverDrive(path); err != nil {
+	if err := writeResolverDrive(path, guestResolver("")); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)
@@ -527,5 +527,37 @@ func TestResolverDriveSetsTheGuestNameserver(t *testing.T) {
 	// machine booted with it must otherwise behave as if it had none.
 	if len(ud.WriteFiles) != 0 || len(ud.RunCmd) != 0 {
 		t.Errorf("the drive carries more than the nameserver: %+v", ud)
+	}
+}
+
+// --dns is what makes the resolver a default rather than a decision baked into
+// the tool: a network where the public one is unreachable, or where queries
+// must go to a particular server, has to be able to say so.
+func TestGuestResolverPrefersTheCallersChoice(t *testing.T) {
+	if got := guestResolver(""); got != guestDNS {
+		t.Errorf("guestResolver(\"\") = %q, want the default %q", got, guestDNS)
+	}
+	if got := guestResolver("10.0.0.53"); got != "10.0.0.53" {
+		t.Errorf("guestResolver = %q, want the caller's 10.0.0.53", got)
+	}
+	// And it reaches the drive, not just the kernel command line.
+	path := filepath.Join(t.TempDir(), "resolver.iso")
+	if err := writeResolverDrive(path, guestResolver("10.0.0.53")); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := iso9660.Open(fileAt(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ud, _, err := metadata.Load(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ud.Machine.DNS != "10.0.0.53" {
+		t.Errorf("drive DNS = %q, want 10.0.0.53", ud.Machine.DNS)
 	}
 }
