@@ -3,11 +3,15 @@
 package e2e
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/amakhov/k0smos/internal/mount"
 )
 
 // requireEROFSKernel skips unless the kernel in dist can mount erofs.
@@ -98,7 +102,11 @@ mounts:
 	v.waitFor(`mounted /dev/loop\d+ at /newroot read-only, switching root`, bootTimeout)
 	v.waitFor(`starting as PID1 \(switched-root=true\)`, bootTimeout)
 	// A read-only root cannot serve what k0s and cloud-init write to.
-	v.waitFor(`root is read-only; overlaid \[/etc /usr/libexec /srv /mnt\] with tmpfs`, bootTimeout)
+	// Built from mount.WritablePaths rather than written out: the point is that
+	// the overlays the image asks for are the ones it gets, and spelling the
+	// list again here only meant a path added to it failed this test instead.
+	v.waitFor(`root is read-only; overlaid `+
+		regexp.QuoteMeta(fmt.Sprint(mount.WritablePaths))+` with tmpfs`, bootTimeout)
 	v.waitFor(`formatted and mounted data volume /dev/vdb at /var`, bootTimeout)
 	v.waitFor(`volumes: mounted LABEL=e2e-extra at /srv/extra`, bootTimeout)
 	v.waitFor(`supervising`, bootTimeout)
