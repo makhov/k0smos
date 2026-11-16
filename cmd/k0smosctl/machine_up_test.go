@@ -7,6 +7,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/amakhov/k0smos/internal/iso9660"
+	"github.com/amakhov/k0smos/internal/metadata"
 )
 
 // argsFor assembles a command line against real files, since qemuArgs checks that
@@ -490,4 +493,71 @@ func flagValue(t *testing.T, args []string, name string) string {
 	}
 	t.Fatalf("%s not present in %v", name, args)
 	return ""
+}
+
+// The drive k0smosctl synthesises on macOS has to survive the trip: written as
+// an ISO here, read back by the same iso9660 reader and cloud-init parser the
+// node uses, and arrive as the nameserver k0smos will write to resolv.conf. A
+// drive that parsed to nothing would boot a machine that silently keeps
+// slirp's resolver and then fails every image pull.
+func TestResolverDriveSetsTheGuestNameserver(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "resolver.iso")
+	if err := writeResolverDrive(path, guestResolver("")); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := iso9660.Open(fileAt(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ud, _, err := metadata.Load(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range ud.Warnings {
+		t.Errorf("the drive k0smosctl writes warns on read: %s", w)
+	}
+	if ud.Machine.DNS != guestDNS {
+		t.Errorf("k0smos section DNS = %q, want %q", ud.Machine.DNS, guestDNS)
+	}
+	// Nothing else may be set: this drive exists to fix one thing, and a
+	// machine booted with it must otherwise behave as if it had none.
+	if len(ud.WriteFiles) != 0 || len(ud.RunCmd) != 0 {
+		t.Errorf("the drive carries more than the nameserver: %+v", ud)
+	}
+}
+
+// --dns is what makes the resolver a default rather than a decision baked into
+// the tool: a network where the public one is unreachable, or where queries
+// must go to a particular server, has to be able to say so.
+func TestGuestResolverPrefersTheCallersChoice(t *testing.T) {
+	if got := guestResolver(""); got != guestDNS {
+		t.Errorf("guestResolver(\"\") = %q, want the default %q", got, guestDNS)
+	}
+	if got := guestResolver("10.0.0.53"); got != "10.0.0.53" {
+		t.Errorf("guestResolver = %q, want the caller's 10.0.0.53", got)
+	}
+	// And it reaches the drive, not just the kernel command line.
+	path := filepath.Join(t.TempDir(), "resolver.iso")
+	if err := writeResolverDrive(path, guestResolver("10.0.0.53")); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := iso9660.Open(fileAt(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ud, _, err := metadata.Load(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ud.Machine.DNS != "10.0.0.53" {
+		t.Errorf("drive DNS = %q, want 10.0.0.53", ud.Machine.DNS)
+	}
 }

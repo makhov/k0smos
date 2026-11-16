@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/amakhov/k0smos/internal/control"
+	"github.com/amakhov/k0smos/internal/iso9660"
 	"github.com/spf13/cobra"
 )
 
@@ -41,6 +42,7 @@ func machineUpCmd() *cobra.Command {
 		image        string
 		disk         string
 		cidata       string
+		dns          string
 		data         string
 		dataSize     string
 		socket       string
@@ -237,13 +239,44 @@ guest down cleanly rather than killing it.`,
 				}
 			}
 
+			// slirp advertises its own resolver over DHCP, and on macOS that
+			// resolver accepts queries without ever answering them: the node
+			// comes up, and then every image pull fails as "lookup quay.io ...
+			// i/o timeout". The direct-kernel path says k0smos.dns= on the
+			// kernel command line; a machine booting its own GRUB takes no
+			// command line from here, so the same setting goes on a cloud-init
+			// drive instead.
+			//
+			// Said out loud, because a drive the caller did not ask for should
+			// not appear in their guest's state directory unexplained.
+			if runtime.GOOS == "darwin" {
+				switch {
+				case cidata != "":
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: --cidata replaces the drive that would have set "+
+						"the guest's nameserver to %s; set k0smos.dns in yours, or image pulls will "+
+						"time out against slirp's resolver\n", guestResolver(dns))
+				case socket == "":
+					// Nowhere to put the drive. --socket "" is a deliberate
+					// choice, and so is living without this.
+				default:
+					cidata = filepath.Join(filepath.Dir(socket), "resolver.iso")
+					if !dryRun {
+						if err := writeResolverDrive(cidata, guestResolver(dns)); err != nil {
+							return err
+						}
+					}
+					fmt.Fprintf(cmd.ErrOrStderr(), "nameserver %s, on a drive of its own: "+
+						"slirp's resolver does not answer on macOS\n", guestResolver(dns))
+				}
+			}
+
 			spec := bootSpec{
 				kernel: kernel, initramfs: initramfs, disk: disk, cidata: cidata,
 				data: data, dataSize: dataSize, socket: socket,
 				mem: mem, cpus: cpus, console: console, exec: exec_,
 				apiPort: apiPort, attach: attach, interactive: interactive,
 				artifact: !direct, firmware: firmware, firmwareVars: firmwareVars, dryRun: dryRun,
-				clusterNet: clusterNet, clusterMAC: clusterMAC,
+				clusterNet: clusterNet, clusterMAC: clusterMAC, dns: dns,
 			}
 			// Refuse to start alongside a guest already answering on this socket.
 			// Two guests sharing one root image corrupt it, and the second would
@@ -293,7 +326,8 @@ guest down cleanly rather than killing it.`,
 	f.Bool("from-disk", false,
 		"clone --image as a legacy ext4 root (direct-kernel development mode)")
 	f.Bool("no-image", false, "boot only the initramfs in direct-kernel smoke mode (kubelet cannot run there)")
-	f.StringVar(&cidata, "cidata", "", "cloud-init drive to attach, as written by 'k0smosctl gen'")
+	f.StringVar(&cidata, "cidata", "", "cloud-init drive to attach, as written by 'k0smosctl gen'. On macOS, set k0smos.dns in it: supplying a drive replaces the one that would otherwise carry that setting")
+	f.StringVar(&dns, "dns", "", "nameserver for the guest (default "+guestDNS+"). Never slirp's own, which it advertises over DHCP and which does not answer on macOS")
 	f.StringVar(&data, "data", "", "data volume for /var (direct-kernel mode; platform artifacts include one)")
 	f.StringVar(&dataSize, "data-size", "4G", "size for a newly created --data volume")
 	f.StringVar(&name, "name", defaultGuestName, "name for this guest; its console and control socket are kept under it")
@@ -320,6 +354,31 @@ type guest struct {
 	console string
 	apkArch string
 	accel   []string
+}
+
+// guestResolver is the nameserver a guest is given: --dns when the caller named
+// one, and otherwise a public resolver. Never the one slirp advertises over
+// DHCP -- see the note above netdev in qemuArgs for why that one cannot answer.
+func guestResolver(dns string) string {
+	if dns != "" {
+		return dns
+	}
+	return guestDNS
+}
+
+// writeResolverDrive writes a cloud-init drive at path that sets the guest's
+// nameserver and nothing else, so a machine booted with one is configured
+// exactly as it would be without it in every other respect.
+func writeResolverDrive(path, dns string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return iso9660.Write(f, "cidata", []iso9660.File{
+		{Name: "user-data", Data: fmt.Appendf(nil, "#cloud-config\nk0smos:\n  dns: %s\n", dns)},
+		{Name: "meta-data", Data: []byte("instance-id: k0smosctl\n")},
+	})
 }
 
 func guestFor(arch string) (guest, error) {
@@ -364,6 +423,7 @@ type bootSpec struct {
 	firmware                        string
 	firmwareVars                    string
 	clusterNet, clusterMAC          string
+	dns                             string
 	apiPort                         int
 	attach, interactive             bool
 	artifact                        bool
@@ -492,12 +552,13 @@ func qemuArgs(g guest, s bootSpec) ([]string, error) {
 		}
 		args = append(args, "-kernel", s.kernel, "-initrd", s.initramfs)
 		append_ = fmt.Sprintf("console=%s panic=10 k0smos.ip=%s k0smos.gw=%s k0smos.dns=%s",
-			g.console, guestCIDR, guestGateway, guestDNS)
+			g.console, guestCIDR, guestGateway, guestResolver(s.dns))
 	}
 
-	// Read-only, as an infrastructure provider attaches it.
+	// Read-only, as an infrastructure provider attaches it. On macOS this may
+	// be the drive machine up wrote to carry the guest's nameserver.
 	if s.cidata != "" {
-		if _, err := os.Stat(s.cidata); err != nil {
+		if _, err := os.Stat(s.cidata); err != nil && !s.dryRun {
 			return nil, fatalf("cloud-init drive %s not found", s.cidata)
 		}
 		args = append(args, "-drive", "file="+s.cidata+",if=virtio,format=raw,readonly=on")
