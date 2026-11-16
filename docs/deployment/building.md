@@ -87,6 +87,29 @@ asked rather than guessed at -- see [Which image is this?](operating.md#which-im
 | `make artifacts` | kernel, root and initramfs separately, for custom packaging |
 | `make ctl` | `k0smosctl` for the host |
 
+## Building on macOS
+
+One step needs a case-sensitive filesystem, and macOS does not format its boot
+volume that way. iptables names a target in upper case and a match in lower, so
+the kernel ships `xt_DSCP.ko` beside `xt_dscp.ko` — and `xt_HL`, `xt_RATEEST`
+and `xt_TCPMSS` beside their lower-case matches. Unpacking the module tree on a
+case-insensitive filesystem drops one of each pair, and the build stops.
+
+```bash
+make case-volume   # once
+make metal
+```
+
+`make case-volume` attaches a sparse, case-sensitive disk image at
+`dist/kernel-metal`. It is a file, not a partition: nothing about the real disk
+changes, it grows only as the module tree fills it, and `make case-volume-detach`
+followed by deleting `dist/kernel-metal.sparseimage` undoes it entirely. The
+container builds write the tree through the mount and read it back, because the
+host filesystem share crosses into it.
+
+The target is a no-op anywhere the filesystem already distinguishes the two
+spellings, so it is safe in a script that also runs on Linux.
+
 ## When a pin goes stale
 
 `KERNEL_RELEASE` names one Ubuntu build, and Ubuntu drops a build from the

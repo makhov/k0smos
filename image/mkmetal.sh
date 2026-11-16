@@ -42,7 +42,10 @@ if [ ${#missing[@]} -gt 0 ] && [ "${K0SMOS_METAL_CONTAINER:-0}" != 1 ]; then
     exit 1
   }
   tag=k0smos-metal-builder:$goarch
-  docker build --platform "$platform" --build-arg TARGETARCH="$goarch" \
+  # --load because docker build may be routed to buildx: its container driver
+  # leaves the result in the build cache, and the run below then cannot find
+  # the image. Harmless on the classic driver, which loads anyway.
+  docker build --load --platform "$platform" --build-arg TARGETARCH="$goarch" \
     -t "$tag" -f image/metal-builder.Dockerfile image
   exec docker run --rm --platform "$platform" \
     -e ARCH="$arch" -e KERNEL="$kernel" -e INITRAMFS="$initramfs" \

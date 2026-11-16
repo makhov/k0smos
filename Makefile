@@ -53,6 +53,17 @@ kernel-alpine:
 # kernel under them. Bump it when Ubuntu drops this build from the archive --
 # the fetch says so -- and rebuild the NVIDIA images against the new one.
 KERNEL_RELEASE ?= 7.0.0-43-generic
+# A case-sensitive filesystem for the kernel's module tree, which macOS cannot
+# otherwise provide. Attaches a sparse disk image at dist/kernel-metal; nothing
+# about the real disk changes, and case-volume-detach gives it back. A no-op
+# where the filesystem already distinguishes xt_DSCP from xt_dscp.
+.PHONY: case-volume case-volume-detach
+case-volume:
+	./image/case-volume.sh
+
+case-volume-detach:
+	./image/case-volume.sh detach
+
 kernel-metal:
 	KERNEL_ROOT=dist/kernel-metal KERNEL_RELEASE=$(KERNEL_RELEASE) ./image/fetch-kernel-ubuntu.sh
 
