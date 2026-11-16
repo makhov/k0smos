@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -904,6 +905,45 @@ func recordImage(s *sys.Sys) {
 	logf("image: %s", img)
 }
 
+// fileLimit is what the whole node gets: every process k0smos starts inherits
+// PID1's, and nothing below can raise its own past the hard one.
+//
+// The soft limit is what k0s asks for, and the hard limit is the ceiling
+// anything may lift itself to. They are deliberately different: a soft limit in
+// the millions breaks programs built around select(), whose fd_set stops at
+// 1024, and a pod may run one of those.
+const (
+	fileLimitSoft = 65536
+	fileLimitHard = 1024 * 1024
+)
+
+// raiseFileLimit lifts the number of files this machine may open.
+//
+// A node inherits the kernel's boot default, 1024 soft and 4096 hard, because
+// nothing here does what a distro's init and pam_limits do. 4096 being the
+// *hard* limit is what makes it serious: containerd, kubelet and every pod are
+// children of PID1, so none of them can raise it, and a busy node fails with
+// "too many open files" rather than anything that names the cause. k0s says so
+// at startup -- "pre-flight-check=os/RLIMIT_NOFILE current: 4095 / max: 4096"
+// against the 65536 it wants -- which is how this was found.
+//
+// Capped at fs.nr_open, the most the kernel will allow, because asking for more
+// fails the call outright and would leave the limit where it was.
+func raiseFileLimit() {
+	want := unix.Rlimit{Cur: fileLimitSoft, Max: fileLimitHard}
+	if max, err := os.ReadFile("/proc/sys/fs/nr_open"); err == nil {
+		if n, err := strconv.ParseUint(strings.TrimSpace(string(max)), 10, 64); err == nil && n < want.Max {
+			want.Max = n
+			want.Cur = min(want.Cur, n)
+		}
+	}
+	if err := unix.Setrlimit(unix.RLIMIT_NOFILE, &want); err != nil {
+		logf("warn: raise the open-file limit to %d/%d: %v", want.Cur, want.Max, err)
+		return
+	}
+	logf("open files: %d soft, %d hard", want.Cur, want.Max)
+}
+
 // nvidiaDeviceNodes creates /dev/nvidia*, /dev/nvidia-uvm* and the MIG
 // capability nodes under /dev/nvidia-caps for what the driver found. Each gets
 // the mode nvidia-modprobe would give it, which for a GPU is 0666: which pods
@@ -1069,6 +1109,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	if err := os.Setenv("PATH", cfg.Path); err != nil {
 		logf("warn: set PATH: %v", err)
 	}
+	raiseFileLimit()
 
 	// Modules come before cgroup and net: a stock distro kernel ships virtio,
 	// ext4 and overlayfs as modules, so without this there is no NIC and no
