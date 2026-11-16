@@ -47,8 +47,9 @@ mkdir -p "$out"
 if [ -e "$out/.CASE-TEST" ]; then
   rm -f "$out/.case-test"
   echo "$out is on a case-insensitive filesystem, which cannot hold the kernel's" >&2
-  echo "module tree (xt_DSCP.ko and xt_dscp.ko are different modules)." >&2
-  echo "Build on Linux, or put the repository on a case-sensitive volume." >&2
+  echo "module tree: iptables names a target in upper case and a match in lower, so" >&2
+  echo "xt_DSCP.ko and xt_dscp.ko are different modules, and three more pairs like them." >&2
+  echo "Run 'make case-volume' to give it a case-sensitive one, or build on Linux." >&2
   exit 1
 fi
 rm -f "$out/.case-test"
