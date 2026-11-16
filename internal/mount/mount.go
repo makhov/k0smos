@@ -64,6 +64,13 @@ var Default = []Spec{
 	// 0700 like systemd's sys-fs-bpf.mount, and optional like the rest: a
 	// kernel built without BPF must still boot.
 	{Source: "bpf", Target: "/sys/fs/bpf", FSType: "bpf", Perm: 0700, Optional: true},
+
+	// securityfs, where the kernel says which LSMs are active
+	// (/sys/kernel/security/lsm). Node software checks that before deciding
+	// what it can enforce -- a runtime that would use a BPF LSM hook has no
+	// other way to find out -- and reads nothing at all when this is not
+	// mounted, which looks the same as the LSM being absent.
+	{Source: "securityfs", Target: "/sys/kernel/security", FSType: "securityfs", Perm: 0755, Optional: true},
 }
 
 // Ensure mounts the required Default specs not already present. The optional

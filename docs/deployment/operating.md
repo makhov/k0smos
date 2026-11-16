@@ -158,6 +158,7 @@ single-artifact immutable node can offer. What it finds:
 | `/var/lib/<name>` for its payload | On the data volume, and the right place for anything large. |
 | `libseccomp` | On the root (`ROOT_LIBS`), since every container runtime links it. |
 | `/sys/fs/bpf` to pin BPF objects | Mounted when the kernel has BPF. |
+| `/sys/kernel/security/lsm` to see which LSMs are active | securityfs is mounted when the kernel has it. |
 | `systemctl restart containerd` | Not available, and not needed — see the drop-in row. There is no init system to talk to. |
 | Kernel LSMs, sysctls, KSM | A sysctl or `/sys` write a privileged pod can do itself. A kernel command line change — `lsm=`, for BPF LSM — is baked into the image with `METAL_KERNEL_ARGS` ([building](building.md)). |
 
