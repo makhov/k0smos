@@ -1,6 +1,7 @@
 package main
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -82,14 +83,15 @@ func TestOSReleaseIDsWithoutAFileIsEmpty(t *testing.T) {
 
 func TestSysctlDefaultsYieldToCmdline(t *testing.T) {
 	got := sysctlDefaults("console=ttyS0 sysctl.fs.protected_regular=0 sysctl.kernel/kexec_load_disabled=0 kvm_amd.nested=1")
-	want := map[string]string{"fs.protected_fifos": "1", "dev.tty.ldisc_autoload": "0"}
-	if len(got) != len(want) {
-		t.Fatalf("got %v, want %v", got, want)
-	}
-	for k, v := range want {
-		if got[k] != v {
-			t.Errorf("%s = %q, want %q", k, got[k], v)
-		}
+	// Whatever hostSysctls holds, less the two the command line set -- one
+	// written with dots and one with slashes, both of which the kernel takes.
+	// Derived rather than restated, so a setting added to the table does not
+	// fail a test that is about the yielding, not about the table.
+	want := maps.Clone(hostSysctls)
+	delete(want, "fs.protected_regular")
+	delete(want, "kernel.kexec_load_disabled")
+	if !maps.Equal(got, want) {
+		t.Errorf("got %v\nwant %v", got, want)
 	}
 	if len(sysctlDefaults("")) != len(hostSysctls) {
 		t.Error("an empty command line must keep every default")
