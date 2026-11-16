@@ -125,6 +125,7 @@ if [ -z "$native" ]; then
   exec docker run --rm --platform "$platform" -v "$repo:/repo" -w /repo \
     -e K0S_BIN -e K0SMOS_BIN -e MODULES_DIR -e ARCH -e K0S_VERSION -e K0SMOS_BUILD \
     -e PAD_MB -e FSLABEL -e FSUUID -e APK_PKGS -e ROOT_TOOLS -e LIBC -e UBUNTU_RELEASE \
+    -e KERNEL_CONFIG -e KERNEL_RELEASE \
     -e ROOTFS -e FIRECRACKER_DIR \
     "$build_img" sh -c "$build_install"' && exec bash image/mkrootfs.sh "$1"' _ "$img"
 fi
@@ -279,6 +280,27 @@ if [ -d "$moddir" ]; then
 else
   # Expected with a monolithic kernel — see the same note in mkinitramfs.sh.
   echo "no modules dir at $moddir — assuming a monolithic kernel" >&2
+fi
+
+# The kernel's own configuration, at the path k0s looks for it: it tries
+# /proc/config.gz first and /boot/config-<release> next, and a stock Ubuntu
+# kernel builds no CONFIG_IKCONFIG_PROC. Without the file, five of k0s's
+# pre-flight checks report "no kernel config found" and verify nothing --
+# cgroups, namespaces, netfilter, ext4 and procfs, which are exactly what a
+# node needs and what the image was built to provide. ~300 KB to have them
+# actually checked.
+#
+# Not derived from the module tree: this root deliberately carries none, the
+# modules travelling in the initramfs instead. The caller knows which kernel
+# the image is for and says so.
+if [ -n "${KERNEL_CONFIG:-}" ] && [ -n "${KERNEL_RELEASE:-}" ]; then
+  if [ -f "$KERNEL_CONFIG" ]; then
+    mkdir -p "$root/boot"
+    install -m 0644 "$KERNEL_CONFIG" "$root/boot/config-$KERNEL_RELEASE"
+    echo "installed /boot/config-$KERNEL_RELEASE"
+  else
+    echo "KERNEL_CONFIG=$KERNEL_CONFIG does not exist; k0s will not be able to check this kernel" >&2
+  fi
 fi
 
 mkdir -p "$(dirname "$img")"
