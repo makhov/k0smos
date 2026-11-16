@@ -1063,6 +1063,12 @@ or a <code>k0smos.modules=</code> list, and not at all with <code>k0smos.modules
 takes them elsewhere: <code>kvm_amd.nested=1</code> loads <code>kvm_amd</code> with <code>nested=1</code>. Every
 other argument -- <code>hugepagesz=2M hugepages=512</code>, <code>spec_rstack_overflow=safe-ret</code>
 -- is the kernel's own and needs nothing from k0smos.</p>
+<p>k0smos hardens a few sysctls at boot: <code>kernel.kexec_load_disabled=1</code>,
+<code>fs.protected_fifos=1</code>, <code>fs.protected_regular=2</code> and <code>dev.tty.ldisc_autoload=0</code>.
+A <code>sysctl.&lt;name&gt;=&lt;value&gt;</code> argument, which the kernel applies itself, overrides
+any of them. Unprivileged user namespaces stay allowed, since rootless builds and
+Chrome's sandbox in ordinary pods use them; a host that runs nothing of the kind
+can add <code>sysctl.kernel.unprivileged_userns_clone=0</code>.</p>
 
 
 
