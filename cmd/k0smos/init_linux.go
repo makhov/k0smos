@@ -444,30 +444,54 @@ func extraVolumes(s *sys.Sys, ud metadata.UserData) {
 //
 // Everything here is best-effort. A machine with no such drive — a manual boot,
 // or a platform that supplies nothing — must still come up.
-func loadMetadata(s *sys.Sys) (metadata.UserData, metadata.MetaData) {
+func loadMetadata(s *sys.Sys) (metadata.UserData, metadata.MetaData, bool) {
 	var ud metadata.UserData
 	var md metadata.MetaData
 
 	dev, label := findMetadataDrive(s)
 	if dev == "" {
-		return ud, md
+		return ud, md, false
 	}
 
 	files, done, err := openMetadata(s, dev, label)
 	if err != nil {
 		logf("warn: read metadata drive %s: %v", dev, err)
-		return ud, md
+		return ud, md, false
 	}
 	defer done()
 
 	ud, md, err = metadata.Load(files)
 	if err != nil {
 		logf("warn: read metadata: %v", err)
-		return metadata.UserData{}, metadata.MetaData{}
+		return metadata.UserData{}, metadata.MetaData{}, true
 	}
 	for _, w := range ud.Warnings {
 		logf("metadata: %s", w)
 	}
+	return ud, md, true
+}
+
+// loadIMDS reads the same cloud-init data from the instance metadata service,
+// for a machine that has no drive carrying any. EC2 gives nothing to attach a
+// seed to, so on a hyperscaler this is a node's only source.
+//
+// Nothing listening is the ordinary case off-cloud and is not reported: every
+// bare-metal node and every smoke test would otherwise log a failure for a
+// service it was never going to have.
+func loadIMDS() (metadata.UserData, metadata.MetaData) {
+	src, err := metadata.NewAWS("")
+	if err != nil {
+		return metadata.UserData{}, metadata.MetaData{}
+	}
+	ud, md, err := metadata.Load(src)
+	if err != nil {
+		logf("warn: read instance metadata: %v", err)
+		return metadata.UserData{}, metadata.MetaData{}
+	}
+	for _, w := range ud.Warnings {
+		logf("instance metadata: %s", w)
+	}
+	logf("read instance metadata for %s", md.InstanceID)
 	return ud, md
 }
 
@@ -1264,7 +1288,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	// each machine needs on a cluster segment. And before the data volume, so
 	// that k0smos.data=auto does not claim a blank disk fs_setup names for
 	// something else.
-	userData, metaData := loadMetadata(s)
+	userData, metaData, fromDrive := loadMetadata(s)
 	applyNetworkConfig(&cfg, metaData.Network)
 	applyMachineConfig(&cfg, userData.Machine)
 	claimed := make([]string, 0, len(userData.FSSetup))
@@ -1395,6 +1419,22 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		if err := s.WriteFile("/etc/resolv.conf", resolv, 0644); err != nil {
 			logf("warn: write resolv.conf: %v", err)
 		}
+	}
+
+	// No drive carried anything, so try the instance metadata service now that
+	// an interface is up -- it cannot be reached before one is.
+	//
+	// shortcut: a network-config or a k0smos section arriving this way is too
+	// late to act on, the interfaces being configured already, and fs_setup can
+	// find the data volume has claimed the disk it wanted. EC2 serves no
+	// network-config at all, and CAPI's bootstrap data is write_files and
+	// runcmd, which both still apply. Fetching earlier would mean bringing a
+	// NIC up before reading the metadata that configures it, which is the worse
+	// trade of the two.
+	if !fromDrive {
+		userData, metaData = loadIMDS()
+		applyWriteFiles(s, userData)
+		extraVolumes(s, userData)
 	}
 
 	// CAPI names machines, so metadata wins over the cmdline default.

@@ -6,7 +6,9 @@ configuration agent to modify a running node.
 Configuration arrives on either:
 
 - a NoCloud ISO labelled `cidata`; or
-- an OpenStack config-drive labelled `config-2`.
+- an OpenStack config-drive labelled `config-2`; or
+- an instance metadata service, for a machine with no drive to attach one to
+  ([below](#amazon-ec2-and-the-metadata-service)).
 
 Either label may be upper case (`CIDATA`), as standard-following ISO writers
 produce it, and the drive may be a virtio disk or a cdrom on virtio-scsi, as
@@ -202,3 +204,68 @@ k0smosctl gen \
 Configuration data can contain cluster-admin credentials and controller join
 tokens. Protect configuration drives and provider bootstrap Secrets as you
 would protect the machine disk itself.
+
+## Amazon EC2 and the metadata service
+
+An EC2 instance has nothing to attach a seed drive to: its user-data is served
+over HTTP from the link-local address `169.254.169.254`. So when no drive
+carries any configuration, k0smos reads the same cloud-config from there, using
+IMDSv2 and falling back to an unauthenticated read on an instance that still
+allows IMDSv1. Everything below that is unchanged — `write_files`, `runcmd` and
+the k0s workload behave exactly as they do off a drive.
+
+Nothing has to be enabled. Off a cloud there is no service listening, the one
+connection fails at once, and the boot carries on; a node with a drive never
+looks at all.
+
+A machine's hardware needs no configuration either. k0smos loads drivers by
+matching each device's modalias against `modules.alias`, the way udev does, so
+an instance's ENA network interface and its NVMe EBS volumes bring their own
+drivers with no module list to maintain.
+
+### What a drive can do that the service cannot
+
+The service is read once an interface is up, because it cannot be reached before
+then. Three things therefore arrive too late to act on:
+
+| Not applied from the service | Why, and what to do instead |
+|---|---|
+| `network-config` | The interfaces are configured by the time it is read. EC2 serves no `network-config`; DHCP is how an instance is addressed, which is the default. |
+| The `k0smos` section of user-data | Same reason. Put those settings in the image's kernel command line (`METAL_KERNEL_ARGS`) instead. |
+| `fs_setup` | The data volume may already have claimed the blank disk it names. Give the data volume an explicit `k0smos.data=` when an instance has extra disks to format. |
+
+`write_files`, `runcmd`, `mounts` and the hostname all apply normally, which is
+what Cluster API bootstrap data consists of.
+
+### Building an AMI
+
+The `raw.zst` release asset is the image to import:
+
+```bash
+zstd -d k0smos-metal-x86_64.raw.zst
+# upload the .raw to S3, then
+aws ec2 import-snapshot --disk-container Format=raw,UserBucket={S3Bucket=...,S3Key=...}
+aws ec2 register-image --name k0smos --architecture x86_64 --boot-mode uefi \
+  --root-device-name /dev/xvda --ena-support \
+  --block-device-mappings 'DeviceName=/dev/xvda,Ebs={SnapshotId=snap-...}'
+```
+
+`--boot-mode uefi` is required: the metal image boots EFI, because the GPU
+images need memory windows larger than BIOS maps and all metal images share one
+layout.
+
+### Other providers
+
+| Provider | Configuration source |
+|---|---|
+| libvirt, QEMU, Proxmox | NoCloud ISO |
+| KubeVirt, Cluster API | NoCloud ISO, which the provider builds |
+| OpenStack, Ironic, Metal3 | config-drive |
+| Bare metal | either, or baked into the image |
+| Amazon EC2 | the metadata service |
+| GCP, Azure, Hetzner Cloud | not yet — see below |
+
+GCP and Azure serve the same data at their own paths behind their own headers.
+Each is one more metadata source of about sixty lines beside the EC2 one in
+`internal/metadata/imds.go`; nothing else has to change, because every provider
+feeds the same cloud-config parser.
