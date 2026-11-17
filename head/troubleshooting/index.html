@@ -1103,12 +1103,18 @@ You are not viewing the documentation for the current stable release of k0smos.
 
 <h1 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">#</a></h1>
 <p>A k0smos machine has no shell and no SSH, so you ask it questions instead of
-logging into it. Four commands cover almost everything:</p>
+logging into it. These cover almost everything:</p>
 <div class="highlight"><pre><span></span><code>k0smosctl<span class="w"> </span>machine<span class="w"> </span>logs<span class="w">   </span>--name<span class="w"> </span>&lt;machine&gt;<span class="w"> </span>-f<span class="w">   </span><span class="c1"># the console, as it happens</span>
 k0smosctl<span class="w"> </span>machine<span class="w"> </span>status<span class="w"> </span>--name<span class="w"> </span>&lt;machine&gt;<span class="w">      </span><span class="c1"># what the init decided</span>
 k0smosctl<span class="w"> </span>machine<span class="w"> </span>dmesg<span class="w">  </span>--name<span class="w"> </span>&lt;machine&gt;<span class="w">      </span><span class="c1"># what the kernel saw</span>
+k0smosctl<span class="w"> </span>machine<span class="w"> </span>ls<span class="w">     </span>--name<span class="w"> </span>&lt;machine&gt;<span class="w"> </span>&lt;dir&gt;<span class="w">    </span><span class="c1"># what is there</span>
 k0smosctl<span class="w"> </span>machine<span class="w"> </span>cat<span class="w">    </span>--name<span class="w"> </span>&lt;machine&gt;<span class="w"> </span>&lt;path&gt;<span class="w">   </span><span class="c1"># any file on the machine</span>
+k0smosctl<span class="w"> </span>machine<span class="w"> </span>dial<span class="w">   </span>--name<span class="w"> </span>&lt;machine&gt;<span class="w"> </span>&lt;host:port&gt;<span class="w">  </span><span class="c1"># what it can still reach</span>
 </code></pre></div>
+<p><code>ls</code> is what makes <code>cat</code> usable: you rarely know the path of the log you want
+before you have looked. <code>dial</code> is the only one that is not a report of state the
+machine already holds — it opens one connection and tells you what happened,
+which is the question routes and socket tables cannot settle.</p>
 <p><code>logs</code> shows the boot as it happens; every PID 1 message starts with <code>k0smos:</code>,
 and k0s writes to the same console once it starts. <code>status</code> reports the same
 conclusions after the fact, which is what you want when the interesting part has
@@ -1164,9 +1170,23 @@ log to disk, not to the console, and <code>machine cat</code> is how you read th
 <div class="highlight"><pre><span></span><code><span class="c1"># what k0s was actually configured with</span>
 k0smosctl<span class="w"> </span>machine<span class="w"> </span>cat<span class="w"> </span>/etc/k0s/k0s.yaml
 
-<span class="c1"># a specific component</span>
+<span class="c1"># find the component&#39;s log before reading it -- the pod directory carries a</span>
+<span class="c1"># generated suffix, so it cannot be typed from memory</span>
+k0smosctl<span class="w"> </span>machine<span class="w"> </span>ls<span class="w"> </span>/var/log/pods
 k0smosctl<span class="w"> </span>machine<span class="w"> </span>cat<span class="w"> </span>/var/log/pods/kube-system_kube-proxy-x2tbg/kube-proxy/0.log
 </code></pre></div>
+<p>When a worker never registers at all, the failure is usually below k0s. Ask the
+machine what it can reach, which separates the four causes that look alike from
+the node's logs:</p>
+<div class="highlight"><pre><span></span><code>k0smosctl<span class="w"> </span>machine<span class="w"> </span>dial<span class="w"> </span><span class="m">10</span>.0.2.2:6443<span class="w">              </span><span class="c1"># the API server, by address</span>
+k0smosctl<span class="w"> </span>machine<span class="w"> </span>dial<span class="w"> </span>myapi.example.com:6443<span class="w">     </span><span class="c1"># the same, by name -- DNS</span>
+k0smosctl<span class="w"> </span>machine<span class="w"> </span>dial<span class="w"> </span><span class="m">1</span>.1.1.1:443<span class="w">                </span><span class="c1"># is anything outside reachable</span>
+</code></pre></div>
+<p>A name that does not resolve, a port that times out and a port that is refused
+are three different problems with three different fixes, and the error is
+reported in the machine's own words so they can be told apart. Check <code>status</code> for
+the <code>clock</code> step too: a node whose time is wrong fails with certificate errors
+that name anything but the clock.</p>
 <p>Two failures worth recognising, because the message names the wrong component:</p>
 <ul>
 <li><strong><code>iptables-restore</code> reporting <code>RULE_APPEND failed (No such file or directory)</code></strong>
@@ -1243,13 +1263,41 @@ machine's control socket still exists, then retry:</p>
 <h2 id="on-kubevirt-and-bare-metal">On KubeVirt and bare metal<a class="headerlink" href="#on-kubevirt-and-bare-metal" title="Permanent link">#</a></h2>
 <p>The commands above need the control port, which is attached by <code>k0smosctl</code> for
 local machines. Elsewhere the serial console is the channel: the VMI console on
-KubeVirt, serial-over-LAN or the BMC on bare metal. Everything PID 1 prints
-appears there, and <code>/run/k0smos/boot.json</code> is readable from the disk.</p>
+KubeVirt, serial-over-LAN or the BMC on bare metal, the EC2 serial console on
+AWS. Everything PID 1 prints appears there, and <code>/run/k0smos/boot.json</code> is
+readable from the disk.</p>
+<p>That is one-way: you read what the machine chose to print. To ask it questions
+over the same console, boot with</p>
+<div class="highlight"><pre><span></span><code>k0smos.debug=console
+</code></pre></div>
+<p>Then type a request on the console and the answer is printed back:</p>
+<div class="highlight"><pre><span></span><code>status
+ls /var/log/pods
+cat /var/log/k0s.log
+dial 10.0.2.2:6443
+dmesg
+</code></pre></div>
+<p>Press enter on its own for the list. This is the channel for a node that cannot
+reach its cluster at all — no API means no <code>kubectl debug</code>, and the image has no
+shell to fall back on. Replies are plain text, not the control port's framing,
+because the kernel prints to the same line and would corrupt anything counted in
+bytes; a reply over 64 KiB is cut to its last 64 KiB, since a serial line cannot
+deliver a megabyte of log in a time anyone will wait.</p>
+<p><strong>Leave it off unless you need it.</strong> It reads any path and issues join tokens, so
+whoever reaches the console owns the node — see below.</p>
 <h2 id="access-is-a-cluster-admin-channel">Access is a cluster-admin channel<a class="headerlink" href="#access-is-a-cluster-admin-channel" title="Permanent link">#</a></h2>
 <p>Anything able to write to a machine's control port can read any file on it, fetch
 its kubeconfig, and stop it. That is not a new exposure — the port is the
 hypervisor's channel into the guest — but do not expose it anywhere the machine's
 disk is not equally exposed.</p>
+<p><code>dial</code> goes a little further than reading: it makes the machine originate one
+TCP connection to an address of the caller's choosing, including a link-local
+one. It sends nothing, and it grants nothing that reading the join token did not
+already grant, but it is the one request that acts rather than reports.</p>
+<p><code>k0smos.debug=console</code> moves that same channel onto the serial console, which on
+a cloud instance or a BMC is reachable by a different set of people than the
+disk is. It is off by default for that reason: turn it on to diagnose a node,
+and leave it out of the image you boot by default.</p>
 
 
 
