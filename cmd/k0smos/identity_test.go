@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -84,5 +85,58 @@ func TestFirstMACPrefersRealHardware(t *testing.T) {
 	}
 	if got := firstMAC(filepath.Join(dir, "nope")); got != "" {
 		t.Errorf("firstMAC on a missing directory = %q", got)
+	}
+}
+
+// The contract the hybrid exists for: an identity is taken once and then kept,
+// so a node keeps its name across reboots.
+func TestIdentityIsTakenOnceAndKept(t *testing.T) {
+	dir := t.TempDir()
+	first := machineIdentity(dir, os.MkdirAll, os.WriteFile)
+	if first.Source != "new" || len(first.Value) != 64 {
+		t.Fatalf("first boot: %+v", first)
+	}
+	again := machineIdentity(dir, os.MkdirAll, os.WriteFile)
+	if again.Value != first.Value || again.Source != "kept" {
+		t.Errorf("second boot got %+v, want the kept %q", again, first.Value)
+	}
+	// And two machines take different ones.
+	other := machineIdentity(t.TempDir(), os.MkdirAll, os.WriteFile)
+	if other.Value == first.Value {
+		t.Error("two machines took the same identity")
+	}
+}
+
+// A file holding something that is not an identity is replaced rather than
+// obeyed: whatever it is, it cannot name this node.
+func TestIdentityReplacesRubbish(t *testing.T) {
+	for _, junk := range []string{"", "not hex at all", "abcd", strings.Repeat("a", 63)} {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "lib/k0smos"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, identityFile), []byte(junk), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got := machineIdentity(dir, os.MkdirAll, os.WriteFile)
+		if got.Source != "new" || len(got.Value) != 64 {
+			t.Errorf("%q: got %+v, want a new identity", junk, got)
+		}
+	}
+}
+
+// Nowhere to keep one: the hardware answers instead, and it must answer the
+// same way every boot rather than randomly, or the node renames itself each
+// time and leaves a stale Node object behind.
+func TestIdentityFallsBackToHardwareDeterministically(t *testing.T) {
+	fail := func(string, os.FileMode) error { return os.ErrPermission }
+	nowrite := func(string, []byte, os.FileMode) error { return os.ErrPermission }
+	a := machineIdentity(t.TempDir(), fail, nowrite)
+	b := machineIdentity(t.TempDir(), fail, nowrite)
+	if a.Value != b.Value {
+		t.Errorf("fallback is not deterministic: %q then %q", a.Value, b.Value)
+	}
+	if a.Value != "" && !strings.Contains(a.Source, "hardware") {
+		t.Errorf("source = %q, want it to say where the identity came from", a.Source)
 	}
 }

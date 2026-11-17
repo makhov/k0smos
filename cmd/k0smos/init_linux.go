@@ -1131,14 +1131,6 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	}
 	raiseFileLimit()
 
-	// Before the DHCP client, which sends this as its hostname option, and long
-	// before sethostname below: both read cfg.Hostname, and a machine should
-	// not answer to one name on the network and another to itself.
-	identity := machineIdentity()
-	if cfg.Hostname == "" {
-		cfg.Hostname = hostnameFor(identity)
-	}
-
 	// Modules come before cgroup and net: a stock distro kernel ships virtio,
 	// ext4 and overlayfs as modules, so without this there is no NIC and no
 	// container storage. Failures are not fatal — the kernel may have the
@@ -1209,9 +1201,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 			logf("root is read-only; overlaid %v with tmpfs", mount.WritablePaths)
 		}
 	}
-	// After the overlay, because that is what makes /etc writable, and whether
-	// or not the root was read-only, because both kinds of root need the file.
-	writeMachineID(s, identity)
+
 	mountNvidiaDriver(s)
 
 	// Metadata is local block-device input, so it does not need networking. Read
@@ -1264,6 +1254,16 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 			logf("warn: mkdir /var/opt: %v", err)
 		}
 	}
+
+	// After the data volume, which is where an identity is kept, and before the
+	// DHCP client and sethostname, which both read cfg.Hostname: a machine
+	// should not answer to one name on the network and another to itself.
+	identity := machineIdentity(cfg.DataDir, s.MkdirAll, s.WriteFile)
+	logf("machine identity %s", identity.Source)
+	if cfg.Hostname == "" {
+		cfg.Hostname = hostnameFor(identity.Value)
+	}
+	writeMachineID(s, identity.Value)
 
 	// After every mount above, so each is made shared; later ones inherit it.
 	if err := s.Mount("", "/", "", msRecShared, ""); err != nil {
