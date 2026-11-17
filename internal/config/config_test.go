@@ -14,10 +14,15 @@ func TestParseReadsHostnameAndDefaults(t *testing.T) {
 	}
 }
 
-func TestParseDefaultsHostname(t *testing.T) {
-	c := Parse("root=/dev/vda")
-	if c.Hostname != "k0smos" {
-		t.Errorf("hostname = %q, want default k0smos", c.Hostname)
+// No default name here: PID1 derives one from the machine's own identity, so
+// that two machines booting the same image do not both call themselves k0smos
+// and fight over one Node object. A name on the command line still wins.
+func TestParseLeavesTheHostnameToBeDerived(t *testing.T) {
+	if c := Parse("root=/dev/vda"); c.Hostname != "" {
+		t.Errorf("hostname = %q, want empty so PID1 derives one", c.Hostname)
+	}
+	if c := Parse("root=/dev/vda k0smos.hostname=node-7"); c.Hostname != "node-7" {
+		t.Errorf("hostname = %q, want node-7 from the command line", c.Hostname)
 	}
 }
 

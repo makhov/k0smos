@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -276,7 +277,7 @@ guest down cleanly rather than killing it.`,
 				mem: mem, cpus: cpus, console: console, exec: exec_,
 				apiPort: apiPort, attach: attach, interactive: interactive,
 				artifact: !direct, firmware: firmware, firmwareVars: firmwareVars, dryRun: dryRun,
-				clusterNet: clusterNet, clusterMAC: clusterMAC, dns: dns,
+				clusterNet: clusterNet, clusterMAC: clusterMAC, dns: dns, name: name,
 			}
 			// Refuse to start alongside a guest already answering on this socket.
 			// Two guests sharing one root image corrupt it, and the second would
@@ -356,6 +357,13 @@ type guest struct {
 	accel   []string
 }
 
+// guestMAC is a stable address for a named guest, in QEMU's own 52:54:00 range
+// so it is recognisable as a virtual machine's.
+func guestMAC(name string) string {
+	sum := sha256.Sum256([]byte("k0smosctl guest " + name))
+	return fmt.Sprintf("52:54:00:%02x:%02x:%02x", sum[0], sum[1], sum[2])
+}
+
 // guestResolver is the nameserver a guest is given: --dns when the caller named
 // one, and otherwise a public resolver. Never the one slirp advertises over
 // DHCP -- see the note above netdev in qemuArgs for why that one cannot answer.
@@ -423,7 +431,7 @@ type bootSpec struct {
 	firmware                        string
 	firmwareVars                    string
 	clusterNet, clusterMAC          string
-	dns                             string
+	dns, name                       string
 	apiPort                         int
 	attach, interactive             bool
 	artifact                        bool
@@ -643,7 +651,15 @@ func qemuArgs(g guest, s bootSpec) ([]string, error) {
 	// PCI id like every other device.
 	args = append(args, "-device", "virtio-rng-pci")
 
-	args = append(args, "-netdev", netdev, "-device", "virtio-net-pci,netdev=n0")
+	// Its own MAC, because QEMU gives every guest the same one otherwise and a
+	// node derives its identity -- its name, and the machineID it reports to
+	// Kubernetes -- from the hardware it can see. Two guests sharing a MAC
+	// become two nodes with one name, fighting over a single Node object.
+	//
+	// Derived from the guest's name, so that restarting a guest gets the same
+	// address and so the same node, while a second guest gets its own.
+	args = append(args, "-netdev", netdev,
+		"-device", "virtio-net-pci,netdev=n0,mac="+guestMAC(s.name))
 	if s.clusterNet != "" {
 		dev := "virtio-net-pci,netdev=n1"
 		if s.clusterMAC != "" {
