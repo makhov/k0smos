@@ -30,6 +30,9 @@ import (
 //	                    and most JVMs refuse to start without.
 //	pid_max             32768 across the whole machine, which a few hundred
 //	                    pods can exhaust; then nothing anywhere can fork.
+//	                    262144 is what Talos settled on, rather than the
+//	                    4194304 a 64-bit kernel allows: the point is to clear
+//	                    the ceiling a dense node reaches, not to remove it.
 //
 // Left alone deliberately: net.netfilter.nf_conntrack_max, which kube-proxy
 // sizes from the node's memory and would only be fighting over.
@@ -42,7 +45,7 @@ var hostSysctls = map[string]string{
 	"fs.inotify.max_user_instances": "8192",
 	"fs.inotify.max_user_watches":   "524288",
 	"vm.max_map_count":              "262144",
-	"kernel.pid_max":                "4194304",
+	"kernel.pid_max":                "262144",
 }
 
 // sysctlDefaults is hostSysctls less those the command line sets: the kernel
