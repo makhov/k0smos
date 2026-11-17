@@ -49,8 +49,13 @@ There is no separate OS version to pair with a k0s version, and no way to run a
 k0s version other than the one inside the artifact. Choosing a k0s release means
 choosing a k0smos release.
 
-## No public-cloud images
+## No published public-cloud images
 
-There is no AMI, Azure image, or GCP image, and no client for cloud instance
-metadata services. Platforms that can boot a UEFI qcow2 or raw disk and attach a
-cloud-init drive will work; the rest are not covered.
+There is no AMI, Azure image, or GCP image in a release. The `raw.zst` asset
+imports into one ([building an AMI](usage/cloud-init.md#building-an-ami)), but
+nothing publishes or shares it for you.
+
+EC2 instance metadata is read, so an EC2 node takes its configuration the same
+way as one with a cloud-init drive. GCP and Azure metadata are not read yet, so
+a machine there boots on whatever its image's kernel command line says and
+nothing more.
