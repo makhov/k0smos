@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build:*)",
+      "Bash(go test:*)",
+      "Bash(go vet:*)",
+      "Bash(gofmt:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(ps:*)",
+      "Bash(lsof:*)",
+      "Bash(dig:*)",
+      "Bash(openssl x509:*)",
+      "Bash(openssl s_client:*)"
+    ]
+  }
+}
