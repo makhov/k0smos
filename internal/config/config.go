@@ -1,6 +1,11 @@
 package config
 
-import "strings"
+import (
+	"strings"
+	"time"
+
+	"github.com/amakhov/k0smos/internal/ntp"
+)
 
 // Config holds k0smos knobs parsed from the kernel cmdline (k0smos.* keys).
 type Config struct {
@@ -52,6 +57,20 @@ type Config struct {
 	DataLabel  string
 	DataFSType string
 	DataDir    string
+
+	// NTP are the time servers to ask before the workload starts, or nil for
+	// the built-in default. "none" disables the exchange, for a machine whose
+	// platform already sets the clock or has no route to a server.
+	//
+	// A node that boots with the wrong clock fails in ways that name anything
+	// but the clock -- certificates not yet valid, etcd refusing to elect a
+	// leader -- and nothing else here sets it.
+	NTP []string
+	// NTPTimeout bounds the whole exchange. Bounded rather than unlimited,
+	// which is where this parts company with Talos: a machine that never boots
+	// because UDP 123 is filtered, and has no shell to find that out from, is
+	// worse off than one with a wrong clock and a line about it on the console.
+	NTPTimeout time.Duration
 
 	// Path is the PATH exported to child processes. PID1 inherits no
 	// environment from anyone, so without this k0s and kubelet cannot find the
@@ -146,6 +165,8 @@ func Parse(cmdline string) Config {
 		DataFSType: "ext4",
 		DataDir:    "/var",
 		Path:       defaultPath,
+		NTP:        []string{ntp.DefaultServer},
+		NTPTimeout: 15 * time.Second,
 	}
 	for _, tok := range strings.Fields(cmdline) {
 		k, v, ok := strings.Cut(tok, "=")
@@ -162,6 +183,18 @@ func Parse(cmdline string) Config {
 			// spaces. Lets a boot be smoke-tested without the real k0s binary.
 			if parts := strings.Split(v, ","); parts[0] != "" {
 				c.Exec = parts
+			}
+		case "ntp":
+			// Comma-separated, as every list on this command line is; "none"
+			// to ask nobody.
+			if v == "none" {
+				c.NTP = nil
+			} else if v != "" {
+				c.NTP = strings.Split(v, ",")
+			}
+		case "ntptimeout":
+			if d, err := time.ParseDuration(v); err == nil && d > 0 {
+				c.NTPTimeout = d
 			}
 		case "path":
 			if v != "" {

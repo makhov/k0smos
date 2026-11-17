@@ -205,3 +205,25 @@ func TestParseExecEmptyValueKeepsDefault(t *testing.T) {
 		t.Errorf("exec = %v, want default", c.Exec)
 	}
 }
+
+// The clock knobs: a default server so a node is not left on its firmware's
+// clock by omission, and "none" for a platform that sets the clock itself.
+func TestParseNTP(t *testing.T) {
+	if c := Parse("root=/dev/vda"); len(c.NTP) != 1 || c.NTP[0] == "" || c.NTPTimeout <= 0 {
+		t.Errorf("defaults: NTP = %v, timeout = %v", c.NTP, c.NTPTimeout)
+	}
+	if c := Parse("k0smos.ntp=none"); len(c.NTP) != 0 {
+		t.Errorf("none: NTP = %v, want nothing asked", c.NTP)
+	}
+	c := Parse("k0smos.ntp=a.example,b.example k0smos.ntptimeout=3s")
+	if len(c.NTP) != 2 || c.NTP[1] != "b.example" {
+		t.Errorf("NTP = %v", c.NTP)
+	}
+	if c.NTPTimeout.String() != "3s" {
+		t.Errorf("timeout = %v, want 3s", c.NTPTimeout)
+	}
+	// Rubbish must not leave the machine with no budget at all.
+	if c := Parse("k0smos.ntptimeout=soon"); c.NTPTimeout <= 0 {
+		t.Errorf("timeout = %v, want the default kept", c.NTPTimeout)
+	}
+}
