@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -30,6 +31,7 @@ import (
 	"github.com/amakhov/k0smos/internal/module"
 	"github.com/amakhov/k0smos/internal/mount"
 	knet "github.com/amakhov/k0smos/internal/net"
+	"github.com/amakhov/k0smos/internal/ntp"
 	"github.com/amakhov/k0smos/internal/nvidia"
 	"github.com/amakhov/k0smos/internal/power"
 	"github.com/amakhov/k0smos/internal/reaper"
@@ -937,6 +939,47 @@ func writeMachineID(s *sys.Sys, identity string) {
 	}
 }
 
+// syncClock sets this machine's clock from a time server.
+//
+// Stepped, not slewed: the clock may be years out at boot -- a board with no
+// battery starts at the epoch -- and nothing is yet running whose timers a
+// jump would disturb. Nothing else here sets the clock, so a node keeps
+// whatever its firmware handed it until this runs.
+//
+// Never fatal. A machine with a wrong clock and a line about it on the console
+// is more use than one that refuses to boot, which is the one place this parts
+// company with Talos: Talos waits for ever by default and has a shell to find
+// out why. k0smos has neither.
+func syncClock(cfg config.Config) {
+	if len(cfg.NTP) == 0 {
+		logf("clock: not asking anyone, k0smos.ntp=none")
+		return
+	}
+	offset, server, err := ntp.Sync(net.Dial, cfg.NTP, cfg.NTPTimeout, time.Now)
+	if err != nil {
+		// Loudly, and naming what was tried: a wrong clock surfaces later as
+		// certificates that are not valid yet, and nothing then points here.
+		logf("warn: clock: no time server answered within %s, keeping the firmware's clock: %v",
+			cfg.NTPTimeout, err)
+		step("clock", err, "")
+		return
+	}
+	if offset.Abs() < time.Second {
+		logf("clock: %s agrees within %s", server, offset.Abs().Round(time.Millisecond))
+		step("clock", nil, "already right")
+		return
+	}
+	now := time.Now().Add(offset)
+	ts := unix.NsecToTimespec(now.UnixNano())
+	if err := unix.ClockSettime(unix.CLOCK_REALTIME, &ts); err != nil {
+		logf("warn: clock: set from %s: %v", server, err)
+		step("clock", err, "")
+		return
+	}
+	logf("clock: %s, %s off, from %s", now.UTC().Format(time.RFC3339), offset.Round(time.Millisecond), server)
+	step("clock", nil, server)
+}
+
 // raiseFileLimit lifts the number of files this machine may open.
 //
 // A node inherits the kernel's boot default, 1024 soft and 4096 hard, because
@@ -1359,6 +1402,11 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 		logf("hostname set to %q", hostname)
 		rec.SetHostname(hostname)
 	}
+
+	// After the interfaces are up and before the workload: k0s issues the
+	// cluster's certificates within seconds of starting, and one issued against
+	// a wrong clock is not valid until that clock is wrong again.
+	syncClock(cfg)
 
 	// Reaper: SIGCHLD -> coalescing trigger -> drain wait4.
 	chld := make(chan os.Signal, 1)
