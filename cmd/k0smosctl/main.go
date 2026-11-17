@@ -67,7 +67,8 @@ func machineCmd() *cobra.Command {
 	}
 	cmd.AddCommand(machineUpCmd(), logsCmd(), listCmd(),
 		shutdownCmd("shutdown"), shutdownCmd("reboot"), rmCmd(),
-		machineStatusCmd(), machineDmesgCmd(), machineCatCmd())
+		machineStatusCmd(), machineDmesgCmd(), machineCatCmd(),
+		machineLsCmd(), machineDialCmd())
 	return cmd
 }
 

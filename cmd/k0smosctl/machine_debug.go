@@ -14,8 +14,9 @@ import (
 
 // The read-only diagnostics. A k0smos machine has no shell, so the console is
 // otherwise the only thing it reports through — fine for watching a boot, no use
-// for asking a question about one. These three make a running machine
-// answerable: what its init decided, what the kernel saw, and what is in a file.
+// for asking a question about one. These make a running machine answerable: what
+// its init decided, what the kernel saw, what is in a file, what is in a
+// directory, and what it can still reach.
 
 // debugFlags are the flags every diagnostic command shares.
 type debugFlags struct {
@@ -153,5 +154,73 @@ machine — but the port should not be exposed anywhere the disk is not.`,
 	}
 	d.bind(cmd)
 	cmd.Flags().StringVarP(&out, "output", "o", "", `where to write it, or "-" for stdout`)
+	return cmd
+}
+
+func machineLsCmd() *cobra.Command {
+	var d debugFlags
+	cmd := &cobra.Command{
+		Use:   "ls <path>",
+		Short: "List a directory on a running machine",
+		Long: `Lists one directory on a machine over the control port.
+
+cat gets a file out of a machine with no shell; this is how its path is found in
+the first place. Which file under /var/log/pods holds the container that is
+failing, what the kernel actually created in /dev, which processes exist in
+/proc, whether the configuration drive carried what was meant to be on it.
+
+Prints mode, size and name per line, with a trailing slash on a directory and a
+symlink's target after it — most of what /sys reports about a device, it reports
+by pointing somewhere. The path must be absolute, and a file is refused with a
+pointer to cat.`,
+		Example: `  k0smosctl machine ls /var/log/pods
+  k0smosctl machine ls /sys/class/net
+  k0smosctl machine ls /var/lib/k0s/bin`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			data, err := d.ask(control.RequestLs + " " + args[0])
+			if err != nil {
+				return err
+			}
+			_, err = cmd.OutOrStdout().Write(data)
+			return err
+		},
+	}
+	d.bind(cmd)
+	return cmd
+}
+
+func machineDialCmd() *cobra.Command {
+	var d debugFlags
+	cmd := &cobra.Command{
+		Use:   "dial <host:port>",
+		Short: "Ask a machine whether it can reach an address",
+		Long: `Opens one TCP connection from the machine and reports what happened.
+
+Every other diagnostic reports state the machine already holds. This is the one
+that answers "can it reach that" — the question behind nearly every node that
+will not join a cluster, and the one its routing and socket tables cannot
+settle. A node whose k0s retries forever tells you the endpoint it was given; it
+does not tell you whether the name resolves, whether the port is filtered, or
+whether anything outside the host is reachable at all.
+
+The error is reported as the machine's resolver or network stack worded it,
+because that wording is what separates a name that does not resolve from a port
+that is filtered from one that is refused. Nothing is sent on the connection: it
+connects and closes.`,
+		Example: `  k0smosctl machine dial 10.0.2.2:6443
+  k0smosctl machine dial kubernetes.default.svc:443
+  k0smosctl machine dial 1.1.1.1:443   # is anything outside reachable`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			data, err := d.ask(control.RequestDial + " " + args[0])
+			if err != nil {
+				return err
+			}
+			_, err = cmd.OutOrStdout().Write(data)
+			return err
+		},
+	}
+	d.bind(cmd)
 	return cmd
 }

@@ -74,7 +74,7 @@ const RequestToken = "token"
 // The diagnostic requests below exist because a k0smos node reports through its
 // console and nothing else. That is enough to watch a boot and not enough to
 // diagnose one: the console scrolls away, does not survive a reboot, and cannot
-// be asked a question. These three make a running node answerable.
+// be asked a question. These make a running node answerable.
 //
 // They carry the same exposure as RequestKubeconfig — anything able to write to
 // this port can already stop the machine and read its disk — but note that
@@ -95,11 +95,26 @@ const RequestCat = "cat"
 // hardware they are where driver and disk-controller problems appear.
 const RequestDmesg = "dmesg"
 
+// RequestLs asks for a directory listing, as "ls /path". Without it every path
+// has to be known in advance, which is the difference between reading a node and
+// searching one: which file under /var/log/pods is the interesting one, what the
+// kernel actually created in /dev, which processes exist in /proc.
+const RequestLs = "ls"
+
+// RequestDial asks the node to open one TCP connection, as "dial host:port", and
+// report what happened. Every other request reports state the node already holds;
+// this is the only one that answers "can this machine reach that" -- which is the
+// question behind nearly every node that will not join a cluster, and the one
+// routes and socket tables cannot settle. The error text separates a resolver
+// failure from a timeout from a refusal, so it answers for DNS too.
+const RequestDial = "dial"
+
 // Requests are the data requests a node answers. The verb is the first field of
 // the line; anything after it is an argument.
 var Requests = []string{
 	RequestKubeconfig, RequestToken,
 	RequestStatus, RequestCat, RequestDmesg,
+	RequestLs, RequestDial,
 }
 
 // isRequest reports whether a line asks for data rather than a power command.

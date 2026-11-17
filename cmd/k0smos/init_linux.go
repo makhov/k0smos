@@ -106,9 +106,6 @@ const (
 	// bootRecordPath holds the boot record, readable over the control port while
 	// the node runs and off the disk afterwards.
 	bootRecordPath = "/run/k0smos/boot.json"
-	// maxServedFile bounds a file served to the host, below the reply framing's
-	// own cap so an oversized file is reported rather than truncated.
-	maxServedFile = 4 << 20
 	// msReadOnly is MS_RDONLY: a metadata drive is never written to.
 	msReadOnly = 0x1
 	// msRecShared is MS_REC|MS_SHARED: what systemd sets on / at boot, and what a
@@ -280,35 +277,12 @@ func answerRequest(s *sys.Sys, cfg config.Config, request string) ([]byte, error
 		return s.KernelLog()
 	case control.RequestCat:
 		return readForHost(strings.TrimSpace(arg))
+	case control.RequestLs:
+		return listForHost(strings.TrimSpace(arg))
+	case control.RequestDial:
+		return dialForHost(strings.TrimSpace(arg))
 	}
 	return nil, fmt.Errorf("unknown request %q", request)
-}
-
-// readForHost serves one file to the host. This is how pod logs, the rendered
-// k0s config and /run state are reached on a machine with no shell.
-//
-// Refuses a directory rather than returning its raw bytes, and refuses anything
-// too large for the reply framing so the failure names the size instead of
-// arriving as a truncated file.
-func readForHost(path string) ([]byte, error) {
-	if path == "" {
-		return nil, fmt.Errorf("no path given; use %q", control.RequestCat+" /path")
-	}
-	if !filepath.IsAbs(path) {
-		return nil, fmt.Errorf("path must be absolute: %q", path)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-	if info.IsDir() {
-		return nil, fmt.Errorf("%s is a directory", path)
-	}
-	if info.Size() > maxServedFile {
-		return nil, fmt.Errorf("%s is %d bytes, over the %d-byte limit for a reply",
-			path, info.Size(), int64(maxServedFile))
-	}
-	return os.ReadFile(path)
 }
 
 // readKubeconfig returns the admin kubeconfig off the filesystem.
