@@ -95,9 +95,9 @@ const RequestCat = "cat"
 // hardware they are where driver and disk-controller problems appear.
 const RequestDmesg = "dmesg"
 
-// requests are the data requests a node answers. The verb is the first field of
+// Requests are the data requests a node answers. The verb is the first field of
 // the line; anything after it is an argument.
-var requests = []string{
+var Requests = []string{
 	RequestKubeconfig, RequestToken,
 	RequestStatus, RequestCat, RequestDmesg,
 }
@@ -105,7 +105,7 @@ var requests = []string{
 // isRequest reports whether a line asks for data rather than a power command.
 func isRequest(line string) bool {
 	verb, _, _ := strings.Cut(line, " ")
-	return slices.Contains(requests, verb)
+	return slices.Contains(Requests, verb)
 }
 
 // Reply framing. A request's answer is a status line, and for a successful data

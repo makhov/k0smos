@@ -69,6 +69,12 @@ const (
 	inputDevDir = "/dev/input"
 	// controlRetry is how long to wait before reopening an idle control port.
 	controlRetry = time.Second
+	// consoleDev is the kernel's console, whichever device console= selected,
+	// and debugConsole is the k0smos.debug value that opens a request channel on
+	// it. Not a named port: on a cloud instance or behind a BMC the console is
+	// the only channel there is.
+	consoleDev   = "/dev/console"
+	debugConsole = "console"
 
 	// How long to keep looking for the root device before giving up.
 	rootProbeAttempts = 30
@@ -227,6 +233,37 @@ func watchControlPort(ctx context.Context, s *sys.Sys, cfg config.Config) <-chan
 	}, controlRetry, func(request string) ([]byte, error) {
 		return answerRequest(s, cfg, request)
 	})
+}
+
+// startDebugConsole answers requests typed on the system console, when
+// k0smos.debug=console asked for it.
+//
+// This is the only way into a node that cannot reach its cluster and has no
+// virtio-serial control port: the image ships no shell, so without it a machine
+// on EC2 or bare metal reports only what it chose to log. Off unless asked,
+// because console access becomes root on the node.
+func startDebugConsole(ctx context.Context, s *sys.Sys, cfg config.Config) {
+	if cfg.Debug != debugConsole {
+		return
+	}
+	logf("debug console on %s: reads any file and issues join tokens, so console access is root here", consoleDev)
+	go func() {
+		for ctx.Err() == nil {
+			f, err := os.OpenFile(consoleDev, os.O_RDWR, 0)
+			if err != nil {
+				logf("debug console: %v", err)
+				return
+			}
+			serveDebug(f, f, func(request string) ([]byte, error) {
+				return answerRequest(s, cfg, request)
+			})
+			f.Close()
+			// Reopened on EOF, as the control port is: a console with nobody
+			// attached ends the stream at once, and giving up would mean the
+			// channel is gone by the time someone needs it.
+			time.Sleep(controlRetry)
+		}
+	}()
 }
 
 // answerRequest serves a host request for data from the node.
@@ -1419,6 +1456,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	// Started before the child so a host shutdown request is never missed while
 	// k0s is coming up, which can take minutes.
 	hostCmds := watchControlPort(runCtx, s, cfg)
+	startDebugConsole(runCtx, s, cfg)
 	powerBtn := watchPowerButton(runCtx)
 
 	// runcmd is interpreted, never executed: k0smos does not exec binaries named

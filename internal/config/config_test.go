@@ -227,3 +227,14 @@ func TestParseNTP(t *testing.T) {
 		t.Errorf("timeout = %v, want the default kept", c.NTPTimeout)
 	}
 }
+
+// The debug channel is a security decision, so an absent knob must never read
+// as "on".
+func TestParseDebugIsOffUnlessAsked(t *testing.T) {
+	if got := Parse("console=ttyS0 k0smos.ip=dhcp").Debug; got != "" {
+		t.Errorf("Debug = %q, want empty", got)
+	}
+	if got := Parse("k0smos.debug=console").Debug; got != "console" {
+		t.Errorf("Debug = %q, want console", got)
+	}
+}

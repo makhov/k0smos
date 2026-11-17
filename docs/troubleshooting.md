@@ -147,8 +147,34 @@ Avoid deleting state or killing QEMU while it is writing `/var`.
 
 The commands above need the control port, which is attached by `k0smosctl` for
 local machines. Elsewhere the serial console is the channel: the VMI console on
-KubeVirt, serial-over-LAN or the BMC on bare metal. Everything PID 1 prints
-appears there, and `/run/k0smos/boot.json` is readable from the disk.
+KubeVirt, serial-over-LAN or the BMC on bare metal, the EC2 serial console on
+AWS. Everything PID 1 prints appears there, and `/run/k0smos/boot.json` is
+readable from the disk.
+
+That is one-way: you read what the machine chose to print. To ask it questions
+over the same console, boot with
+
+```
+k0smos.debug=console
+```
+
+Then type a request on the console and the answer is printed back:
+
+```
+cat /var/log/k0s.log
+status
+dmesg
+```
+
+Press enter on its own for the list. This is the channel for a node that cannot
+reach its cluster at all — no API means no `kubectl debug`, and the image has no
+shell to fall back on. Replies are plain text, not the control port's framing,
+because the kernel prints to the same line and would corrupt anything counted in
+bytes; a reply over 64 KiB is cut to its last 64 KiB, since a serial line cannot
+deliver a megabyte of log in a time anyone will wait.
+
+**Leave it off unless you need it.** It reads any path and issues join tokens, so
+whoever reaches the console owns the node — see below.
 
 ## Access is a cluster-admin channel
 
@@ -156,3 +182,8 @@ Anything able to write to a machine's control port can read any file on it, fetc
 its kubeconfig, and stop it. That is not a new exposure — the port is the
 hypervisor's channel into the guest — but do not expose it anywhere the machine's
 disk is not equally exposed.
+
+`k0smos.debug=console` moves that same channel onto the serial console, which on
+a cloud instance or a BMC is reachable by a different set of people than the
+disk is. It is off by default for that reason: turn it on to diagnose a node,
+and leave it out of the image you boot by default.

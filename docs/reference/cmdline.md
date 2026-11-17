@@ -18,6 +18,7 @@ All optional; k0smos boots with defaults if none are given.
 | `k0smos.hostname=` | `k0smos` | Hostname, also sent as the DHCP hostname |
 | `k0smos.exec=` | `/usr/local/bin/k0s,controller,--single` | Supervised child, comma-separated (a cmdline value cannot contain spaces) |
 | `k0smos.modules=` | *(built-in set)* | Comma-separated module list, or `+list` to add to the built-in set, or `none` to disable module loading entirely |
+| `k0smos.debug=` | *(off)* | `console` answers requests typed on the system console: the way into a node with no control port that cannot reach its cluster. Unauthenticated — see [Troubleshooting](../troubleshooting.md) |
 | `k0smos.path=` | see below | `PATH` exported to children |
 
 `k0smos.path` defaults to
