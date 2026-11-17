@@ -1,14 +1,21 @@
 # Troubleshooting
 
 A k0smos machine has no shell and no SSH, so you ask it questions instead of
-logging into it. Four commands cover almost everything:
+logging into it. These cover almost everything:
 
 ```bash
 k0smosctl machine logs   --name <machine> -f   # the console, as it happens
 k0smosctl machine status --name <machine>      # what the init decided
 k0smosctl machine dmesg  --name <machine>      # what the kernel saw
+k0smosctl machine ls     --name <machine> <dir>    # what is there
 k0smosctl machine cat    --name <machine> <path>   # any file on the machine
+k0smosctl machine dial   --name <machine> <host:port>  # what it can still reach
 ```
+
+`ls` is what makes `cat` usable: you rarely know the path of the log you want
+before you have looked. `dial` is the only one that is not a report of state the
+machine already holds — it opens one connection and tells you what happened,
+which is the question routes and socket tables cannot settle.
 
 `logs` shows the boot as it happens; every PID 1 message starts with `k0smos:`,
 and k0s writes to the same console once it starts. `status` reports the same
@@ -85,9 +92,27 @@ log to disk, not to the console, and `machine cat` is how you read them:
 # what k0s was actually configured with
 k0smosctl machine cat /etc/k0s/k0s.yaml
 
-# a specific component
+# find the component's log before reading it -- the pod directory carries a
+# generated suffix, so it cannot be typed from memory
+k0smosctl machine ls /var/log/pods
 k0smosctl machine cat /var/log/pods/kube-system_kube-proxy-x2tbg/kube-proxy/0.log
 ```
+
+When a worker never registers at all, the failure is usually below k0s. Ask the
+machine what it can reach, which separates the four causes that look alike from
+the node's logs:
+
+```bash
+k0smosctl machine dial 10.0.2.2:6443              # the API server, by address
+k0smosctl machine dial myapi.example.com:6443     # the same, by name -- DNS
+k0smosctl machine dial 1.1.1.1:443                # is anything outside reachable
+```
+
+A name that does not resolve, a port that times out and a port that is refused
+are three different problems with three different fixes, and the error is
+reported in the machine's own words so they can be told apart. Check `status` for
+the `clock` step too: a node whose time is wrong fails with certificate errors
+that name anything but the clock.
 
 Two failures worth recognising, because the message names the wrong component:
 
@@ -147,8 +172,36 @@ Avoid deleting state or killing QEMU while it is writing `/var`.
 
 The commands above need the control port, which is attached by `k0smosctl` for
 local machines. Elsewhere the serial console is the channel: the VMI console on
-KubeVirt, serial-over-LAN or the BMC on bare metal. Everything PID 1 prints
-appears there, and `/run/k0smos/boot.json` is readable from the disk.
+KubeVirt, serial-over-LAN or the BMC on bare metal, the EC2 serial console on
+AWS. Everything PID 1 prints appears there, and `/run/k0smos/boot.json` is
+readable from the disk.
+
+That is one-way: you read what the machine chose to print. To ask it questions
+over the same console, boot with
+
+```
+k0smos.debug=console
+```
+
+Then type a request on the console and the answer is printed back:
+
+```
+status
+ls /var/log/pods
+cat /var/log/k0s.log
+dial 10.0.2.2:6443
+dmesg
+```
+
+Press enter on its own for the list. This is the channel for a node that cannot
+reach its cluster at all — no API means no `kubectl debug`, and the image has no
+shell to fall back on. Replies are plain text, not the control port's framing,
+because the kernel prints to the same line and would corrupt anything counted in
+bytes; a reply over 64 KiB is cut to its last 64 KiB, since a serial line cannot
+deliver a megabyte of log in a time anyone will wait.
+
+**Leave it off unless you need it.** It reads any path and issues join tokens, so
+whoever reaches the console owns the node — see below.
 
 ## Access is a cluster-admin channel
 
@@ -156,3 +209,13 @@ Anything able to write to a machine's control port can read any file on it, fetc
 its kubeconfig, and stop it. That is not a new exposure — the port is the
 hypervisor's channel into the guest — but do not expose it anywhere the machine's
 disk is not equally exposed.
+
+`dial` goes a little further than reading: it makes the machine originate one
+TCP connection to an address of the caller's choosing, including a link-local
+one. It sends nothing, and it grants nothing that reading the join token did not
+already grant, but it is the one request that acts rather than reports.
+
+`k0smos.debug=console` moves that same channel onto the serial console, which on
+a cloud instance or a BMC is reachable by a different set of people than the
+disk is. It is off by default for that reason: turn it on to diagnose a node,
+and leave it out of the image you boot by default.

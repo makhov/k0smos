@@ -69,6 +69,12 @@ const (
 	inputDevDir = "/dev/input"
 	// controlRetry is how long to wait before reopening an idle control port.
 	controlRetry = time.Second
+	// consoleDev is the kernel's console, whichever device console= selected,
+	// and debugConsole is the k0smos.debug value that opens a request channel on
+	// it. Not a named port: on a cloud instance or behind a BMC the console is
+	// the only channel there is.
+	consoleDev   = "/dev/console"
+	debugConsole = "console"
 
 	// How long to keep looking for the root device before giving up.
 	rootProbeAttempts = 30
@@ -100,9 +106,6 @@ const (
 	// bootRecordPath holds the boot record, readable over the control port while
 	// the node runs and off the disk afterwards.
 	bootRecordPath = "/run/k0smos/boot.json"
-	// maxServedFile bounds a file served to the host, below the reply framing's
-	// own cap so an oversized file is reported rather than truncated.
-	maxServedFile = 4 << 20
 	// msReadOnly is MS_RDONLY: a metadata drive is never written to.
 	msReadOnly = 0x1
 	// msRecShared is MS_REC|MS_SHARED: what systemd sets on / at boot, and what a
@@ -229,6 +232,37 @@ func watchControlPort(ctx context.Context, s *sys.Sys, cfg config.Config) <-chan
 	})
 }
 
+// startDebugConsole answers requests typed on the system console, when
+// k0smos.debug=console asked for it.
+//
+// This is the only way into a node that cannot reach its cluster and has no
+// virtio-serial control port: the image ships no shell, so without it a machine
+// on EC2 or bare metal reports only what it chose to log. Off unless asked,
+// because console access becomes root on the node.
+func startDebugConsole(ctx context.Context, s *sys.Sys, cfg config.Config) {
+	if cfg.Debug != debugConsole {
+		return
+	}
+	logf("debug console on %s: reads any file and issues join tokens, so console access is root here", consoleDev)
+	go func() {
+		for ctx.Err() == nil {
+			f, err := os.OpenFile(consoleDev, os.O_RDWR, 0)
+			if err != nil {
+				logf("debug console: %v", err)
+				return
+			}
+			serveDebug(f, f, func(request string) ([]byte, error) {
+				return answerRequest(s, cfg, request)
+			})
+			f.Close()
+			// Reopened on EOF, as the control port is: a console with nobody
+			// attached ends the stream at once, and giving up would mean the
+			// channel is gone by the time someone needs it.
+			time.Sleep(controlRetry)
+		}
+	}()
+}
+
 // answerRequest serves a host request for data from the node.
 func answerRequest(s *sys.Sys, cfg config.Config, request string) ([]byte, error) {
 	verb, arg, _ := strings.Cut(request, " ")
@@ -243,35 +277,12 @@ func answerRequest(s *sys.Sys, cfg config.Config, request string) ([]byte, error
 		return s.KernelLog()
 	case control.RequestCat:
 		return readForHost(strings.TrimSpace(arg))
+	case control.RequestLs:
+		return listForHost(strings.TrimSpace(arg))
+	case control.RequestDial:
+		return dialForHost(strings.TrimSpace(arg))
 	}
 	return nil, fmt.Errorf("unknown request %q", request)
-}
-
-// readForHost serves one file to the host. This is how pod logs, the rendered
-// k0s config and /run state are reached on a machine with no shell.
-//
-// Refuses a directory rather than returning its raw bytes, and refuses anything
-// too large for the reply framing so the failure names the size instead of
-// arriving as a truncated file.
-func readForHost(path string) ([]byte, error) {
-	if path == "" {
-		return nil, fmt.Errorf("no path given; use %q", control.RequestCat+" /path")
-	}
-	if !filepath.IsAbs(path) {
-		return nil, fmt.Errorf("path must be absolute: %q", path)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-	if info.IsDir() {
-		return nil, fmt.Errorf("%s is a directory", path)
-	}
-	if info.Size() > maxServedFile {
-		return nil, fmt.Errorf("%s is %d bytes, over the %d-byte limit for a reply",
-			path, info.Size(), int64(maxServedFile))
-	}
-	return os.ReadFile(path)
 }
 
 // readKubeconfig returns the admin kubeconfig off the filesystem.
@@ -1419,6 +1430,7 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	// Started before the child so a host shutdown request is never missed while
 	// k0s is coming up, which can take minutes.
 	hostCmds := watchControlPort(runCtx, s, cfg)
+	startDebugConsole(runCtx, s, cfg)
 	powerBtn := watchPowerButton(runCtx)
 
 	// runcmd is interpreted, never executed: k0smos does not exec binaries named

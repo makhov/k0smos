@@ -71,6 +71,12 @@ type Config struct {
 	// because UDP 123 is filtered, and has no shell to find that out from, is
 	// worse off than one with a wrong clock and a line about it on the console.
 	NTPTimeout time.Duration
+	// Debug, when "console", answers requests typed on the system console: the
+	// only way into a node that cannot reach its cluster, since the image has
+	// no shell and the control port needs a virtio-serial bus the host must
+	// have attached. Off by default because it is unauthenticated -- see
+	// serveDebug.
+	Debug string
 
 	// Path is the PATH exported to child processes. PID1 inherits no
 	// environment from anyone, so without this k0s and kubelet cannot find the
@@ -196,6 +202,8 @@ func Parse(cmdline string) Config {
 			if d, err := time.ParseDuration(v); err == nil && d > 0 {
 				c.NTPTimeout = d
 			}
+		case "debug":
+			c.Debug = v
 		case "path":
 			if v != "" {
 				c.Path = v

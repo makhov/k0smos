@@ -10,9 +10,8 @@ import (
 
 func listCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "list",
-		Aliases: []string{"ls"},
-		Short:   "List machines and whether they are running",
+		Use:   "list",
+		Short: "List machines and whether they are running",
 		Long: `Lists the guests "k0smosctl machine up" has started, and whether each is still up.
 
 Liveness comes from its control socket answering, not from the recorded pid: a pid
