@@ -47,6 +47,8 @@ const (
 	// osReleasePath identifies the image; mkrootfs.sh and mkinitramfs.sh
 	// write the same values into both halves of a boot.
 	osReleasePath = "/etc/os-release"
+	machineIDPath = "/etc/machine-id"
+	hostnamePath  = "/etc/hostname"
 
 	// newRootDir is where the real root filesystem is mounted before the switch.
 	newRootDir = "/newroot"
@@ -917,6 +919,24 @@ const (
 	fileLimitHard = 1024 * 1024
 )
 
+// writeMachineID puts this machine's identity where everything expects to read
+// it. kubelet reports the file as the node's machineID, and without it that
+// field is empty for every k0smos node in a cluster.
+//
+// Not written when the machine offered no identity to derive one from: an
+// empty file is what a distro leaves for its first boot to fill in, and is
+// read as "not set yet" rather than as a machine with no id.
+func writeMachineID(s *sys.Sys, identity string) {
+	id := machineIDFor(identity)
+	if id == "" {
+		logf("warn: no DMI uuid and no MAC; this machine has no stable identity")
+		return
+	}
+	if err := s.WriteFile(machineIDPath, []byte(id), 0o444); err != nil {
+		logf("warn: write %s: %v", machineIDPath, err)
+	}
+}
+
 // raiseFileLimit lifts the number of files this machine may open.
 //
 // A node inherits the kernel's boot default, 1024 soft and 4096 hard, because
@@ -1111,6 +1131,14 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	}
 	raiseFileLimit()
 
+	// Before the DHCP client, which sends this as its hostname option, and long
+	// before sethostname below: both read cfg.Hostname, and a machine should
+	// not answer to one name on the network and another to itself.
+	identity := machineIdentity()
+	if cfg.Hostname == "" {
+		cfg.Hostname = hostnameFor(identity)
+	}
+
 	// Modules come before cgroup and net: a stock distro kernel ships virtio,
 	// ext4 and overlayfs as modules, so without this there is no NIC and no
 	// container storage. Failures are not fatal — the kernel may have the
@@ -1181,6 +1209,9 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 			logf("root is read-only; overlaid %v with tmpfs", mount.WritablePaths)
 		}
 	}
+	// After the overlay, because that is what makes /etc writable, and whether
+	// or not the root was read-only, because both kinds of root need the file.
+	writeMachineID(s, identity)
 	mountNvidiaDriver(s)
 
 	// Metadata is local block-device input, so it does not need networking. Read
@@ -1320,6 +1351,11 @@ func boot(ctx context.Context, s *sys.Sys, switched bool) error {
 	if err := s.Sethostname(hostname); err != nil {
 		logf("warn: sethostname %q: %v", hostname, err)
 	} else {
+		// The image ships a placeholder; anything that reads the file rather
+		// than asking the kernel should see the name this machine really has.
+		if err := s.WriteFile(hostnamePath, []byte(hostname+"\n"), 0o444); err != nil {
+			logf("warn: write %s: %v", hostnamePath, err)
+		}
 		logf("hostname set to %q", hostname)
 		rec.SetHostname(hostname)
 	}

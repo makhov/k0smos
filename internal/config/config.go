@@ -134,7 +134,11 @@ const defaultPath = "/var/lib/k0s/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/u
 // Parse extracts k0smos.* parameters from a kernel cmdline string.
 func Parse(cmdline string) Config {
 	c := Config{
-		Hostname:   "k0smos",
+		// Empty, not "k0smos": PID1 derives a name from the machine's own
+		// identity when nothing else supplies one, because a node's name in
+		// Kubernetes is its hostname and two machines sharing one fight over a
+		// single Node object.
+		Hostname:   "",
 		Exec:       defaultExec,
 		Iface:      "eth0",
 		RootFSType: "ext4",
