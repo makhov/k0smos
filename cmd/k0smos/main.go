@@ -9,17 +9,43 @@ import (
 	"github.com/amakhov/k0smos/internal/module"
 )
 
-// hostSysctls are hardening settings no workload needs: no kexec of a new
-// kernel, Ubuntu's protected FIFO and regular-file rules in sticky
-// directories, and no line-discipline autoload from an unprivileged tty.
-// Unprivileged user namespaces stay allowed: rootless builds and Chrome's
-// sandbox in ordinary pods need them; sysctl.kernel.unprivileged_userns_clone=0
-// on the command line turns them off.
+// hostSysctls are what a node needs that the kernel does not default to.
+//
+// The first four are hardening no workload needs: no kexec of a new kernel,
+// Ubuntu's protected FIFO and regular-file rules in sticky directories, and no
+// line-discipline autoload from an unprivileged tty. Unprivileged user
+// namespaces stay allowed: rootless builds and Chrome's sandbox in ordinary
+// pods need them; sysctl.kernel.unprivileged_userns_clone=0 on the command
+// line turns them off.
+//
+// The rest are limits whose kernel defaults were sized for a desktop and which
+// a Kubernetes node reaches. Each fails in a way that does not name itself:
+//
+//	inotify instances   128 by default, one per watcher. kubelet, containerd
+//	                    and plenty of workloads take several each, and past
+//	                    the limit pods stop starting and ConfigMap updates
+//	                    quietly stop reaching the pods that mount them.
+//	inotify watches     scaled from RAM, ~15k on a 2 GiB node. Same failure.
+//	max_map_count       65530, below the 262144 that Elasticsearch, OpenSearch
+//	                    and most JVMs refuse to start without.
+//	pid_max             32768 across the whole machine, which a few hundred
+//	                    pods can exhaust; then nothing anywhere can fork.
+//	                    262144 is what Talos settled on, rather than the
+//	                    4194304 a 64-bit kernel allows: the point is to clear
+//	                    the ceiling a dense node reaches, not to remove it.
+//
+// Left alone deliberately: net.netfilter.nf_conntrack_max, which kube-proxy
+// sizes from the node's memory and would only be fighting over.
 var hostSysctls = map[string]string{
 	"kernel.kexec_load_disabled": "1",
 	"fs.protected_fifos":         "1",
 	"fs.protected_regular":       "2",
 	"dev.tty.ldisc_autoload":     "0",
+
+	"fs.inotify.max_user_instances": "8192",
+	"fs.inotify.max_user_watches":   "524288",
+	"vm.max_map_count":              "262144",
+	"kernel.pid_max":                "262144",
 }
 
 // sysctlDefaults is hostSysctls less those the command line sets: the kernel
