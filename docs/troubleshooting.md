@@ -219,3 +219,24 @@ already grant, but it is the one request that acts rather than reports.
 a cloud instance or a BMC is reachable by a different set of people than the
 disk is. It is off by default for that reason: turn it on to diagnose a node,
 and leave it out of the image you boot by default.
+
+Using it is not invisible. Every request is recorded before it is answered and
+logged after it with the outcome — never the reply, which is the kubeconfig or
+the token — so it lands in the kernel log next to the boot itself:
+
+```
+k0smos: debug console: "token worker" answered, 1402 bytes
+k0smos: debug console: "cat /etc/shadow" failed: open /etc/shadow: no such file or directory
+```
+
+The boot record counts them too, so `k0smosctl machine status` (or
+`/run/k0smos/boot.json`) reports:
+
+```
+debug       2 console request(s), last "cat /etc/shadow" at 2026-11-18T19:04:11Z
+```
+
+This is an audit trail, not a control. Whoever can type on the console can read
+the log they appear in, and the record starts fresh on the next boot. What it
+answers is "was this node opened this way, and what was asked for" — which
+nothing answered before.
