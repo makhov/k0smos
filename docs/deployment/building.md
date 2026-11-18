@@ -30,6 +30,7 @@ make metal                    # dist/k0smos-metal-<arch>.qcow2
 | `UBUNTU_RELEASE` | `26.04` | The Ubuntu release that kernel comes from. |
 | `NVIDIA_VERSION` | `620.70.06` | The GPU driver branch ([GPUs](gpus.md)). |
 | `NVIDIA_SHA256` | the two pinned branches | The driver package's digest, needed only for a version this repo has no digest for. |
+| `BASE_IMAGE` | `ubuntu:$UBUNTU_RELEASE`, or `alpine:3.23` for `LIBC=musl` | The container the root's userland is assembled from. Pass the digest an existing image records to reproduce it exactly ([below](#what-an-image-records-about-its-own-build)). |
 | `LIBC` | `glibc` | The C library on the root, `glibc` or `musl` ([below](#the-c-library-on-the-root)). |
 | `ROOT_TOOLS` | `/usr/bin/mount /usr/bin/umount /usr/sbin/mkfs.ext4 /usr/sbin/mkfs.xfs` | The user-space helpers on a glibc root, as absolute paths in the build container. k0s and kubelet need these; add to the list rather than replacing it. |
 | `ROOT_LIBS` | `libseccomp.so.2` | Shared libraries to put on a glibc root for software the image does not ship ([node software](operating.md#install-node-software)). |
@@ -110,6 +111,46 @@ host filesystem share crosses into it.
 
 The target is a no-op anywhere the filesystem already distinguishes the two
 spellings, so it is safe in a script that also runs on Linux.
+
+## What an image records about its own build
+
+`BUILD_ID` in `/etc/os-release` is the k0smos commit an image was built from.
+That does not identify the image, because the root's userland is copied out of
+a base container on a floating tag, and two builds of one commit a month apart
+do not contain the same glibc.
+
+The tag floats on purpose: pinning `ubuntu:26.04` to a digest would also hold
+back the glibc and CA-bundle fixes a rebuild exists to pick up. So the digest it
+resolved to is recorded instead, as `K0SMOS_BASE`:
+
+```text
+BUILD_ID=fcb5a8a0e1b3
+K0SMOS_BASE=docker.io/library/ubuntu@sha256:065aa8626841f16057b78b027b464cd59c4fac36c204c72dcbf48d66f5fa8a96
+```
+
+`BUILD_ID` says which source an image came from and `K0SMOS_BASE` which
+userland. The pair is what tells two builds of one commit apart, and what
+answers the question a floating tag otherwise leaves open — which of the
+images in a fleet predate a libc fix. A node has no package manager to ask, so
+if it is not in this file it cannot be asked at all.
+
+Passing the digest back rebuilds against the same userland:
+
+```bash
+BASE_IMAGE=docker.io/library/ubuntu@sha256:065aa86... make rootfs
+```
+
+A build that ran natively, with every tool already on the host and no container
+at all, records that host's own `ID` and `VERSION_ID` instead, as
+`K0SMOS_BASE=host:ubuntu-24.04`, because that is where its userland came from.
+
+!!! note
+
+    This is a record, not a guarantee. It says which bytes went in, not that
+    they were the right bytes. Downloads are protected by TLS and by the
+    digests pinned in this repo for the kernel and the GPU driver; nothing here
+    verifies that an upstream release was not itself replaced, which would need
+    signature checking against a key pinned here.
 
 ## When a pin goes stale
 

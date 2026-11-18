@@ -75,12 +75,12 @@ esac
 libc=${LIBC:-glibc}
 case "$libc" in
   glibc)
-    build_img=ubuntu:${UBUNTU_RELEASE:-26.04}
+    build_img=${BASE_IMAGE:-ubuntu:${UBUNTU_RELEASE:-26.04}}
     build_install="export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -qq -y --no-install-recommends $mkfs_pkg e2fsprogs xfsprogs mount ca-certificates libseccomp2 >/dev/null"
     build_need=("$mkfs_tool" mount umount mkfs.ext4 mkfs.xfs ldconfig)
     ;;
   musl)
-    build_img=alpine:3.23
+    build_img=${BASE_IMAGE:-alpine:3.23}
     build_install="apk add -q --no-cache $mkfs_pkg bash >/dev/null"
     build_need=("$mkfs_tool" apk)
     ;;
@@ -120,11 +120,25 @@ if [ -z "$native" ]; then
       ;;
   esac
   echo "assembling $libc root inside $platform container (need ${build_need[*]})"
+  # Which base this image's userland came from, recorded in /etc/os-release
+  # below. The tag floats on purpose -- pinning it would hold back the glibc
+  # and CA-bundle fixes this root is assembled from -- so the digest is what
+  # tells two builds of the same commit apart, and what makes one of them
+  # reproducible later via BASE_IMAGE.
+  #
+  # shortcut: recorded, not used, for the run below: the tag resolves to the
+  # image just pulled, and passing a digest reference alongside --platform is
+  # not portable across docker versions.
+  docker pull -q --platform "$platform" "$build_img" >/dev/null 2>&1 || true
+  K0SMOS_BASE=$(docker image inspect "$build_img" \
+    --format '{{index .RepoDigests 0}}' 2>/dev/null) || K0SMOS_BASE=
+  export K0SMOS_BASE=${K0SMOS_BASE:-$build_img}
   # Every knob has to be forwarded explicitly: the container stage re-runs this
   # script, and anything not listed here is silently lost on a macOS host.
   exec docker run --rm --platform "$platform" -v "$repo:/repo" -w /repo \
     -e K0S_BIN -e K0SMOS_BIN -e MODULES_DIR -e ARCH -e K0S_VERSION -e K0SMOS_BUILD \
     -e PAD_MB -e FSLABEL -e FSUUID -e APK_PKGS -e ROOT_TOOLS -e LIBC -e UBUNTU_RELEASE \
+    -e BASE_IMAGE -e K0SMOS_BASE \
     -e KERNEL_CONFIG -e KERNEL_RELEASE \
     -e ROOTFS -e FIRECRACKER_DIR \
     "$build_img" sh -c "$build_install"' && exec bash image/mkrootfs.sh "$1"' _ "$img"
@@ -265,8 +279,14 @@ fi
 printf 'k0smos\n' > "$root/etc/hostname"
 printf '127.0.0.1 localhost\n' > "$root/etc/hosts"
 printf 'nameserver 1.1.1.1\n' > "$root/etc/resolv.conf"
-printf 'NAME=k0smos\nID=k0smos\nVERSION_ID=%s\nBUILD_ID=%s\nPRETTY_NAME="k0smos (k0s %s)"\n' \
-  "$K0S_VERSION" "$K0SMOS_BUILD" "$K0S_VERSION" > "$root/etc/os-release"
+# A native build takes its userland from this host rather than a container, so
+# say so instead of leaving the question unanswered.
+if [ -z "${K0SMOS_BASE:-}" ]; then
+  K0SMOS_BASE=$(. /etc/os-release 2>/dev/null && printf 'host:%s' "${ID:-unknown}${VERSION_ID:+-$VERSION_ID}")
+  K0SMOS_BASE=${K0SMOS_BASE:-host:unknown}
+fi
+printf 'NAME=k0smos\nID=k0smos\nVERSION_ID=%s\nBUILD_ID=%s\nK0SMOS_BASE=%s\nPRETTY_NAME="k0smos (k0s %s)"\n' \
+  "$K0S_VERSION" "$K0SMOS_BUILD" "$K0SMOS_BASE" "$K0S_VERSION" > "$root/etc/os-release"
 # k0s looks up UIDs for its components and warns "open /etc/passwd: no such
 # file or directory" (then runs everything as root) without these.
 printf 'root:x:0:0:root:/root:/sbin/nologin\nnobody:x:65534:65534:nobody:/:/sbin/nologin\n' > "$root/etc/passwd"

@@ -30,8 +30,14 @@ fi
 [ -n "$ver" ] || { echo "could not resolve a k0s version" >&2; exit 1; }
 
 out="$repo/dist/k0s-airgap-$k0sarch.tar"
-if [ -f "$out" ]; then
-  echo "airgap bundle already present: $out ($(du -m "$out" | cut -f1)M)"
+
+# The cached bundle is only the right one if it is for the version asked for.
+# The path cannot say which, because e2e looks for exactly this name, so the
+# version is recorded beside it -- as fetch-k0s.sh does for the same reason.
+# Without this, changing K0S_VERSION silently reuses the previous bundle and
+# the e2e run imports images for a k0s it is not testing.
+if [ -f "$out" ] && [ "$(cat "$out.version" 2>/dev/null)" = "$ver" ]; then
+  echo "airgap bundle already present: $out ($(du -m "$out" | cut -f1)M, $ver)"
   exit 0
 fi
 
@@ -42,4 +48,5 @@ mkdir -p "$repo/dist"
 echo "fetching k0s airgap bundle $ver ($k0sarch) — a few hundred MB, once"
 curl -fL --progress-bar -o "$out.part" "$url"
 mv "$out.part" "$out"
+printf '%s\n' "$ver" > "$out.version"
 echo "wrote $out ($(du -m "$out" | cut -f1)M, $ver)"

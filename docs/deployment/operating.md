@@ -46,7 +46,10 @@ k0smos: image: k0s v1.37.2+k0s.1, build ff7354c2e5f1, kernel 7.0.0-43-generic, n
 `build` is the k0smos commit the image was built from. The driver is named only
 on a GPU image, and only once its module is loaded. The same k0s version and
 commit are in `/etc/os-release`, which is also what kubelet reports as the
-node's `OS-IMAGE` in `kubectl get nodes -o wide`.
+node's `OS-IMAGE` in `kubectl get nodes -o wide`. That file also carries
+`K0SMOS_BASE`, the digest of the container the root's userland came from, which
+is what distinguishes two images built from the same commit
+([building](building.md#what-an-image-records-about-its-own-build)).
 
 ### Without `k0smosctl`
 
