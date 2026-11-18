@@ -182,3 +182,56 @@ func TestImageStringLeavesOutWhatIsUnknown(t *testing.T) {
 		t.Errorf("String() = %q, want unknown", got)
 	}
 }
+
+// Console requests are counted, not recorded as boot stages. Appending a step
+// per request would inflate the stage count and make Summary report a boot that
+// lasted until someone opened a console hours later, which is how an audit trail
+// ends up discrediting the record it lives in.
+func TestDebugRequestsAreCountedWithoutBecomingSteps(t *testing.T) {
+	r := New(nil)
+	r.Step("mounts", nil, "")
+	r.DebugRequest("dmesg")
+	r.DebugRequest("token worker")
+
+	rec := r.Snapshot()
+	if rec.Debug.Requests != 2 {
+		t.Errorf("Debug.Requests = %d, want 2", rec.Debug.Requests)
+	}
+	if rec.Debug.Last != "token worker" {
+		t.Errorf("Debug.Last = %q, want the most recent request", rec.Debug.Last)
+	}
+	if rec.Debug.LastAt == "" {
+		t.Error("Debug.LastAt should say when, or the count cannot be placed in time")
+	}
+	if len(rec.Steps) != 1 {
+		t.Errorf("Steps = %d, want the one real stage", len(rec.Steps))
+	}
+	if got := Summary(rec); !strings.Contains(got, "1 stages") {
+		t.Errorf("Summary = %q, want the stage count unaffected by console requests", got)
+	}
+}
+
+// The record is rewritten whole on every change, and a console is reachable by
+// whoever holds the BMC, so what it stores from a request has to be bounded.
+func TestDebugRequestIsBounded(t *testing.T) {
+	r := New(nil)
+	r.DebugRequest("cat /" + strings.Repeat("a", 4096))
+	if n := len(r.Snapshot().Debug.Last); n > 80 {
+		t.Errorf("Debug.Last is %d bytes; a console reader should not be able to grow the record", n)
+	}
+}
+
+func TestTextReportsConsoleUse(t *testing.T) {
+	r := New(nil)
+	r.Step("mounts", nil, "")
+	if strings.Contains(Text(r.Snapshot()), "console request") {
+		t.Error("a node nobody opened a console on should not report one")
+	}
+	r.DebugRequest("kubeconfig")
+	out := Text(r.Snapshot())
+	for _, want := range []string{"1 console request(s)", "kubeconfig"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("Text() missing %q:\n%s", want, out)
+		}
+	}
+}

@@ -168,8 +168,10 @@ corrupts it.
 ### k0smosctl machine status
 
 Asks a running machine for its boot record: which root and data devices were
-chosen, which modules loaded, whether a configuration drive was found, and how
-the supervised workload is faring, including its restart count.
+chosen, which modules loaded, whether a configuration drive was found, how the
+supervised workload is faring including its restart count, and — if the machine
+was booted with `k0smos.debug=console` — how many requests were typed on that
+console and what the last one was.
 
 The console shows a boot as it happens and then loses it. This reports the same
 conclusions durably, and the record is also written inside the machine at

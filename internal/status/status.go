@@ -21,7 +21,7 @@ import (
 
 // Schema is the record's shape version, so a reader can tell what it is looking
 // at when this grows fields.
-const Schema = 2
+const Schema = 3
 
 // Step is one stage of boot and how it went.
 type Step struct {
@@ -60,6 +60,23 @@ func (i Image) String() string {
 	return strings.Join(parts, ", ")
 }
 
+// Debug counts what arrived on the debug console. The console is the one
+// channel a cloud instance or a machine behind a BMC always has, and answering
+// requests on it is root on the node -- but it is reachable by a wider set of
+// people than the disk is: anyone with the BMC, the hypervisor, an EC2 serial
+// console permission, or a cart in the rack. Whoever owns the cluster cannot
+// otherwise tell that a node was opened this way.
+//
+// Counts and the last request only. The reply is never recorded: it is the
+// kubeconfig or a join token. The request is shortened to keep the record and
+// its one-line rendering bounded by something a console reader can send -- the
+// full line is in the kernel log, which is where an audit trail belongs anyway.
+type Debug struct {
+	Requests int    `json:"requests"`
+	Last     string `json:"last,omitempty"`
+	LastAt   string `json:"lastAt,omitempty"`
+}
+
 // Child describes the supervised workload.
 type Child struct {
 	Argv     []string `json:"argv,omitempty"`
@@ -76,6 +93,7 @@ type Record struct {
 	Hostname     string `json:"hostname,omitempty"`
 	Image        Image  `json:"image"`
 	Steps        []Step `json:"steps"`
+	Debug        Debug  `json:"debug"`
 	Child        Child  `json:"child"`
 }
 
@@ -123,6 +141,19 @@ func (r *Recorder) Step(name string, err error, detail string) {
 		s.Error = err.Error()
 	}
 	r.rec.Steps = append(r.rec.Steps, s)
+	r.mu.Unlock()
+	r.flush()
+}
+
+// DebugRequest records that the debug console was asked something. Not a Step:
+// steps are boot stages, and appending one per request would both inflate the
+// stage count and make Summary report a boot that took as long as the gap until
+// someone opened a console.
+func (r *Recorder) DebugRequest(request string) {
+	r.mu.Lock()
+	r.rec.Debug.Requests++
+	r.rec.Debug.Last = brief(request)
+	r.rec.Debug.LastAt = r.now().UTC().Format(time.RFC3339Nano)
 	r.mu.Unlock()
 	r.flush()
 }
@@ -243,8 +274,9 @@ func span(rec Record) (time.Duration, bool) {
 	return end.Sub(start), true
 }
 
-// brief puts an error on one line, short enough that the verdict stays one
-// line on an 80-column console. The whole error is in the record.
+// brief puts an error -- or a console request -- on one line, short enough that
+// the verdict stays one line on an 80-column console. The whole error is in the
+// record; a whole request is in the kernel log.
 func brief(err string) string {
 	err = strings.Join(strings.Fields(err), " ")
 	if len(err) > 60 {
@@ -275,6 +307,15 @@ func Text(rec Record) string {
 		if rec.Child.LastExit != "" {
 			fmt.Fprintf(&b, "last exit   %s\n", rec.Child.LastExit)
 		}
+	}
+
+	// On its own line rather than among the steps. A step says the channel was
+	// opened, which is a boot decision; this says it was used, which is not --
+	// and someone reading the record to find out why a node misbehaved should
+	// not have to infer that from a stage count.
+	if rec.Debug.Requests > 0 {
+		fmt.Fprintf(&b, "debug       %d console request(s), last %q at %s\n",
+			rec.Debug.Requests, rec.Debug.Last, rec.Debug.LastAt)
 	}
 
 	b.WriteString("\nsteps\n")

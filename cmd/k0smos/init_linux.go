@@ -244,6 +244,7 @@ func startDebugConsole(ctx context.Context, s *sys.Sys, cfg config.Config) {
 		return
 	}
 	logf("debug console on %s: reads any file and issues join tokens, so console access is root here", consoleDev)
+	step("debug", nil, "console on "+consoleDev+", requests are logged")
 	go func() {
 		for ctx.Err() == nil {
 			f, err := os.OpenFile(consoleDev, os.O_RDWR, 0)
@@ -252,7 +253,7 @@ func startDebugConsole(ctx context.Context, s *sys.Sys, cfg config.Config) {
 				return
 			}
 			serveDebug(f, f, func(request string) ([]byte, error) {
-				return answerRequest(s, cfg, request)
+				return auditedRequest(s, cfg, request)
 			})
 			f.Close()
 			// Reopened on EOF, as the control port is: a console with nobody
@@ -261,6 +262,28 @@ func startDebugConsole(ctx context.Context, s *sys.Sys, cfg config.Config) {
 			time.Sleep(controlRetry)
 		}
 	}()
+}
+
+// auditedRequest answers a console request and leaves a trace that it was
+// asked. The console is root on this node, and it is handed to a wider set of
+// people than the disk is -- a BMC operator, an EC2 serial-console permission,
+// someone with a cart in the rack -- so a cluster owner who suspects a node was
+// opened this way has nothing to go on otherwise. This does not authenticate
+// anyone; it only means using the channel is no longer invisible.
+//
+// Recorded before the answer, so a request that hangs or kills init is still in
+// the record, and logged after it with the outcome, so the trail distinguishes a
+// join token that was issued from one that was refused. Never the reply itself:
+// that is the kubeconfig or the token.
+func auditedRequest(s *sys.Sys, cfg config.Config, request string) ([]byte, error) {
+	rec.DebugRequest(request)
+	data, err := answerRequest(s, cfg, request)
+	if err != nil {
+		logf("debug console: %q failed: %v", request, err)
+		return data, err
+	}
+	logf("debug console: %q answered, %d bytes", request, len(data))
+	return data, nil
 }
 
 // answerRequest serves a host request for data from the node.
