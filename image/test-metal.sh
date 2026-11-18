@@ -71,7 +71,11 @@ required=(
   'Command line: BOOT_IMAGE=/boot/vmlinuz'
   'no explicit or embedded root; discovering canonical LABEL=k0smos'
   'resolved LABEL=k0smos to /dev/vda2'
-  'mounted /dev/vda2 at /newroot read-only, switching root'
+  # The root is mounted through dm-verity, not from the partition directly. This
+  # is the only check that fails if the image stops carrying k0smos.verity=:
+  # without it the boot succeeds exactly as before, unverified and silent.
+  'root /dev/vda2 verified against '
+  'mounted /dev/mapper/k0smos-root at /newroot read-only, switching root'
   'mounted data volume /dev/vda3 at /var'
   'supervising [/usr/local/bin/k0s controller --single]'
 )
@@ -103,4 +107,4 @@ for line in 'host requested poweroff' 'reboot: Power down'; do
   }
 done
 
-echo "verified k0smosctl single-artifact boot through ${FIRMWARE:-UEFI}, GRUB, EROFS, /var, k0s, and clean shutdown"
+echo "verified k0smosctl single-artifact boot through ${FIRMWARE:-UEFI}, GRUB, dm-verity, EROFS, /var, k0s, and clean shutdown"

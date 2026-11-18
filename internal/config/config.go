@@ -42,6 +42,12 @@ type Config struct {
 	Root       string
 	RootFSType string
 	RootFlags  string
+	// Verity, when set, is the dm-verity root hash the root filesystem must
+	// match, as <data-blocks>:<root-hash>. image/mkmetal.sh builds the hash tree
+	// into the ROOT partition and writes this into grub.cfg, so a packaged image
+	// verifies itself with no argument from the operator. A root that fails to
+	// verify is not mounted and the boot stops: see Sys.VerityOpen.
+	Verity string
 
 	// Data selects the mutable data volume, mounted at DataDir. This follows
 	// Talos's split: an interchangeable root plus a separate volume holding
@@ -216,6 +222,8 @@ func Parse(cmdline string) Config {
 			}
 		case "rootflags":
 			c.RootFlags = v
+		case "verity":
+			c.Verity = v
 		case "data":
 			c.Data = v
 		case "datalabel":

@@ -11,6 +11,11 @@ Both formats contain the same partitions and immutable system payload. The
 metal wrapper uses a hardware-oriented kernel and includes its driver modules in
 the initramfs.
 
+The system partition is immutable in the enforced sense: it carries a dm-verity
+hash tree, and a machine whose disk was altered stops at the mount instead of
+booting. See [what the chain verifies](../design/boot-chain.md#what-the-chain-verifies)
+for what that does and does not cover.
+
 ## Metal3 image
 
 Point the machine template at the qcow2 and its adjacent checksum file:

@@ -716,6 +716,21 @@ func pivot(s *sys.Sys, cfg config.Config) error {
 		return err
 	}
 
+	// A verified root. The hash tree lives in the ROOT partition behind the
+	// filesystem, and the root hash it must produce is on the kernel command
+	// line, so changed bytes anywhere in the root fail to read instead of
+	// booting. Fatal on any error: the point is lost if a failure here falls
+	// back to mounting the device unverified.
+	if cfg.Verity != "" {
+		verified, err := s.VerityOpen(dev, cfg.Verity)
+		if err != nil {
+			return fmt.Errorf("verify root %s: %w", dev, err)
+		}
+		logf("root %s verified against %s", dev, cfg.Verity)
+		step("verity", nil, dev+" -> "+verified)
+		dev = verified
+	}
+
 	// Prefer what the device actually holds over what the cmdline said. An image
 	// carried in the initramfs needs no k0smos.rootfstype=, and getting it wrong
 	// fails as an unhelpful EINVAL from mount.
@@ -738,6 +753,14 @@ func pivot(s *sys.Sys, cfg config.Config) error {
 		readOnly = err == nil
 	}
 	if err != nil {
+		// A verity device reports a hash mismatch as a plain EIO, and the sniff
+		// above cannot read the superblock either -- so without this the failure
+		// reads as a filesystem-type problem on whatever k0smos.rootfstype= said.
+		// The kernel has already said which block on the console.
+		if cfg.Verity != "" && errors.Is(err, unix.EIO) {
+			return fmt.Errorf("mount %s: root does not match k0smos.verity=%s, see the device-mapper lines above: %w",
+				dev, cfg.Verity, err)
+		}
 		return fmt.Errorf("mount %s (%s): %w", dev, fstype, err)
 	}
 	// A read-only filesystem such as EROFS can accept a mount without

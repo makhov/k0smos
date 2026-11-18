@@ -7,6 +7,7 @@ All optional; k0smos boots with defaults if none are given.
 | `k0smos.root=` | auto | Root override: `/dev/vda`, `UUID=…` or `LABEL=…`. By default PID1 uses its embedded root, then discovers `LABEL=k0smos`; `none` stays on the initramfs for smoke tests |
 | `k0smos.rootfstype=` | `ext4` | Filesystem type fallback for a disk root; the detected type wins |
 | `k0smos.rootflags=` | *(none)* | Mount data string, e.g. `noatime` |
+| `k0smos.verity=` | *(written by the image build)* | `<data-blocks>:<root-hash>`: check the root against the dm-verity hash tree in its own partition before mounting it. A missing, malformed or wrong value stops the boot instead of mounting unverified — see [the boot chain](../design/boot-chain.md#what-the-chain-verifies) |
 | `k0smos.data=` | *(none)* | Data volume: `auto`, a device path, or `LABEL=`/`UUID=`. Unset disables it |
 | `k0smos.datalabel=` | `k0smos-data` | Label applied when formatting, and searched for by `auto` |
 | `k0smos.datafstype=` | `ext4` | Filesystem created and mounted |

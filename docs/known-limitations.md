@@ -32,6 +32,15 @@ redirection will not work. Unrecognised entries are reported on the console as
 `UNSUPPORTED runcmd` and skipped. See
 [machine configuration](usage/cloud-init.md).
 
+## The root is verified, but not attested
+
+The metal image's root partition carries a dm-verity hash tree, so a machine
+whose disk was altered stops at the mount rather than booting. The root hash it
+is checked against travels in `grub.cfg` on the ESP, which nothing signs, so
+this catches a changed root and not a substituted image. Anchoring it in
+hardware needs a signed UKI and an enrolled Secure Boot key; see
+[what the chain verifies](design/boot-chain.md#what-the-chain-verifies).
+
 ## Everything in the node runs as root
 
 The image is kept small by immutability and the absence of general-purpose

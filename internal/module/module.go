@@ -147,6 +147,13 @@ var Default = []string{
 	// all, and such a kernel must boot from a disk instead.
 	"loop", "erofs",
 
+	// dm-verity, which checks the root against the hash tree built into its
+	// partition (k0smos.verity=). Built into the default (Kata) kernel and so
+	// skipped there; a module on Ubuntu's, which is the one the metal image
+	// boots. Named here rather than loaded on demand because the root is mounted
+	// before anything else could ask for it.
+	"dm_verity",
+
 	// Graceful power-off on real hardware and hypervisors: the ACPI button
 	// driver raises the press and evdev exposes it as /dev/input/eventN. Absent
 	// these, a power button or `virsh shutdown` does nothing at all.
