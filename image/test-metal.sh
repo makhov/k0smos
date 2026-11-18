@@ -71,7 +71,11 @@ required=(
   'Command line: BOOT_IMAGE=/boot/vmlinuz'
   'no explicit or embedded root; discovering canonical LABEL=k0smos'
   'resolved LABEL=k0smos to /dev/vda2'
-  'mounted /dev/vda2 at /newroot read-only, switching root'
+  # The root is mounted through dm-verity, not from the partition directly. This
+  # is the only check that fails if the image stops carrying k0smos.verity=:
+  # without it the boot succeeds exactly as before, unverified and silent.
+  'root /dev/vda2 verified against '
+  'mounted /dev/mapper/k0smos-root at /newroot read-only, switching root'
   'mounted data volume /dev/vda3 at /var'
   'supervising [/usr/local/bin/k0s controller --single]'
 )
@@ -82,6 +86,20 @@ for line in "${required[@]}"; do
     exit 1
   fi
 done
+
+# The machine id is written into the /etc overlay, which only exists once the
+# read-only root is mounted. Nothing else here would notice if that order broke:
+# writeMachineID only warns, the boot carries on, and the hostname is derived
+# from the identity value rather than read back from the file -- so a node would
+# reach k0s looking exactly like this one and report an empty machineID to
+# Kubernetes. Asked of the running node rather than grepped from the console,
+# because what matters is the file kubelet reads.
+machine_id=$("$ctl" machine cat --name firmware /etc/machine-id 2>&1 | tr -d '[:space:]')
+if [[ ! $machine_id =~ ^[0-9a-f]{32}$ ]]; then
+  echo "machine id on the booted node is not 32 hex digits: '$machine_id'" >&2
+  tail -200 "$log" >&2
+  exit 1
+fi
 
 "$ctl" machine shutdown --name firmware >>"$log" 2>&1
 shutdown_deadline=$((SECONDS + 30))
@@ -103,4 +121,4 @@ for line in 'host requested poweroff' 'reboot: Power down'; do
   }
 done
 
-echo "verified k0smosctl single-artifact boot through ${FIRMWARE:-UEFI}, GRUB, EROFS, /var, k0s, and clean shutdown"
+echo "verified k0smosctl single-artifact boot through ${FIRMWARE:-UEFI}, GRUB, dm-verity, EROFS, /var, k0s, and clean shutdown"

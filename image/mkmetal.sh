@@ -29,7 +29,7 @@ initramfs=${INITRAMFS:?set INITRAMFS to the matching initramfs}
 rootfs=${ROOTFS_IMAGE:?set ROOTFS_IMAGE to the canonical EROFS root}
 qcow2=${METAL_QCOW2:-${raw%.raw}.qcow2}
 
-required=(sgdisk mkfs.vfat mkfs.ext4 mmd mcopy grub-mkstandalone qemu-img)
+required=(sgdisk mkfs.vfat mkfs.ext4 mmd mcopy grub-mkstandalone qemu-img veritysetup)
 $bios && required+=(grub-mkimage)
 missing=()
 for tool in "${required[@]}"; do
@@ -77,10 +77,42 @@ esp_mb=512
 data_mb=${METAL_DATA_MB:-8192}
 sector_size=512
 alignment=2048
+# dm-verity's block size, for both the data and the hash blocks. Fixed here
+# because the kernel cannot discover it: cmd/k0smos builds the same number into
+# the table it hands device-mapper.
+verity_block=4096
 esp_start=$alignment
 esp_sectors=$((esp_mb * 1024 * 1024 / sector_size))
 root_bytes=$(wc -c < "$rootfs" | tr -d ' ')
-root_sectors=$(((root_bytes + sector_size - 1) / sector_size))
+
+# A dm-verity hash tree over the root, appended to the ROOT partition behind the
+# filesystem, with its root hash on the kernel command line below. This is what
+# makes a read-only root immutable rather than merely read-only: without it
+# nothing checks, and a node whose disk was edited offline boots and joins the
+# cluster. It costs under 1% of the root's size.
+#
+# --salt=- (the empty salt) makes the tree a pure function of the root, so the
+# hash names the root's exact bytes and not this build run. --no-superblock
+# because the table k0smos loads says everything the kernel needs, and a
+# superblock would only push the tree off the block the table points at.
+[ $((root_bytes % verity_block)) -eq 0 ] || {
+  echo "root $rootfs is $root_bytes bytes, not a whole number of $verity_block-byte blocks" >&2
+  exit 1
+}
+verity=$tmp/root.verity
+veritysetup format --no-superblock --salt=- \
+  --data-block-size=$verity_block --hash-block-size=$verity_block \
+  "$rootfs" "$verity" >"$tmp/verity.log"
+root_hash=$(sed -n 's/^Root hash:[[:space:]]*//p' "$tmp/verity.log" | tr -d '[:space:]')
+[ ${#root_hash} -eq 64 ] || {
+  echo "veritysetup printed no root hash:" >&2; cat "$tmp/verity.log" >&2; exit 1
+}
+verity_bytes=$(wc -c < "$verity" | tr -d ' ')
+# The hash tree starts on the block after the last data block, which is where
+# the table tells the kernel to look for it.
+verity_arg="k0smos.verity=$((root_bytes / verity_block)):$root_hash"
+
+root_sectors=$(((root_bytes + verity_bytes + sector_size - 1) / sector_size))
 root_sectors=$((((root_sectors + alignment - 1) / alignment) * alignment))
 root_start=$((esp_start + esp_sectors))
 driver_start=$((root_start + root_sectors))
@@ -116,7 +148,7 @@ cat > "$cfg" <<EOF
 search --no-floppy --label K0SMOSBOOT --set=root
 search --no-floppy --label k0smos-data --set=k0smos_data
 load_env --file (\$k0smos_data)/lib/k0smos/grubenv k0smos_kernel_args
-linux /boot/vmlinuz $kernel_args \$k0smos_kernel_args
+linux /boot/vmlinuz $kernel_args $verity_arg \$k0smos_kernel_args
 initrd /boot/initramfs.gz
 boot
 EOF
@@ -172,6 +204,8 @@ sgdisk --clear \
 
 dd if="$esp" of="$raw" bs=$sector_size seek=$esp_start conv=notrunc,sparse status=none
 dd if="$rootfs" of="$raw" bs=$sector_size seek=$root_start conv=notrunc,sparse status=none
+dd if="$verity" of="$raw" bs=$sector_size seek=$((root_start + root_bytes / sector_size)) \
+  conv=notrunc,sparse status=none
 dd if="$data" of="$raw" bs=$sector_size seek=$data_start conv=notrunc,sparse status=none
 if [ -n "$driver" ]; then
   dd if="$driver" of="$raw" bs=$sector_size seek=$driver_start conv=notrunc,sparse status=none
@@ -218,6 +252,12 @@ sgdisk --verify "$raw"
 # exact partition offset makes that identity a build invariant, not a convention.
 cmp -s -i "$((root_start * sector_size)):0" -n "$root_bytes" "$raw" "$rootfs" || {
   echo "ROOT partition does not match canonical root $rootfs" >&2
+  exit 1
+}
+# And the hash tree must begin exactly where $verity_arg says, or every read of
+# the root fails at boot with nothing to point at the offset arithmetic here.
+cmp -s -i "$((root_start * sector_size + root_bytes)):0" -n "$verity_bytes" "$raw" "$verity" || {
+  echo "verity hash tree is not at offset $root_bytes of the ROOT partition" >&2
   exit 1
 }
 qemu-img convert -f raw -O qcow2 -c "$raw" "$qcow2"
