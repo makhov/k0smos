@@ -968,6 +968,11 @@ You are not viewing the documentation for the current stable release of k0smos.
 <td>Mount data string, e.g. <code>noatime</code></td>
 </tr>
 <tr>
+<td><code>k0smos.verity=</code></td>
+<td><em>(written by the image build)</em></td>
+<td><code>&lt;data-blocks&gt;:&lt;root-hash&gt;</code>: check the root against the dm-verity hash tree in its own partition before mounting it. A missing, malformed or wrong value stops the boot instead of mounting unverified — see <a href="../../design/boot-chain/#what-the-chain-verifies">the boot chain</a></td>
+</tr>
+<tr>
 <td><code>k0smos.data=</code></td>
 <td><em>(none)</em></td>
 <td>Data volume: <code>auto</code>, a device path, or <code>LABEL=</code>/<code>UUID=</code>. Unset disables it</td>

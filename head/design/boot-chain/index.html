@@ -802,6 +802,19 @@ You are not viewing the documentation for the current stable release of k0smos.
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Boot chain
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -813,6 +826,34 @@ You are not viewing the documentation for the current stable release of k0smos.
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-chain-verifies" class="md-nav__link">
+    <span class="md-ellipsis">
+      What the chain verifies
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -869,6 +910,23 @@ You are not viewing the documentation for the current stable release of k0smos.
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-chain-verifies" class="md-nav__link">
+    <span class="md-ellipsis">
+      What the chain verifies
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -894,7 +952,8 @@ for KubeVirt or Cluster API, see <a href="../../deployment/kubevirt/">KubeVirt</
   B --&gt; C[mount /proc /sys /dev]
   C --&gt; D[load modules]
   D --&gt; E[find root by LABEL/UUID]
-  E --&gt; F[switch_root]
+  E --&gt; V[verify root: dm-verity]
+  V --&gt; F[switch_root]
   F --&gt; G[PID1 supervises k0s]</code></pre>
 <div class="highlight"><pre><span></span><code>firmware/QEMU/KubeVirt
   └── kernel (Kata guest kernel by default, Alpine linux-virt, or your own)
@@ -904,6 +963,7 @@ for KubeVirt or Cluster API, see <a href="../../deployment/kubevirt/">KubeVirt</
               ├── export PATH                    (mkfs and k0s both need it)
               ├── load modules: named set, then autoload by modalias
               ├── choose root: explicit override → embedded EROFS → LABEL=k0smos
+              ├── verify it against k0smos.verity=, if the image set one
               ├── mount it at /newroot
               └── switch_root ── exec /sbin/k0smos --switched-root
                     └── k0smos as /sbin/k0smos   ← PID1, post-switch
@@ -932,6 +992,32 @@ for KubeVirt or Cluster API, see <a href="../../deployment/kubevirt/">KubeVirt</
 <p>Two orderings in there are load-bearing and easy to get backwards: the data volume
 is mounted before anything can write to <code>/var</code>, and the cloud-init drive is read
 before networking so it can supply the machine's address.</p>
+<h2 id="what-the-chain-verifies">What the chain verifies<a class="headerlink" href="#what-the-chain-verifies" title="Permanent link">#</a></h2>
+<p>The ROOT partition of a packaged image carries a dm-verity hash tree behind the
+filesystem, and <code>grub.cfg</code> passes the root hash that tree must produce as
+<code>k0smos.verity=</code>. PID1 maps the partition through dm-verity before mounting it,
+so a block that does not hash to what the tree says fails to read. The tree's
+own blocks are hashed too, up to that one root hash, so editing the data <em>and</em>
+the tree does not help either. A node whose disk was altered offline stops with
+<code>switch root: verify root /dev/sda2: ...</code> on the console instead of booting and
+joining the cluster.</p>
+<p>The salt is empty on purpose, which makes the tree a pure function of the root
+filesystem: the same root image always produces the same root hash, so the hash
+on a node's command line names the exact bytes that node booted. It does not
+follow that two builds of one commit agree on it — the root is not byte-for-byte
+reproducible today — so the hash identifies an artifact, not a source revision.</p>
+<div class="admonition note">
+<p class="admonition-title">What this does not prove</p>
+<p>The root hash travels in <code>grub.cfg</code> on the ESP, a plain vfat partition with
+nothing signed. Whoever can rewrite the root can rewrite the hash beside it,
+so this detects a <strong>changed root</strong>, not a <strong>substituted image</strong>: the anchor
+is the ESP, not the hardware. Moving the anchor means shipping kernel,
+initramfs and cmdline as one signed UKI and enrolling a Secure Boot key --
+the cmdline has to be <em>inside</em> the signature, or it is this again one level
+up. That needs a key to manage, so the decision is not made here.</p>
+<p>The other partitions are not covered. <code>/var</code> is mutable by design and cannot
+be; the optional driver partition is read-only but unverified.</p>
+</div>
 
 
 

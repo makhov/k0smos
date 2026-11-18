@@ -1000,6 +1000,10 @@ You are not viewing the documentation for the current stable release of k0smos.
 <p>Both formats contain the same partitions and immutable system payload. The
 metal wrapper uses a hardware-oriented kernel and includes its driver modules in
 the initramfs.</p>
+<p>The system partition is immutable in the enforced sense: it carries a dm-verity
+hash tree, and a machine whose disk was altered stops at the mount instead of
+booting. See <a href="../../design/boot-chain/#what-the-chain-verifies">what the chain verifies</a>
+for what that does and does not cover.</p>
 <h2 id="metal3-image">Metal3 image<a class="headerlink" href="#metal3-image" title="Permanent link">#</a></h2>
 <p>Point the machine template at the qcow2 and its adjacent checksum file:</p>
 <div class="highlight"><pre><span></span><code><span class="nt">spec</span><span class="p">:</span>
