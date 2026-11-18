@@ -223,6 +223,11 @@ func Parse(cmdline string) Config {
 		case "rootflags":
 			c.RootFlags = v
 		case "verity":
+			// Last-wins, as every key here is, and image/mkmetal.sh depends on
+			// it: the per-machine arguments it reads from the data volume are
+			// placed before this one, so they cannot switch the root check off.
+			// Making this key first-wins instead would reverse that and reopen
+			// the hole -- see TestParseVerityIsLastWins.
 			c.Verity = v
 		case "data":
 			c.Data = v

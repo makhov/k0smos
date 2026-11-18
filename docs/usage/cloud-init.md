@@ -83,8 +83,17 @@ k0smos:
 The kernel has already started when cloud-init is read. So on the first boot
 with new arguments, k0smos stores them in a GRUB environment block on the data
 volume (`/var/lib/k0smos/grubenv`) and reboots once. GRUB adds them after the
-image's own arguments. Leaving `kernel_args` out keeps whatever was stored, and
-`kernel_args: ""` clears it.
+image's own arguments, so they override them. Leaving `kernel_args` out keeps
+whatever was stored, and `kernel_args: ""` clears it.
+
+!!! note "Except the root hash"
+
+    `k0smos.verity=` is appended after these, so it cannot be overridden from
+    here. It is the hash the root filesystem is checked against, and it is read
+    from the image, while these arguments are read from the data volume — the one
+    partition that check does not cover. A machine that could set it could switch
+    the check off on itself, which is the one thing these arguments must not
+    reach. See [what the chain verifies](../design/boot-chain.md#what-the-chain-verifies).
 
 A machine booted without the metal image's GRUB -- KubeVirt `kernelBoot`, or
 QEMU and libvirt booting the kernel directly -- takes its arguments where its
