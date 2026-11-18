@@ -87,6 +87,20 @@ for line in "${required[@]}"; do
   fi
 done
 
+# The machine id is written into the /etc overlay, which only exists once the
+# read-only root is mounted. Nothing else here would notice if that order broke:
+# writeMachineID only warns, the boot carries on, and the hostname is derived
+# from the identity value rather than read back from the file -- so a node would
+# reach k0s looking exactly like this one and report an empty machineID to
+# Kubernetes. Asked of the running node rather than grepped from the console,
+# because what matters is the file kubelet reads.
+machine_id=$("$ctl" machine cat --name firmware /etc/machine-id 2>&1 | tr -d '[:space:]')
+if [[ ! $machine_id =~ ^[0-9a-f]{32}$ ]]; then
+  echo "machine id on the booted node is not 32 hex digits: '$machine_id'" >&2
+  tail -200 "$log" >&2
+  exit 1
+fi
+
 "$ctl" machine shutdown --name firmware >>"$log" 2>&1
 shutdown_deadline=$((SECONDS + 30))
 while kill -0 "$pid" 2>/dev/null && [ "$SECONDS" -lt "$shutdown_deadline" ]; do
