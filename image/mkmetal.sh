@@ -144,11 +144,21 @@ kernel_args=${METAL_KERNEL_ARGS:-console=tty0 console=$serial k0smos.data=LABEL=
 # k0smos_kernel_args is the per-machine part: cloud-init's k0smos.kernel_args,
 # which k0smos stores in a GRUB environment block on the data volume. The image
 # ships an empty one; a data volume without it only costs a GRUB error line.
+#
+# $verity_arg comes last, after that, and must stay there. The kernel command
+# line is last-wins -- see internal/config.Parse -- and the data volume is the
+# one partition dm-verity does not cover, so with the per-machine part appended
+# after it, writing k0smos_kernel_args=k0smos.verity= into that volume switched
+# the root check off on the next boot. Verified: the root then mounted straight
+# from /dev/vda2 with no verity device and nothing logged about it. Per-machine
+# arguments still override every ordinary setting, which is what they are for;
+# the one argument they must not reach is the hash of the root they are read
+# from.
 cat > "$cfg" <<EOF
 search --no-floppy --label K0SMOSBOOT --set=root
 search --no-floppy --label k0smos-data --set=k0smos_data
 load_env --file (\$k0smos_data)/lib/k0smos/grubenv k0smos_kernel_args
-linux /boot/vmlinuz $kernel_args $verity_arg \$k0smos_kernel_args
+linux /boot/vmlinuz $kernel_args \$k0smos_kernel_args $verity_arg
 initrd /boot/initramfs.gz
 boot
 EOF

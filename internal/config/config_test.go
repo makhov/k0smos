@@ -238,3 +238,27 @@ func TestParseDebugIsOffUnlessAsked(t *testing.T) {
 		t.Errorf("Debug = %q, want console", got)
 	}
 }
+
+// The verity pin is the one argument a machine must not be able to talk its way
+// out of, and the only thing keeping it that way is the order it appears in and
+// last-wins here. image/mkmetal.sh puts the per-machine arguments -- read from
+// the data volume, which dm-verity does not cover -- ahead of the image's own
+// pin for exactly this reason.
+func TestParseVerityIsLastWins(t *testing.T) {
+	const pin = "46941:c9225459791d643c1ab98015a8bf2bbbc191967ec222e8564d8a0a3e12451875"
+	// What a hostile data volume can put on the line, followed by the image's.
+	for _, cmdline := range []string{
+		"k0smos.verity= k0smos.verity=" + pin,
+		"k0smos.verity=10:deadbeef k0smos.verity=" + pin,
+	} {
+		if got := Parse(cmdline).Verity; got != pin {
+			t.Errorf("Parse(%q).Verity = %q, want the image's pin %q", cmdline, got, pin)
+		}
+	}
+	// And the reverse order is why it must not be reversed: an argument after
+	// the image's own wins, including an empty one, which disables the check.
+	if got := Parse("k0smos.verity=" + pin + " k0smos.verity=").Verity; got != "" {
+		t.Errorf("Parse(...).Verity = %q; a trailing override is expected to win, "+
+			"which is what mkmetal.sh must keep out of reach", got)
+	}
+}
