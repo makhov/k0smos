@@ -1165,7 +1165,10 @@ boot record and the <code>image</code> line of <code>k0smosctl machine status</c
 <p><code>build</code> is the k0smos commit the image was built from. The driver is named only
 on a GPU image, and only once its module is loaded. The same k0s version and
 commit are in <code>/etc/os-release</code>, which is also what kubelet reports as the
-node's <code>OS-IMAGE</code> in <code>kubectl get nodes -o wide</code>.</p>
+node's <code>OS-IMAGE</code> in <code>kubectl get nodes -o wide</code>. That file also carries
+<code>K0SMOS_BASE</code>, the digest of the container the root's userland came from, which
+is what distinguishes two images built from the same commit
+(<a href="../building/#what-an-image-records-about-its-own-build">building</a>).</p>
 <h3 id="without-k0smosctl">Without <code>k0smosctl</code><a class="headerlink" href="#without-k0smosctl" title="Permanent link">#</a></h3>
 <p>The control port is a virtio-serial port and a line protocol, so any tool can
 ask. A machine booted by hand needs the port wired up:</p>

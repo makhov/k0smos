@@ -654,6 +654,15 @@ You are not viewing the documentation for the current stable release of k0smos.
 </li>
       
         <li class="md-nav__item">
+  <a href="#what-an-image-records-about-its-own-build" class="md-nav__link">
+    <span class="md-ellipsis">
+      What an image records about its own build
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#when-a-pin-goes-stale" class="md-nav__link">
     <span class="md-ellipsis">
       When a pin goes stale
@@ -989,6 +998,15 @@ You are not viewing the documentation for the current stable release of k0smos.
 </li>
       
         <li class="md-nav__item">
+  <a href="#what-an-image-records-about-its-own-build" class="md-nav__link">
+    <span class="md-ellipsis">
+      What an image records about its own build
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#when-a-pin-goes-stale" class="md-nav__link">
     <span class="md-ellipsis">
       When a pin goes stale
@@ -1068,6 +1086,11 @@ make<span class="w"> </span>metal<span class="w">                    </span><spa
 <td><code>NVIDIA_SHA256</code></td>
 <td>the two pinned branches</td>
 <td>The driver package's digest, needed only for a version this repo has no digest for.</td>
+</tr>
+<tr>
+<td><code>BASE_IMAGE</code></td>
+<td><code>ubuntu:$UBUNTU_RELEASE</code>, or <code>alpine:3.23</code> for <code>LIBC=musl</code></td>
+<td>The container the root's userland is assembled from. Pass the digest an existing image records to reproduce it exactly (<a href="#what-an-image-records-about-its-own-build">below</a>).</td>
 </tr>
 <tr>
 <td><code>LIBC</code></td>
@@ -1191,6 +1214,36 @@ container builds write the tree through the mount and read it back, because the
 host filesystem share crosses into it.</p>
 <p>The target is a no-op anywhere the filesystem already distinguishes the two
 spellings, so it is safe in a script that also runs on Linux.</p>
+<h2 id="what-an-image-records-about-its-own-build">What an image records about its own build<a class="headerlink" href="#what-an-image-records-about-its-own-build" title="Permanent link">#</a></h2>
+<p><code>BUILD_ID</code> in <code>/etc/os-release</code> is the k0smos commit an image was built from.
+That does not identify the image, because the root's userland is copied out of
+a base container on a floating tag, and two builds of one commit a month apart
+do not contain the same glibc.</p>
+<p>The tag floats on purpose: pinning <code>ubuntu:26.04</code> to a digest would also hold
+back the glibc and CA-bundle fixes a rebuild exists to pick up. So the digest it
+resolved to is recorded instead, as <code>K0SMOS_BASE</code>:</p>
+<div class="highlight"><pre><span></span><code>BUILD_ID=fcb5a8a0e1b3
+K0SMOS_BASE=docker.io/library/ubuntu@sha256:065aa8626841f16057b78b027b464cd59c4fac36c204c72dcbf48d66f5fa8a96
+</code></pre></div>
+<p><code>BUILD_ID</code> says which source an image came from and <code>K0SMOS_BASE</code> which
+userland. The pair is what tells two builds of one commit apart, and what
+answers the question a floating tag otherwise leaves open — which of the
+images in a fleet predate a libc fix. A node has no package manager to ask, so
+if it is not in this file it cannot be asked at all.</p>
+<p>Passing the digest back rebuilds against the same userland:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">BASE_IMAGE</span><span class="o">=</span>docker.io/library/ubuntu@sha256:065aa86...<span class="w"> </span>make<span class="w"> </span>rootfs
+</code></pre></div>
+<p>A build that ran natively, with every tool already on the host and no container
+at all, records that host's own <code>ID</code> and <code>VERSION_ID</code> instead, as
+<code>K0SMOS_BASE=host:ubuntu-24.04</code>, because that is where its userland came from.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This is a record, not a guarantee. It says which bytes went in, not that
+they were the right bytes. Downloads are protected by TLS and by the
+digests pinned in this repo for the kernel and the GPU driver; nothing here
+verifies that an upstream release was not itself replaced, which would need
+signature checking against a key pinned here.</p>
+</div>
 <h2 id="when-a-pin-goes-stale">When a pin goes stale<a class="headerlink" href="#when-a-pin-goes-stale" title="Permanent link">#</a></h2>
 <p><code>KERNEL_RELEASE</code> names one Ubuntu build, and Ubuntu drops a build from the
 archive once the release moves past it. The fetch then fails and says so,
