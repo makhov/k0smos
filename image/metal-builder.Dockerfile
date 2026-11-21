@@ -3,7 +3,7 @@ FROM ubuntu:24.04
 ARG TARGETARCH
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-       dosfstools e2fsprogs gdisk mtools qemu-utils grub-common cryptsetup-bin \
+       dosfstools e2fsprogs mtools qemu-utils grub-common cryptsetup-bin \
     && case "$TARGETARCH" in \
          amd64) apt-get install -y --no-install-recommends grub-efi-amd64-bin grub-pc-bin ;; \
          arm64) apt-get install -y --no-install-recommends grub-efi-arm64-bin ;; \

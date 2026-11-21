@@ -15,10 +15,13 @@ package gpt
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
+	"strings"
+	"unicode/utf16"
 )
 
 // Disk is a block device read and written by byte offset.
@@ -35,6 +38,7 @@ const (
 	hdrAltLBA    = 32
 	hdrFirstLBA  = 40
 	hdrLastLBA   = 48
+	hdrDiskGUID  = 56
 	hdrEntryLBA  = 72
 	hdrEntries   = 80
 	hdrEntrySize = 84
@@ -42,6 +46,14 @@ const (
 
 	entFirstLBA = 32
 	entLastLBA  = 40
+	entName     = 56
+
+	// The one entry of the protective MBR, at offset 446.
+	mbrStartCHS = 446 + 1
+	mbrType     = 446 + 4
+	mbrEndCHS   = 446 + 5
+	mbrFirstLBA = 446 + 8
+	mbrSectors  = 446 + 12
 )
 
 var signature = []byte("EFI PART")
@@ -158,40 +170,133 @@ func fixProtectiveMBR(d Disk, sectors uint64) error {
 	if _, err := d.ReadAt(mbr, 0); err != nil {
 		return fmt.Errorf("gpt: read the protective MBR: %w", err)
 	}
-	if mbr[510] != 0x55 || mbr[511] != 0xaa || mbr[446+4] != 0xee || le32(mbr, 446+8) != 1 {
+	if mbr[510] != 0x55 || mbr[511] != 0xaa || mbr[mbrType] != 0xee || le32(mbr, mbrFirstLBA) != 1 {
 		return nil
 	}
-	binary.LittleEndian.PutUint32(mbr[446+12:], uint32(min(sectors-1, 0xffffffff)))
+	end := min(sectors-1, 0xffffffff)
+	last := chs(end)
+	copy(mbr[mbrEndCHS:], last[:])
+	binary.LittleEndian.PutUint32(mbr[mbrSectors:], uint32(end))
 	if _, err := d.WriteAt(mbr, 0); err != nil {
 		return fmt.Errorf("gpt: write the protective MBR: %w", err)
 	}
 	return nil
 }
 
-// Create writes a fresh table as sgdisk does -- 128 entries of 128 bytes,
-// primary at sector 1, backup at the last -- with one Linux filesystem
-// partition per [first, last] sector pair. For tests and tools that build disk
-// images; k0smos itself never creates a table.
-func Create(d Disk, size, sectorSize int64, parts ...[2]uint64) error {
-	entries := make([]byte, 128*128)
-	for i, p := range parts {
-		e := entries[i*128:]
-		copy(e, linuxFS[:])
-		e[16] = byte(i + 1) // a distinct, non-zero unique GUID
-		binary.LittleEndian.PutUint64(e[entFirstLBA:], p[0])
-		binary.LittleEndian.PutUint64(e[entLastLBA:], p[1])
+// GUID is a GPT GUID in the mixed-endian form the table stores.
+type GUID [16]byte
+
+// ParseGUID reads the canonical 8-4-4-4-12 text form, as sgdisk prints it.
+func ParseGUID(s string) (GUID, error) {
+	var g GUID
+	b, err := hex.DecodeString(strings.ReplaceAll(s, "-", ""))
+	if err != nil || len(b) != 16 || len(strings.Split(s, "-")) != 5 {
+		return g, fmt.Errorf("gpt: %q is not a GUID", s)
 	}
+	// The first three fields are stored little-endian, the last two as written.
+	copy(g[:], []byte{b[3], b[2], b[1], b[0], b[5], b[4], b[7], b[6]})
+	copy(g[8:], b[8:])
+	return g, nil
+}
+
+// MustGUID is ParseGUID for a constant, which cannot be wrong at run time.
+func MustGUID(s string) GUID {
+	g, err := ParseGUID(s)
+	if err != nil {
+		panic(err)
+	}
+	return g
+}
+
+// The partition type GUIDs k0smos images use, with sgdisk's short codes.
+var (
+	TypeLinux    = MustGUID("0FC63DAF-8483-4772-8E79-3D69D8477DE4") // 8300
+	TypeESP      = MustGUID("C12A7328-F81F-11D2-BA4B-00A0C93EC93B") // ef00
+	TypeBIOSBoot = MustGUID("21686148-6449-6E6F-744E-656564454649") // ef02
+)
+
+// Partition is one entry of a table. Start and End are inclusive logical block
+// addresses. A zero Type means TypeLinux and a zero GUID gets a distinct
+// non-zero one from the entry's index, so a caller writes only what it cares
+// about.
+type Partition struct {
+	Start, End uint64
+	Type, GUID GUID
+	Name       string // up to 36 characters, as blkid and GRUB show it
+}
+
+// Table is a whole GUID partition table. Index i of Partitions becomes
+// partition i+1, and a zero Partition leaves that number unused -- which is how
+// an image keeps the same number for the same thing across variants.
+type Table struct {
+	DiskGUID   GUID
+	Partitions []Partition
+}
+
+// Create writes t as a fresh table in the layout sgdisk uses -- 128 entries of
+// 128 bytes, primary at sector 1, backup at the last -- onto a disk of size
+// bytes with sectorSize-byte blocks. A partition outside the usable range or
+// overlapping another is refused rather than written: an image whose table
+// contradicts itself is worse than a build that stops.
+//
+// For tools that build disk images, and for tests; k0smos itself never creates
+// a table.
+func Create(d Disk, size, sectorSize int64, t Table) error {
+	entries := make([]byte, 128*128)
 	arr := uint64((int64(len(entries)) + sectorSize - 1) / sectorSize)
 	alt := uint64(size/sectorSize) - 1
+	firstUsable, lastUsable := 2+arr, alt-arr-1
+	if len(t.Partitions) > 128 {
+		return fmt.Errorf("gpt: %d partitions, over the 128 a table holds", len(t.Partitions))
+	}
+	for i, p := range t.Partitions {
+		if p == (Partition{}) {
+			continue
+		}
+		if p.End < p.Start || p.Start < firstUsable || p.End > lastUsable {
+			return fmt.Errorf("gpt: partition %d spans sectors %d-%d, outside the usable %d-%d",
+				i+1, p.Start, p.End, firstUsable, lastUsable)
+		}
+		for j, q := range t.Partitions[:i] {
+			if q != (Partition{}) && p.Start <= q.End && q.Start <= p.End {
+				return fmt.Errorf("gpt: partition %d (sectors %d-%d) overlaps partition %d (%d-%d)",
+					i+1, p.Start, p.End, j+1, q.Start, q.End)
+			}
+		}
+		name := utf16.Encode([]rune(p.Name))
+		if len(name) > 36 {
+			return fmt.Errorf("gpt: partition %d is named %q, over the 36 characters an entry holds", i+1, p.Name)
+		}
+		e := entries[i*128:]
+		if p.Type == (GUID{}) {
+			copy(e, TypeLinux[:])
+		} else {
+			copy(e, p.Type[:])
+		}
+		if p.GUID == (GUID{}) {
+			e[16] = byte(i + 1) // a distinct, non-zero unique GUID
+		} else {
+			copy(e[16:], p.GUID[:])
+		}
+		binary.LittleEndian.PutUint64(e[entFirstLBA:], p.Start)
+		binary.LittleEndian.PutUint64(e[entLastLBA:], p.End)
+		for k, u := range name {
+			binary.LittleEndian.PutUint16(e[entName+2*k:], u)
+		}
+	}
 	hdr := make([]byte, sectorSize)
 	copy(hdr, signature)
 	binary.LittleEndian.PutUint32(hdr[8:], 0x00010000) // revision 1.0
 	binary.LittleEndian.PutUint32(hdr[hdrSize:], 92)
 	binary.LittleEndian.PutUint64(hdr[hdrMyLBA:], 1)
 	binary.LittleEndian.PutUint64(hdr[hdrAltLBA:], alt)
-	binary.LittleEndian.PutUint64(hdr[hdrFirstLBA:], 2+arr)
-	binary.LittleEndian.PutUint64(hdr[hdrLastLBA:], alt-arr-1)
-	copy(hdr[56:72], "k0smos-test-disk") // disk GUID
+	binary.LittleEndian.PutUint64(hdr[hdrFirstLBA:], firstUsable)
+	binary.LittleEndian.PutUint64(hdr[hdrLastLBA:], lastUsable)
+	if t.DiskGUID == (GUID{}) {
+		copy(hdr[hdrDiskGUID:], "k0smos-test-disk")
+	} else {
+		copy(hdr[hdrDiskGUID:], t.DiskGUID[:])
+	}
 	binary.LittleEndian.PutUint64(hdr[hdrEntryLBA:], 2)
 	binary.LittleEndian.PutUint32(hdr[hdrEntries:], 128)
 	binary.LittleEndian.PutUint32(hdr[hdrEntrySize:], 128)
@@ -202,10 +307,16 @@ func Create(d Disk, size, sectorSize int64, parts ...[2]uint64) error {
 	binary.LittleEndian.PutUint64(backup[hdrAltLBA:], 1)
 	binary.LittleEndian.PutUint64(backup[hdrEntryLBA:], alt-arr)
 	seal(backup, 92)
-	// The protective MBR: without it Linux ignores the GPT altogether.
+	// The protective MBR: without it Linux ignores the GPT altogether. The CHS
+	// fields are what sgdisk writes, so that an image built here and one built
+	// by sgdisk are the same bytes.
 	mbr := make([]byte, 512)
-	mbr[446+4] = 0xee
-	binary.LittleEndian.PutUint32(mbr[446+8:], 1)
+	first, last := chs(1), chs(min(alt, 0xffffffff))
+	copy(mbr[mbrStartCHS:], first[:])
+	mbr[mbrType] = 0xee
+	copy(mbr[mbrEndCHS:], last[:])
+	binary.LittleEndian.PutUint32(mbr[mbrFirstLBA:], 1)
+	binary.LittleEndian.PutUint32(mbr[mbrSectors:], uint32(min(alt, 0xffffffff)))
 	mbr[510], mbr[511] = 0x55, 0xaa
 	if _, err := d.WriteAt(mbr, 0); err != nil {
 		return err
@@ -221,9 +332,19 @@ func Create(d Disk, size, sectorSize int64, parts ...[2]uint64) error {
 	return fixProtectiveMBR(d, alt+1)
 }
 
-// linuxFS is the Linux filesystem type GUID 0FC63DAF-8483-4772-8E79-3D69D8477DE4,
-// in its mixed-endian on-disk form.
-var linuxFS = [16]byte{0xaf, 0x3d, 0xc6, 0x0f, 0x83, 0x84, 0x72, 0x47, 0x8e, 0x79, 0x3d, 0x69, 0xd8, 0x47, 0x7d, 0xe4}
+// chs is an LBA in the legacy cylinder/head/sector form an MBR entry holds:
+// 63 sectors per track and 255 heads, which is what every partitioner assumes,
+// capped at the largest the three bytes can say. Nothing reads it on a GPT
+// disk, but gdisk and parted report a disk whose values disagree as damaged.
+func chs(lba uint64) [3]byte {
+	const spt, heads = 63, 255
+	c, rem := lba/(spt*heads), lba%(spt*heads)
+	h, s := rem/spt, rem%spt+1
+	if c > 1023 {
+		c, h, s = 1023, heads-1, spt
+	}
+	return [3]byte{byte(h), byte(s) | byte(c>>2)&0xc0, byte(c)}
+}
 
 func seal(hdr []byte, n uint32) {
 	binary.LittleEndian.PutUint32(hdr[hdrCRC:], headerCRC(hdr[:n]))

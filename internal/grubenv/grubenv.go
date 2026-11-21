@@ -29,6 +29,12 @@ func Encode(key, value string) ([]byte, error) {
 	return append(b, bytes.Repeat([]byte("#"), Size-len(b))...), nil
 }
 
+// Empty returns a block holding nothing, which is what a fresh image ships so
+// that GRUB's load_env finds a file before there are any per-machine arguments.
+func Empty() []byte {
+	return append([]byte(header), bytes.Repeat([]byte("#"), Size-len(header))...)
+}
+
 // Get returns key's value from a block, and whether it was there.
 func Get(block []byte, key string) (string, bool) {
 	if !bytes.HasPrefix(block, []byte(header)) {

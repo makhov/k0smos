@@ -291,7 +291,9 @@ func newGrower(t *testing.T, part bool) *fakeGrower {
 	if err := file.Truncate(16 << 20); err != nil {
 		t.Fatal(err)
 	}
-	if err := gpt.Create(file, 16<<20, 512, [2]uint64{40, 1023}, [2]uint64{1024, 2047}, [2]uint64{2048, 32767 - 33 - 1}); err != nil {
+	if err := gpt.Create(file, 16<<20, 512, gpt.Table{Partitions: []gpt.Partition{
+		{Start: 40, End: 1023}, {Start: 1024, End: 2047}, {Start: 2048, End: 32767 - 33 - 1},
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := file.Truncate(64 << 20); err != nil {

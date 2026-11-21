@@ -101,7 +101,7 @@ func TestDataVolumeGrowsIntoItsDisk(t *testing.T) {
 	if err := f.Truncate(256 << 20); err != nil {
 		t.Fatal(err)
 	}
-	if err := gpt.Create(f, 256<<20, 512, [2]uint64{2048, 256<<20/512 - 34}); err != nil {
+	if err := gpt.Create(f, 256<<20, 512, gpt.Table{Partitions: []gpt.Partition{{Start: 2048, End: 256<<20/512 - 34}}}); err != nil {
 		t.Fatal(err)
 	}
 	f.Close()

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Assemble a GPT disk, bootable by UEFI and on x86 by legacy BIOS too, and its
-# qcow2 representation without loop devices or mounts. Partition files are created independently, then copied into
-# fixed sector offsets; this works in an unprivileged CI container.
+# Put cmd/mkimage somewhere its tools are installed, then run it: natively when
+# the build host has them, otherwise in the builder container. The assembly
+# itself -- geometry, partition table, GRUB configuration, dm-verity and the
+# invariants over the finished disk -- is Go, in cmd/mkimage.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -11,272 +12,47 @@ cd "$repo"
 raw=${1:-dist/k0smos-metal.raw}
 arch=${ARCH:-$(uname -m)}
 case "$arch" in
-  arm64 | aarch64)
-    goarch=arm64; platform=linux/arm64; grub_target=arm64-efi; efi_name=BOOTAA64.EFI; serial=ttyAMA0
-    bios=false
-    ;;
-  x86_64 | amd64)
-    goarch=amd64; platform=linux/amd64; grub_target=x86_64-efi; efi_name=BOOTX64.EFI; serial=ttyS0
-    # Most libvirt and bare-metal x86 machines still boot SeaBIOS or a BIOS
-    # CSM unless told otherwise; an image that cannot is not a drop-in.
-    bios=true
-    ;;
+  arm64 | aarch64) goarch=arm64; platform=linux/arm64; bios=false ;;
+  x86_64 | amd64) goarch=amd64; platform=linux/amd64; bios=true ;;
   *) echo "unsupported ARCH=$arch" >&2; exit 1 ;;
 esac
 
-kernel=${KERNEL:?set KERNEL to the metal kernel}
-initramfs=${INITRAMFS:?set INITRAMFS to the matching initramfs}
-rootfs=${ROOTFS_IMAGE:?set ROOTFS_IMAGE to the canonical EROFS root}
-qcow2=${METAL_QCOW2:-${raw%.raw}.qcow2}
+args=(-arch "$arch" -out "$raw"
+  -kernel "${KERNEL:?set KERNEL to the metal kernel}"
+  -initramfs "${INITRAMFS:?set INITRAMFS to the matching initramfs}"
+  -rootfs "${ROOTFS_IMAGE:?set ROOTFS_IMAGE to the canonical EROFS root}")
+[ -n "${METAL_QCOW2:-}" ] && args+=(-qcow2 "$METAL_QCOW2")
+[ -n "${METAL_DATA_MB:-}" ] && args+=(-data-mb "$METAL_DATA_MB")
+[ -n "${METAL_KERNEL_ARGS:-}" ] && args+=(-kernel-args "$METAL_KERNEL_ARGS")
+# Optional: a read-only image for a partition of its own, such as the NVIDIA
+# driver root (fetch-nvidia.sh), which k0smos finds by its filesystem label.
+[ -n "${DRIVER_IMAGE:-}" ] && args+=(-driver "$DRIVER_IMAGE")
 
-required=(sgdisk mkfs.vfat mkfs.ext4 mmd mcopy grub-mkstandalone qemu-img veritysetup)
+required=(mkfs.vfat mkfs.ext4 mmd mcopy grub-mkstandalone qemu-img veritysetup)
 $bios && required+=(grub-mkimage)
 missing=()
 for tool in "${required[@]}"; do
   command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
 done
 
-if [ ${#missing[@]} -gt 0 ] && [ "${K0SMOS_METAL_CONTAINER:-0}" != 1 ]; then
-  command -v docker >/dev/null || {
-    echo "missing metal image tools: ${missing[*]}; docker is also unavailable" >&2
-    exit 1
-  }
-  tag=k0smos-metal-builder:$goarch
-  # --load because docker build may be routed to buildx: its container driver
-  # leaves the result in the build cache, and the run below then cannot find
-  # the image. Harmless on the classic driver, which loads anyway.
-  docker build --load --platform "$platform" --build-arg TARGETARCH="$goarch" \
-    -t "$tag" -f image/metal-builder.Dockerfile image
-  exec docker run --rm --platform "$platform" \
-    -e ARCH="$arch" -e KERNEL="$kernel" -e INITRAMFS="$initramfs" \
-    -e ROOTFS_IMAGE="$rootfs" -e METAL_QCOW2="$qcow2" \
-    -e METAL_DATA_MB="${METAL_DATA_MB:-}" -e METAL_KERNEL_ARGS="${METAL_KERNEL_ARGS:-}" \
-    -e DRIVER_IMAGE="${DRIVER_IMAGE:-}" \
-    -e K0SMOS_METAL_CONTAINER=1 -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
-    -v "$repo:/repo" -w /repo "$tag" bash image/mkmetal.sh "$raw"
-fi
-if [ ${#missing[@]} -gt 0 ]; then
-  echo "missing metal image tools inside builder: ${missing[*]}" >&2
-  exit 1
+mkdir -p dist
+if [ ${#missing[@]} -eq 0 ]; then
+  go build -o dist/mkimage ./cmd/mkimage
+  exec ./dist/mkimage "${args[@]}"
 fi
 
-# Optional: a read-only image for a partition of its own, such as the NVIDIA
-# driver root (fetch-nvidia.sh), which k0smos finds by its filesystem label.
-driver=${DRIVER_IMAGE:-}
-for artifact in "$kernel" "$initramfs" "$rootfs" ${driver:+"$driver"}; do
-  [ -s "$artifact" ] || { echo "missing or empty artifact: $artifact" >&2; exit 1; }
-done
-
-mkdir -p "$(dirname "$raw")" "$(dirname "$qcow2")"
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-
-# The kernel and initramfs live here, and the initramfs carries the module tree
-# and any driver overlay: the NVIDIA one alone is ~135M.
-esp_mb=512
-data_mb=${METAL_DATA_MB:-8192}
-sector_size=512
-alignment=2048
-# dm-verity's block size, for both the data and the hash blocks. Fixed here
-# because the kernel cannot discover it: cmd/k0smos builds the same number into
-# the table it hands device-mapper.
-verity_block=4096
-esp_start=$alignment
-esp_sectors=$((esp_mb * 1024 * 1024 / sector_size))
-root_bytes=$(wc -c < "$rootfs" | tr -d ' ')
-
-# A dm-verity hash tree over the root, appended to the ROOT partition behind the
-# filesystem, with its root hash on the kernel command line below. This is what
-# makes a read-only root immutable rather than merely read-only: without it
-# nothing checks, and a node whose disk was edited offline boots and joins the
-# cluster. It costs under 1% of the root's size.
-#
-# --salt=- (the empty salt) makes the tree a pure function of the root, so the
-# hash names the root's exact bytes and not this build run. --no-superblock
-# because the table k0smos loads says everything the kernel needs, and a
-# superblock would only push the tree off the block the table points at.
-[ $((root_bytes % verity_block)) -eq 0 ] || {
-  echo "root $rootfs is $root_bytes bytes, not a whole number of $verity_block-byte blocks" >&2
+command -v docker >/dev/null || {
+  echo "missing metal image tools: ${missing[*]}; docker is also unavailable" >&2
   exit 1
 }
-verity=$tmp/root.verity
-veritysetup format --no-superblock --salt=- \
-  --data-block-size=$verity_block --hash-block-size=$verity_block \
-  "$rootfs" "$verity" >"$tmp/verity.log"
-root_hash=$(sed -n 's/^Root hash:[[:space:]]*//p' "$tmp/verity.log" | tr -d '[:space:]')
-[ ${#root_hash} -eq 64 ] || {
-  echo "veritysetup printed no root hash:" >&2; cat "$tmp/verity.log" >&2; exit 1
-}
-verity_bytes=$(wc -c < "$verity" | tr -d ' ')
-# The hash tree starts on the block after the last data block, which is where
-# the table tells the kernel to look for it.
-verity_arg="k0smos.verity=$((root_bytes / verity_block)):$root_hash"
-
-root_sectors=$(((root_bytes + verity_bytes + sector_size - 1) / sector_size))
-root_sectors=$((((root_sectors + alignment - 1) / alignment) * alignment))
-root_start=$((esp_start + esp_sectors))
-driver_start=$((root_start + root_sectors))
-driver_sectors=0
-if [ -n "$driver" ]; then
-  driver_sectors=$((($(wc -c < "$driver" | tr -d ' ') + sector_size - 1) / sector_size))
-  driver_sectors=$((((driver_sectors + alignment - 1) / alignment) * alignment))
-fi
-data_start=$((driver_start + driver_sectors))
-data_sectors=$((data_mb * 1024 * 1024 / sector_size))
-data_end=$((data_start + data_sectors - 1))
-# Room for the backup GPT plus an alignment-sized tail.
-disk_sectors=$((data_end + alignment + 1))
-
-esp=$tmp/esp.fat
-data=$tmp/data.ext4
-cfg=$tmp/grub.cfg
-efi=$tmp/$efi_name
-
-truncate -s "${esp_mb}M" "$esp"
-mkfs.vfat -F 32 -n K0SMOSBOOT -i C0DE0001 "$esp" >/dev/null
-
-# The serial console is per-arch: aarch64 virt has no ttyS0, so a baked-in
-# console=ttyS0 left tty0 as the preferred console -- and qemu -display none
-# throws tty0 away. Every line k0smos and k0s wrote went nowhere, which is why
-# a guest stuck on DNS looked like a guest stuck in init. Serial comes last
-# because the last console= wins /dev/console.
-kernel_args=${METAL_KERNEL_ARGS:-console=tty0 console=$serial k0smos.data=LABEL=k0smos-data k0smos.ip=dhcp}
-# k0smos_kernel_args is the per-machine part: cloud-init's k0smos.kernel_args,
-# which k0smos stores in a GRUB environment block on the data volume. The image
-# ships an empty one; a data volume without it only costs a GRUB error line.
-#
-# $verity_arg comes last, after that, and must stay there. The kernel command
-# line is last-wins -- see internal/config.Parse -- and the data volume is the
-# one partition dm-verity does not cover, so with the per-machine part appended
-# after it, writing k0smos_kernel_args=k0smos.verity= into that volume switched
-# the root check off on the next boot. Verified: the root then mounted straight
-# from /dev/vda2 with no verity device and nothing logged about it. Per-machine
-# arguments still override every ordinary setting, which is what they are for;
-# the one argument they must not reach is the hash of the root they are read
-# from.
-cat > "$cfg" <<EOF
-search --no-floppy --label K0SMOSBOOT --set=root
-search --no-floppy --label k0smos-data --set=k0smos_data
-load_env --file (\$k0smos_data)/lib/k0smos/grubenv k0smos_kernel_args
-linux /boot/vmlinuz $kernel_args \$k0smos_kernel_args $verity_arg
-initrd /boot/initramfs.gz
-boot
-EOF
-grub-mkstandalone -O "$grub_target" -o "$efi" \
-  --modules="part_gpt fat ext2 normal linux search search_label loadenv" \
-  "boot/grub/grub.cfg=$cfg"
-
-mmd -i "$esp" ::/EFI ::/EFI/BOOT ::/boot ::/boot/grub
-# Read from here by BIOS GRUB; the EFI loader carries its own copy.
-mcopy -i "$esp" "$cfg" ::/boot/grub/grub.cfg
-mcopy -i "$esp" "$efi" ::/EFI/BOOT/$efi_name
-mcopy -i "$esp" "$kernel" ::/boot/vmlinuz
-mcopy -i "$esp" "$initramfs" ::/boot/initramfs.gz
-
-# An empty GRUB environment block where k0smos stores per-machine kernel
-# arguments, so that GRUB finds one even before there are any.
-mkdir -p "$tmp/data-tree/lib/k0smos"
-{ printf '# GRUB Environment Block\n'; head -c $((1024 - 25)) /dev/zero | tr '\0' '#'; } \
-  >"$tmp/data-tree/lib/k0smos/grubenv"
-truncate -s "${data_mb}M" "$data"
-mkfs.ext4 -q -F -L k0smos-data -d "$tmp/data-tree" \
-  -U c0dec0de-0000-4000-8000-000000000002 "$data"
-
-# GRUB's BIOS core lives in its own small partition, in the gap before the
-# ESP that alignment leaves anyway. Numbered 4 so ESP, root and data keep their
-# numbers, and placed first so data stays physically last -- which is what lets
-# /var grow into a bigger disk.
-bios_start=34
-bios_end=$((esp_start - 1))
-driver_part=()
-if [ -n "$driver" ]; then
-  driver_part=(--new=5:${driver_start}:$((data_start - 1)) --typecode=5:8300 --change-name=5:K0SMOS-DRIVER
-    --partition-guid=5:c0dec0de-0000-4000-8000-000000000015)
-fi
-bios_part=()
-if $bios; then
-  bios_part=(--set-alignment=1 --new=4:${bios_start}:${bios_end} --typecode=4:ef02
-    --change-name=4:K0SMOS-BIOS --partition-guid=4:c0dec0de-0000-4000-8000-000000000014)
-fi
-
-rm -f "$raw" "$qcow2"
-truncate -s "$((disk_sectors * sector_size))" "$raw"
-sgdisk --clear \
-  --disk-guid=c0dec0de-0000-4000-8000-000000000010 \
-  --new=1:${esp_start}:$((root_start - 1)) --typecode=1:ef00 --change-name=1:K0SMOS-BOOT \
-  --partition-guid=1:c0dec0de-0000-4000-8000-000000000011 \
-  --new=2:${root_start}:$((driver_start - 1)) --typecode=2:8300 --change-name=2:K0SMOS-ROOT \
-  --partition-guid=2:c0dec0de-0000-4000-8000-000000000012 \
-  --new=3:${data_start}:${data_end} --typecode=3:8300 --change-name=3:K0SMOS-DATA \
-  --partition-guid=3:c0dec0de-0000-4000-8000-000000000013 \
-  "${bios_part[@]}" "${driver_part[@]}" \
-  "$raw" >/dev/null
-
-dd if="$esp" of="$raw" bs=$sector_size seek=$esp_start conv=notrunc,sparse status=none
-dd if="$rootfs" of="$raw" bs=$sector_size seek=$root_start conv=notrunc,sparse status=none
-dd if="$verity" of="$raw" bs=$sector_size seek=$((root_start + root_bytes / sector_size)) \
-  conv=notrunc,sparse status=none
-dd if="$data" of="$raw" bs=$sector_size seek=$data_start conv=notrunc,sparse status=none
-if [ -n "$driver" ]; then
-  dd if="$driver" of="$raw" bs=$sector_size seek=$driver_start conv=notrunc,sparse status=none
-fi
-
-# GRUB for BIOS, installed by hand rather than by grub-bios-setup, which probes
-# the build host's own mounts and fails in a container. The steps are the ones
-# it performs, at offsets fixed by GRUB's i386-pc boot.h:
-#   core.img into the BIOS boot partition, its first sector (diskboot) told
-#     where the rest of it is;
-#   boot.img's code -- never the partition table after it -- into the MBR,
-#     told where core starts, to use the drive the BIOS booted from, and with
-#     the floppy probe that misreads hard disks on some BIOSes jumped over.
-# core.img's own config only finds the ESP and enters normal mode, which reads
-# the EFI loader's grub.cfg from it: so the two paths cannot drift, and both run
-# it with GRUB's full script parser. The embedded config gets the minimal one,
-# which does not split $k0smos_kernel_args into words.
-if $bios; then
-  le() { local n=$1 out=""; for ((i = 0; i < $2; i++)); do out+=$(printf '\\x%02x' $(((n >> (8 * i)) & 255))); done; printf '%s' "$out"; }
-  put() { printf "$2" | dd of="$1" bs=1 seek="$3" conv=notrunc status=none; }
-  core=$tmp/core.img
-  boot=$tmp/boot.img
-  printf 'search --no-floppy --label K0SMOSBOOT --set=root\nset prefix=($root)/boot/grub\nnormal\n' >"$tmp/core.cfg"
-  grub-mkimage -O i386-pc -o "$core" -c "$tmp/core.cfg" -p /boot/grub \
-    biosdisk part_gpt fat ext2 search search_label linux boot loadenv normal
-  core_sectors=$((($(wc -c < "$core") + sector_size - 1) / sector_size))
-  [ "$core_sectors" -le $((bios_end - bios_start + 1)) ] || {
-    echo "GRUB core ($core_sectors sectors) does not fit the BIOS boot partition" >&2
-    exit 1
-  }
-  put "$core" "$(le $((bios_start + 1)) 8)" 500 # blocklist: first sector
-  put "$core" "$(le $((core_sectors - 1)) 2)" 508 # blocklist: length
-  put "$core" "$(le $((0x820)) 2)" 510 # blocklist: load segment
-  dd if="$core" of="$raw" bs=$sector_size seek=$bios_start conv=notrunc status=none
-  cp /usr/lib/grub/i386-pc/boot.img "$boot"
-  put "$boot" "$(le $bios_start 8)" $((0x5c)) # GRUB_BOOT_MACHINE_KERNEL_SECTOR
-  put "$boot" '\xff' $((0x64)) # GRUB_BOOT_MACHINE_BOOT_DRIVE: as the BIOS says
-  put "$boot" '\x90\x90' $((0x66)) # GRUB_BOOT_MACHINE_DRIVE_CHECK: nop
-  dd if="$boot" of="$raw" bs=1 count=440 conv=notrunc status=none
-fi
-
-sgdisk --verify "$raw"
-# The platform wrapper must carry the canonical root byte-for-byte. Checking the
-# exact partition offset makes that identity a build invariant, not a convention.
-cmp -s -i "$((root_start * sector_size)):0" -n "$root_bytes" "$raw" "$rootfs" || {
-  echo "ROOT partition does not match canonical root $rootfs" >&2
-  exit 1
-}
-# And the hash tree must begin exactly where $verity_arg says, or every read of
-# the root fails at boot with nothing to point at the offset arithmetic here.
-cmp -s -i "$((root_start * sector_size + root_bytes)):0" -n "$verity_bytes" "$raw" "$verity" || {
-  echo "verity hash tree is not at offset $root_bytes of the ROOT partition" >&2
-  exit 1
-}
-qemu-img convert -f raw -O qcow2 -c "$raw" "$qcow2"
-qemu-img check -f qcow2 "$qcow2"
-
-if [ "$(id -u)" = 0 ] && [ -n "${HOST_UID:-}" ] && [ -n "${HOST_GID:-}" ]; then
-  chown "$HOST_UID:$HOST_GID" "$raw" "$qcow2"
-fi
-
-firmware=UEFI
-$bios && firmware=UEFI+BIOS
-echo "wrote $qcow2 ($(du -h "$qcow2" | cut -f1), $firmware/GPT, linux/$goarch)"
+# The builder has the tools but no Go, so cross-compile here and run that binary
+# in there. It writes as root, hence -chown.
+GOOS=linux GOARCH=$goarch CGO_ENABLED=0 go build -o "dist/mkimage-linux-$goarch" ./cmd/mkimage
+tag=k0smos-metal-builder:$goarch
+# --load because docker build may be routed to buildx: its container driver
+# leaves the result in the build cache, and the run below then cannot find
+# the image. Harmless on the classic driver, which loads anyway.
+docker build --load --platform "$platform" --build-arg TARGETARCH="$goarch" \
+  -t "$tag" -f image/metal-builder.Dockerfile image
+exec docker run --rm --platform "$platform" -v "$repo:/repo" -w /repo "$tag" \
+  "./dist/mkimage-linux-$goarch" "${args[@]}" -chown "$(id -u):$(id -g)"
